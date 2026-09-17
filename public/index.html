@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Live locations</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
+<style>
+  :root{
+    --ink:#14181d; --paper:#fff; --quiet:#6b7480; --hairline:#e3e6ea;
+    --live:#0a7d33; --stale:#9aa3ad;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e8eaed; --paper:#14181d; --quiet:#9aa3ad; --hairline:#2a2f36; }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    color:var(--ink);background:var(--paper);
+    height:100svh;display:grid;grid-template-rows:auto 1fr;
+  }
+  header{
+    display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;
+    padding:.7rem 1rem;border-bottom:1px solid var(--hairline);
+  }
+  h1{font-size:1rem;font-weight:600;letter-spacing:-.01em}
+  .count{color:var(--quiet);font-size:.85rem}
+  .conn{
+    margin-left:auto;display:inline-flex;align-items:center;gap:.4rem;
+    font-size:.8rem;color:var(--quiet);
+  }
+  .conn i{width:.5rem;height:.5rem;border-radius:50%;background:var(--stale);display:block}
+  .conn.up i{background:var(--live)}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 19rem;min-height:0}
+  @media (max-width:760px){ main{grid-template-columns:1fr;grid-template-rows:1fr auto} }
+  #map{height:100%;width:100%;background:var(--paper)}
+  @media (prefers-color-scheme: dark){
+    .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92)}
+  }
+  aside{
+    border-left:1px solid var(--hairline);overflow-y:auto;padding:.5rem;
+    display:flex;flex-direction:column;gap:.4rem;
+  }
+  @media (max-width:760px){ aside{border-left:none;border-top:1px solid var(--hairline);max-height:38vh} }
+  .person{
+    border:1px solid var(--hairline);border-radius:10px;padding:.6rem .7rem;
+    cursor:pointer;background:none;color:inherit;text-align:left;font:inherit;
+    display:grid;gap:.15rem;
+  }
+  .person:hover{border-color:var(--quiet)}
+  .person .who{display:flex;align-items:center;gap:.4rem;font-weight:600}
+  .person .who i{width:.5rem;height:.5rem;border-radius:50%;background:var(--stale);flex:none}
+  .person.live .who i{background:var(--live);animation:pulse 1.8s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  @media (prefers-reduced-motion:reduce){ .person.live .who i{animation:none} }
+  .person .meta{font-size:.8rem;color:var(--quiet);font-variant-numeric:tabular-nums}
+  .empty{color:var(--quiet);font-size:.88rem;padding:1rem;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>Live locations</h1>
+  <span class="count" id="count"></span>
+  <span class="conn" id="conn"><i></i><span>connecting…</span></span>
+</header>
+<main>
+  <div id="map"></div>
+  <aside id="list"><p class="empty">Nobody is sharing a location yet.</p></aside>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+<script>
+(function () {
+  var map = L.map('map', { zoomControl: true }).setView([35.6892, 51.389], 4);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+
+  var people = new Map();   // id -> { data, marker, halo, path }
+  var fitted = false;
+
+  function live(p) { return p.live || (p.liveUntil && p.liveUntil * 1000 > Date.now()); }
+
+  function ago(at) {
+    var s = Math.max(0, Math.round(Date.now() / 1000 - at));
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    return Math.round(s / 3600) + 'h ago';
+  }
+
+  function left(p) {
+    if (!p.liveUntil) return '';
+    var s = Math.max(0, p.liveUntil - Math.round(Date.now() / 1000));
+    if (s <= 0) return '';
+    return s > 3600 ? Math.round(s / 3600) + 'h left' : Math.max(1, Math.round(s / 60)) + 'm left';
+  }
+
+  function draw(p) {
+    if (p.latitude === null || p.longitude === null) return;
+    var here = [p.latitude, p.longitude];
+    var entry = people.get(p.id) || {};
+    entry.data = p;
+
+    var colour = live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33'
+                         : '#8a929b';
+    if (!entry.marker) {
+      entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
+    }
+    entry.marker.setLatLng(here).setStyle({ color: colour });
+    entry.marker.bindTooltip(p.name || p.id, { permanent: false });
+
+    if (p.accuracy) {
+      if (!entry.halo) entry.halo = L.circle(here, { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
+      entry.halo.setLatLng(here).setRadius(p.accuracy).setStyle({ color: colour });
+    }
+
+    var line = (p.trail || []).map(function (t) { return [t.latitude, t.longitude]; });
+    if (line.length > 1) {
+      if (!entry.path) entry.path = L.polyline(line, { weight: 2, opacity: .45, dashArray: '4 4', color: colour }).addTo(map);
+      else entry.path.setLatLngs(line).setStyle({ color: colour });
+    }
+
+    people.set(p.id, entry);
+
+    if (!fitted) { map.setView(here, 14); fitted = true; }
+    else if (live(p)) { map.panTo(here, { animate: true }); }
+  }
+
+  function render() {
+    var list = document.getElementById('list');
+    var rows = Array.from(people.values()).map(function (e) { return e.data; })
+      .sort(function (a, b) { return b.at - a.at; });
+
+    document.getElementById('count').textContent =
+      rows.length ? rows.length + (rows.length === 1 ? ' person' : ' people') : '';
+
+    if (!rows.length) { list.innerHTML = '<p class="empty">Nobody is sharing a location yet.</p>'; return; }
+
+    list.innerHTML = '';
+    rows.forEach(function (p) {
+      var el = document.createElement('button');
+      el.className = 'person' + (live(p) ? ' live' : '');
+      el.innerHTML =
+        '<span class="who"><i></i>' + (p.name || p.id).replace(/[<&]/g, '') + '</span>' +
+        '<span class="meta">' +
+          (p.stopped ? 'stopped · ' : '') +
+          (live(p) ? 'live · ' + left(p) + ' · ' : '') + ago(p.at) +
+        '</span>' +
+        '<span class="meta">' +
+          (p.latitude === null ? '—' : p.latitude.toFixed(5) + ', ' + p.longitude.toFixed(5)) +
+        '</span>';
+      el.onclick = function () {
+        if (p.latitude !== null) map.setView([p.latitude, p.longitude], 16);
+      };
+      list.appendChild(el);
+    });
+  }
+
+  function apply(p) { draw(p); render(); }
+
+  var conn = document.getElementById('conn');
+  function status(up, text) {
+    conn.className = 'conn' + (up ? ' up' : '');
+    conn.lastElementChild.textContent = text;
+  }
+
+  function stream() {
+    var es = new EventSource('/api/stream');
+    es.addEventListener('hello', function (e) {
+      status(true, 'live');
+      JSON.parse(e.data).people.forEach(apply);
+      render();
+    });
+    es.addEventListener('position', function (e) { apply(JSON.parse(e.data)); });
+    es.addEventListener('forget', function (e) {
+      var id = JSON.parse(e.data).id;
+      var entry = people.get(id);
+      if (entry) {
+        ['marker', 'halo', 'path'].forEach(function (k) { if (entry[k]) map.removeLayer(entry[k]); });
+        people.delete(id);
+        render();
+      }
+    });
+    es.onerror = function () {
+      status(false, 'reconnecting…');
+      // EventSource retries by itself; this only keeps the label honest.
+    };
+  }
+  stream();
+
+  // Keeps «live · 4m left» and «2m ago» from going stale between updates.
+  setInterval(render, 1000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "telegram-live-location",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A live map of locations people share with a Telegram account, over MTProto.",
+  "scripts": {
+    "start": "node src/index.js",
+    "login": "node bin/login.mjs",
+    "test": "node test/test.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "teleproto": "^1.229.0"
+  }
+}
