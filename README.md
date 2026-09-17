@@ -157,6 +157,85 @@ so an empty point is the only real end-of-sharing signal. The parser keeps a
 check for the flag anyway, and a test pins down that the wire format does not
 carry one.
 
+## Deploying
+
+Two workflows. **CI** runs the tests on Node 20 and 22 for every push and pull
+request, checks every module still loads, and checks that starting without
+configuration fails with a clear message rather than something obscure.
+
+**Deploy** runs on `main`: it builds the image, *starts it and calls
+`/healthz`*, checks the dashboard still answers `401` without a token, and
+only then publishes to `ghcr.io/<you>/telegram-live-location`. An image that
+cannot serve is never pushed.
+
+The rollout step is **skipped until you give it a server**, so the workflow is
+green from the first push rather than red until configured.
+
+### Pointing it at your server
+
+On the server, once:
+
+```sh
+mkdir -p /opt/telegram-live-location && cd /opt/telegram-live-location
+curl -O https://raw.githubusercontent.com/<you>/telegram-live-location/main/compose.yml
+# and put the secrets from «Setting it up» in:
+$EDITOR /etc/telegram-live-location.env
+```
+
+The registry is private if the repository is, so let the server read it with a
+[personal access token](https://github.com/settings/tokens) that has
+`read:packages`:
+
+```sh
+echo <token> | docker login ghcr.io -u <you> --password-stdin
+```
+
+Then in the repository, under **Settings → Secrets and variables → Actions**:
+
+| | name | what |
+|---|---|---|
+| Variable | `DEPLOY_HOST` | the server's hostname or address — **setting this is what turns the rollout on** |
+| Variable | `DEPLOY_USER` | the ssh user (default `root`) |
+| Variable | `DEPLOY_PATH` | where `compose.yml` lives (default `/opt/telegram-live-location`) |
+| Variable | `DEPLOY_PORT` | host port to publish on loopback (default `8080`) |
+| Secret | `DEPLOY_SSH_KEY` | a private key whose public half is in the server's `authorized_keys` |
+| Secret | `DEPLOY_KNOWN_HOSTS` | output of `ssh-keyscan <host>` |
+
+`DEPLOY_KNOWN_HOSTS` is not optional padding: the deploy pins the server's host
+key instead of accepting whatever answers on that address.
+
+Make a key that is only good for this:
+
+```sh
+ssh-keygen -t ed25519 -f deploy_key -N '' -C 'github-actions'
+ssh-copy-id -i deploy_key.pub <user>@<host>       # or append it yourself
+ssh-keyscan <host>                                 # → DEPLOY_KNOWN_HOSTS
+cat deploy_key                                     # → DEPLOY_SSH_KEY, then delete it
+```
+
+After that, every push to `main` builds, proves the image runs, publishes it,
+pulls it on the server, restarts, and waits for `/healthz` to come back. If it
+does not come back, the run fails rather than reporting a deploy that isn't
+serving.
+
+Nothing secret is in the image: it carries only code, and the server reads
+`/etc/telegram-live-location.env` at run time.
+
+### Without CI
+
+The image is ordinary, so this is all the rollout does:
+
+```sh
+cd /opt/telegram-live-location
+IMAGE=ghcr.io/<you>/telegram-live-location:main docker compose pull
+IMAGE=ghcr.io/<you>/telegram-live-location:main docker compose up -d
+```
+
+`npm run login` still has to be done once by hand, wherever you can run node —
+it is interactive, and its output is the `TELEGRAM_SESSION` the container
+needs. The systemd unit above remains a fine alternative if you would rather
+not run Docker.
+
 ## Verifying
 
 ```sh

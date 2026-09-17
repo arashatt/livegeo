@@ -1,0 +1,18 @@
+# On the server: `docker compose pull && docker compose up -d`.
+#
+# Set IMAGE to the package this repository publishes, e.g.
+#   IMAGE=ghcr.io/<you>/telegram-live-location:main
+services:
+  app:
+    image: ${IMAGE:-ghcr.io/OWNER/telegram-live-location:main}
+    restart: unless-stopped
+    # Secrets live on the server, never in this file and never in the image.
+    env_file:
+      - /etc/telegram-live-location.env
+    # Bound to loopback on purpose: put a TLS terminator in front rather than
+    # exposing a dashboard of people's locations straight to the internet.
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the floor declared in package.json; 22 is what the image runs.
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      # The service is started by `node src/index.js` with no build step, so
+      # the cheapest guard against a broken import is to load every module.
+      - name: Modules load
+        run: |
+          node --input-type=module -e "
+            await import('./src/config.js');
+            await import('./src/positions.js');
+            await import('./src/server.js');
+            await import('./src/mtproto.js');
+            console.log('all modules load');
+          "
+
+      # A missing variable should be a clear message at startup, not a crash
+      # somewhere later. This proves the check is still wired up.
+      - name: Startup refuses an incomplete environment
+        run: |
+          set +e
+          output=$(node src/index.js 2>&1)
+          code=$?
+          set -e
+          echo "$output"
+          if [ $code -eq 0 ]; then echo "::error::started without configuration"; exit 1; fi
+          echo "$output" | grep -q "TELEGRAM_API_ID is not set" \
+            || { echo "::error::unexpected failure message"; exit 1; }
