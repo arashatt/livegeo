@@ -238,11 +238,27 @@ chain, so `ufw deny 8080` appears to work and does nothing. It has to go in the
 of the machine rather than the port. Worth doing deliberately, with console
 access to hand, rather than as a final step over ssh.
 
+The Worker needs a **hostname** for the server, not its IP. A Worker cannot
+fetch a bare IP at all: the subrequest leaves through Cloudflare's own network,
+which refuses it with `error code: 1003` and returns that page as though the
+service had answered. Any name that resolves to the address will do, and one
+costs nothing:
+
+```sh
+# no account, no setup — the address is the name
+ORIGIN_HOST=65.109.176.30.sslip.io
+getent hosts "$ORIGIN_HOST"                       # confirm it points at you
+curl -sS "http://$ORIGIN_HOST:8080/healthz"       # and that it answers
+```
+
+[DuckDNS](https://www.duckdns.org) gives you a name of your own for the same
+price and does not depend on someone else's wildcard resolver staying up.
+
 Then deploy the Worker:
 
 ```sh
 cd worker
-npx wrangler secret put ORIGIN            # http://<your-ip>:8080
+npx wrangler secret put ORIGIN            # http://<hostname>:8080 — not an IP
 npx wrangler secret put EDGE_KEY          # the same value
 npx wrangler secret put DASHBOARD_TOKEN   # the same value again
 npx wrangler deploy
@@ -260,6 +276,11 @@ API throughout — so going back is closing the port, not a migration. The Worke
 can be left deployed; without a reachable origin it simply stops being useful.
 
 ### What it costs
+
+The leg from Cloudflare to the server is plain HTTP, because the server has no
+certificate. Positions are encrypted from the browser to Cloudflare and not for
+the rest of the way, which is worth knowing before turning this on and is
+fixable only by giving the server a name it can get a certificate for.
 
 The free tier allows 100k requests a day, and every tile is one invocation even
 when the edge already has it — roughly one to two thousand map pans. The app's

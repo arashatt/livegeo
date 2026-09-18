@@ -9,6 +9,9 @@
 // It holds no state. Positions live in the origin's memory and its PostGIS;
 // this only carries them. No Durable Objects, and so no paid plan.
 //
+// ORIGIN must be a hostname. A bare IP cannot be fetched from a Worker at all;
+// see IP_HOST below.
+//
 //   /vendor/*   Leaflet, from the assets binding
 //   /tiles/*    OpenStreetMap, cached at the edge
 //   everything  proxied to ORIGIN
@@ -19,6 +22,14 @@
 
 import { parseTilePath, tileUrl } from '../../src/tile-path.js';
 import { sameToken, tokenOf } from '../../src/token.js';
+
+// Cloudflare will not let a Worker fetch a bare IP address. The subrequest
+// leaves through Cloudflare's own network, which refuses it with "error code:
+// 1003, direct IP access not allowed" and hands that page back as though the
+// origin had answered it. So ORIGIN has to be a hostname, and this is checked
+// here rather than left to arrive as a four-digit number from somebody else's
+// error page.
+const IP_HOST = /^(\d{1,3}(\.\d{1,3}){3}|\[[^\]]*\])$/;
 
 const TILE_UPSTREAM = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const USER_AGENT = 'livegeo/1.0 (+https://github.com/arashatt/livegeo)';
@@ -70,7 +81,17 @@ async function tile(request, url, tileXYZ, ctx) {
 async function proxy(request, url, env) {
   if (!env.ORIGIN) return text(503, 'no origin configured');
 
-  const target = new URL(url.pathname + url.search, env.ORIGIN);
+  let target;
+  try {
+    target = new URL(url.pathname + url.search, env.ORIGIN);
+  } catch {
+    return text(503, 'ORIGIN is not a URL');
+  }
+  if (IP_HOST.test(target.hostname)) {
+    return text(503,
+      'ORIGIN is an IP address. A Worker cannot fetch one — Cloudflare answers '
+      + 'error 1003 — so point a hostname at the server and set ORIGIN to that.');
+  }
   const headers = new Headers(request.headers);
   // Set by us, never by the caller — otherwise the gate is no gate.
   headers.delete('x-edge-key');

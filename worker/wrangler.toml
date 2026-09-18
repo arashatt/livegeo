@@ -2,7 +2,7 @@
 #
 # Deploy:
 #   cd worker
-#   npx wrangler secret put ORIGIN            # http://<vps-ip>:8080
+#   npx wrangler secret put ORIGIN            # http://<hostname>:8080, never an IP
 #   npx wrangler secret put EDGE_KEY          # must match EDGE_KEY on the VPS
 #   npx wrangler secret put DASHBOARD_TOKEN   # same value the service uses
 #   npx wrangler deploy
@@ -12,6 +12,9 @@
 
 name = "livegeo"
 main = "src/index.js"
+# Must stay on or after 2024-09-02. Before that date a subrequest silently
+# drops the port, so ORIGIN's :8080 would become :80 and the proxy would fail
+# with nothing to indicate why.
 compatibility_date = "2026-09-01"
 
 # Only the vendored Leaflet files are uploaded. Pointing this at ../public

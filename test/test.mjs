@@ -465,7 +465,7 @@ head('the Worker in front of the dashboard');
   };
 
   const env = {
-    ORIGIN: 'http://10.0.0.1:8080',
+    ORIGIN: 'http://origin.test:8080',
     EDGE_KEY: 'edge-secret',
     DASHBOARD_TOKEN: 'tok',
     ASSETS: { fetch: async (req) => new Response('leaflet:' + new URL(req.url).pathname) },
@@ -516,7 +516,7 @@ head('the Worker in front of the dashboard');
   asked = [];
   const api = await get('/api/positions?token=tok');
   t('the api is proxied to the origin',
-    asked[0].url === 'http://10.0.0.1:8080/api/positions?token=tok', asked[0] && asked[0].url);
+    asked[0].url === 'http://origin.test:8080/api/positions?token=tok', asked[0] && asked[0].url);
   t('carrying the edge key', asked[0].init.headers.get('x-edge-key') === 'edge-secret');
   t('and the response comes back', api.headers.get('x-from') === 'origin');
 
@@ -533,6 +533,22 @@ head('the Worker in front of the dashboard');
     { ...env, ORIGIN: '' }, ctx);
   t('with no origin configured it says so rather than pretending',
     noOrigin.status === 503, noOrigin.status);
+
+  // Cloudflare refuses a subrequest to a bare IP and returns its own 1003
+  // page, which the proxy would pass on as if the service had said it. This
+  // was how the first deploy failed, so it is asserted rather than documented.
+  asked = [];
+  const byIp = await worker.fetch(new Request('https://edge.test/api/positions'),
+    { ...env, ORIGIN: 'http://10.0.0.1:8080' }, ctx);
+  t('an origin given as an IP is refused here, not by Cloudflare',
+    byIp.status === 503, byIp.status);
+  t('and says what to do about it',
+    (await byIp.text()).includes('hostname'));
+  t('without reaching for the network', asked.length === 0, asked.length);
+
+  const v6 = await worker.fetch(new Request('https://edge.test/api/positions'),
+    { ...env, ORIGIN: 'http://[2a01:4f9::1]:8080' }, ctx);
+  t('an IPv6 literal the same', v6.status === 503, v6.status);
 
   globalThis.fetch = realFetch;
   delete globalThis.caches;
