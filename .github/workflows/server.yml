@@ -1,0 +1,118 @@
+name: Server
+
+# One-off things that have to happen on the deploy host — switching PostGIS on,
+# asking what state it is in — run over the same ssh path the rollout uses, so
+# they do not need a terminal.
+#
+# Two deliberate limits:
+#
+#   Named actions, not a command box. A free-form input here would be a way to
+#   run arbitrary commands as root on the server for anyone who can dispatch a
+#   workflow. The choices below are the whole surface.
+#
+#   Nothing sensitive is printed. This repository is public, so its Actions
+#   logs are public. The service logs positions (`new: <id> <lat>,<lng>`) and a
+#   failed database connection can echo DATABASE_URL with its password in it;
+#   none of that may end up here. `status` reports counts and health, never
+#   coordinates, ids, or the contents of the environment file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do on the server
+        type: choice
+        default: status
+        options:
+          - status
+          - setup-postgis
+          - restart
+
+concurrency:
+  group: deploy          # never run alongside a rollout
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: ${{ inputs.action }}
+    runs-on: ubuntu-latest
+    if: vars.DEPLOY_HOST != ''
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same preamble as the rollout. Duplicated rather than shared: a composite
+      # action for eleven lines costs more to follow than it saves.
+      - name: Reach the server
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$KEY" ] || [ -z "$KNOWN_HOSTS" ]; then
+            echo '::error::DEPLOY_SSH_KEY / DEPLOY_KNOWN_HOSTS are not set — see README «Deploying»'
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: ${{ inputs.action }}
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          USER: ${{ vars.DEPLOY_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
+          DIR: ${{ vars.DEPLOY_PATH }}
+          PORT: ${{ vars.DEPLOY_PORT }}
+          ACTION: ${{ inputs.action }}
+        run: |
+          set -eu
+          SSH="ssh -i $HOME/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
+               -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p ${SSH_PORT:-22}"
+          TARGET="${USER:-root}@${HOST}"
+          WORKDIR="${DIR:-/opt/telegram-live-location}"
+
+          case "$ACTION" in
+            setup-postgis)
+              # Piped rather than copied: the script runs from the commit being
+              # dispatched and leaves nothing behind on the server.
+              $SSH "$TARGET" "cd '$WORKDIR' && DIR='$WORKDIR' sh -s" < bin/setup-postgis.sh
+              ;;
+
+            restart)
+              $SSH "$TARGET" "set -eu; cd '$WORKDIR'; docker compose up -d --force-recreate app"
+              ;;
+
+            status)
+              # Counts and health only. No coordinates, no ids, no secrets.
+              $SSH "$TARGET" "set -eu; cd '$WORKDIR'; \
+                echo '--- services ---'; \
+                docker compose ps --format 'table {{.Service}}\t{{.Status}}'; \
+                echo; echo '--- health ---'; \
+                curl -fsS http://127.0.0.1:${PORT:-8080}/healthz || echo 'not answering'; \
+                echo; echo; echo '--- configuration (set or not, never the value) ---'; \
+                for k in DATABASE_URL TELEGRAM_CHATS POSTGRES_PASSWORD; do \
+                  if grep -q \"^\${k}=.\" /etc/telegram-live-location.env 2>/dev/null; \
+                    then echo \"\${k}: set\"; else echo \"\${k}: empty or absent\"; fi; \
+                done; \
+                echo; echo '--- postgis ---'; \
+                if docker compose ps --services --filter status=running | grep -qx postgis; then \
+                  docker compose exec -T postgis psql -U livegeo -d livegeo -tAc \
+                    \"SELECT 'version ' || postgis_version();\"; \
+                  docker compose exec -T postgis psql -U livegeo -d livegeo -tAc \
+                    \"SELECT 'positions rows: ' || count(*) FROM positions;\"; \
+                  docker compose exec -T postgis psql -U livegeo -d livegeo -tAc \
+                    \"SELECT 'people known: ' || count(DISTINCT person) FROM positions;\"; \
+                  docker compose exec -T postgis psql -U livegeo -d livegeo -tAc \
+                    \"SELECT 'osm extract imported: ' || (to_regclass('public.planet_osm_line') IS NOT NULL);\"; \
+                else \
+                  echo 'not running'; \
+                fi; \
+                echo; echo '--- app, structural lines only ---'; \
+                docker compose logs app --tail 200 2>/dev/null \
+                  | grep -E 'geo:|restored |backfill:|dashboard on|is not set' \
+                  | sed -E 's#(postgres://[^:]+:)[^@]*@#\1***@#g; s/[0-9a-f]{32,}/***/g' \
+                  | tail -15 || echo '(nothing)'"
+              ;;
+          esac
