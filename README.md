@@ -24,6 +24,10 @@ here chose to share it *in Telegram* — they did not choose to have it put on
 a web page, so tell them, keep the dashboard private, and keep the retention
 short (`STALE_AFTER`).
 
+That last part stops being true the moment you set `DATABASE_URL`: positions
+are then written to PostGIS and kept until something deletes them. See
+«Places and history» before turning it on.
+
 ## Why a user account rather than a bot
 
 A bot is only told about locations shared **with the bot**. A user account is
@@ -72,6 +76,7 @@ PORT=8080
 HOST=127.0.0.1
 STALE_AFTER=3600              # drop a position nobody updated for this long
 TRAIL_MAX=120                 # points kept in the path behind each person
+DATABASE_URL=                 # optional PostGIS — see «Places and history»
 ```
 
 Leaving `TELEGRAM_CHATS` empty means *every chat the account is in* is
@@ -156,6 +161,44 @@ One detail worth knowing: `stopped` is a field of `inputMediaGeoLive`, the
 so an empty point is the only real end-of-sharing signal. The parser keeps a
 check for the flag anyway, and a test pins down that the wire format does not
 carry one.
+
+## Places and history
+
+Without `DATABASE_URL` the service is as it always was: positions live in
+memory and `STALE_AFTER` throws them away. With it, PostGIS does two things.
+
+**It names places.** `36.36457, 59.49061` becomes *Vakilabad Blvd, Mashhad*,
+by asking an OpenStreetMap extract what is nearest. A road is only named if
+you are within 120m of it and an area within 25km, because the nearest named
+thing to a point at sea is a city on another continent and saying so would be
+worse than saying nothing.
+
+**It remembers.** Every position that actually moved is written to the
+`positions` table and kept until deleted. This is the part to be deliberate
+about — it is a record of where people went, and they agreed to share a live
+location in a chat, not to be logged. The dashboard's *forget* button erases
+a person from the database as well as from the map, and `POST /api/forget/<id>`
+does the same from a script.
+
+Import an extract for your region — a country, not the planet:
+
+```sh
+apt-get install -y osm2pgsql
+curl -O https://download.geofabrik.de/asia/iran-latest.osm.pbf
+osm2pgsql -d livegeo --create --slim -C 2000 --hstore iran-latest.osm.pbf
+```
+
+Leave the defaults alone: the queries expect osm2pgsql's own `planet_osm_*`
+tables in SRID 3857, which is what `--create` writes without `-l`.
+
+`sql/schema.sql` holds our own tables and is applied automatically by the
+`postgis` service in `compose.yml` the first time it starts. Everything still
+works before the extract is imported — place names come back empty until the
+`planet_osm_*` tables exist, and history is unaffected either way.
+
+OpenStreetMap data is ODbL. Using an extract to geocode is unproblematic;
+redistributing a derived database carries share-alike obligations, and the
+attribution on the map has to stay.
 
 ## Deploying
 

@@ -26,7 +26,7 @@ function tokenOf(req, url) {
   return hit ? decodeURIComponent(hit.slice(COOKIE.length + 1)) : '';
 }
 
-export function serve(positions, config, { log = console, directory = null } = {}) {
+export function serve(positions, config, { log = console, directory = null, geo = null } = {}) {
   const watchers = new Set();
 
   const send = (res, event, data) => {
@@ -94,6 +94,27 @@ export function serve(positions, config, { log = console, directory = null } = {
       return;
     }
 
+    // What is at a point. Asked per person by the page, which rounds the
+    // coordinates before asking, so someone standing still asks once.
+    if (url.pathname === '/api/place') {
+      const lat = Number(url.searchParams.get('lat'));
+      const lon = Number(url.searchParams.get('lon'));
+      const place = geo ? await geo.placeOf(lat, lon) : '';
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ place }));
+      return;
+    }
+
+    // Where someone has been. Empty rather than an error when nothing is
+    // recorded, so the page does not need to know whether PostGIS is there.
+    if (url.pathname.startsWith('/api/history/')) {
+      const id = decodeURIComponent(url.pathname.slice('/api/history/'.length));
+      const points = geo ? await geo.historyOf(id, { limit: 1000 }) : [];
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ id, points }));
+      return;
+    }
+
     // Who a numeric id belongs to. Asked on hover, so it must be cheap: the
     // directory caches, and answers "unknown" rather than blocking when
     // Telegram cannot say.
@@ -126,9 +147,16 @@ export function serve(positions, config, { log = console, directory = null } = {
     if (url.pathname.startsWith('/api/forget/') && req.method === 'POST') {
       const id = decodeURIComponent(url.pathname.slice('/api/forget/'.length));
       positions.forget(id);
+      // Forgetting has to mean forgetting. History is kept indefinitely, so
+      // the one button that removes a person must clear the record too, not
+      // just take them off the map until the next update arrives.
+      const erased = geo ? await geo.forget(id).catch((e) => {
+        log.error('geo: erasure failed —', e && e.message ? e.message : e);
+        return null;
+      }) : 0;
       for (const w of watchers) { try { send(w, 'forget', { id }); } catch { watchers.delete(w); } }
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
+      res.writeHead(erased === null ? 500 : 200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(erased === null ? { ok: false, error: 'history not erased' } : { ok: true, erased }));
       return;
     }
 

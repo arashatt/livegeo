@@ -162,6 +162,28 @@
     return p.name || p.id;
   }
 
+  // Place names, cached by coordinates rounded to about eleven metres — a
+  // person standing still asks once, not once per second.
+  var places = new Map();
+  function placeKey(lat, lon) { return lat.toFixed(4) + ',' + lon.toFixed(4); }
+  function placeOf(lat, lon) {
+    var key = placeKey(lat, lon);
+    if (places.has(key)) return Promise.resolve(places.get(key));
+    places.set(key, '');
+    return fetch('/api/place?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon),
+                 { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { var v = (d && d.place) || ''; places.set(key, v); return v; })
+      .catch(function () { return ''; });
+  }
+
+  // Where someone is, in words if PostGIS could say and in numbers if not.
+  function whereabouts(p) {
+    if (p.latitude === null) return '—';
+    var known = places.get(placeKey(p.latitude, p.longitude));
+    return known || (p.latitude.toFixed(5) + ', ' + p.longitude.toFixed(5));
+  }
+
   function card(p) {
     var who = identities.get(p.id);
     var title = (who && (who.name || who.username)) || p.name || '';
@@ -172,6 +194,7 @@
       '<div class="cname">' + esc(title || p.id) + '</div>' +
       (who && who.username ? '<div class="chandle">' + esc(who.username) + '</div>' : '') +
       '<div class="cid">' + esc(p.id) + '</div>' +
+      '<div class="chandle">' + esc(whereabouts(p)) + '</div>' +
       '</div></div>';
   }
 
@@ -259,9 +282,10 @@
           (p.stopped ? 'stopped · ' : '') +
           (live(p) ? 'live · ' + left(p) + ' · ' : '') + ago(p.at) +
         '</span>' +
-        '<span class="meta">' +
-          (p.latitude === null ? '—' : p.latitude.toFixed(5) + ', ' + p.longitude.toFixed(5)) +
-        '</span>';
+        '<span class="meta">' + esc(whereabouts(p)) + '</span>';
+
+      // Kicks off the lookup; the next render picks up the answer.
+      if (p.latitude !== null) placeOf(p.latitude, p.longitude);
       // Rows resolve lazily too, so a list of numbers fills in with handles.
       identify(p.id).then(function (who) {
         if (who && (who.username || who.name)) {

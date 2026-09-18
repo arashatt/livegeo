@@ -26,6 +26,10 @@ export function load() {
     chats: (process.env.TELEGRAM_CHATS || '')
       .split(',').map((s) => s.trim()).filter(Boolean),
 
+    // Optional on purpose: without it the service still runs, it just cannot
+    // name a place or remember where anyone has been. Never need().
+    databaseUrl: process.env.DATABASE_URL || '',
+
     // A position nobody has updated for this long stops being shown.
     staleAfter: Number(process.env.STALE_AFTER || 3600),
     trailMax: Number(process.env.TRAIL_MAX || 120),

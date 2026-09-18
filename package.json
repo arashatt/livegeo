@@ -9,8 +9,11 @@
     "login": "node bin/login.mjs",
     "test": "node test/test.mjs"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
+    "pg": "^8.23.0",
     "teleproto": "^1.229.0"
   }
 }

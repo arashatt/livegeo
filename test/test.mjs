@@ -11,6 +11,7 @@ import { Api } from 'teleproto';
 import { fromMessage, senderOf, Positions } from '../src/positions.js';
 import { serve } from '../src/server.js';
 import { personOf, makeDirectory } from '../src/directory.js';
+import { placeName, makeGeo } from '../src/geo.js';
 
 let pass = 0, fail = 0;
 const t = (name, cond, extra) => {
@@ -271,6 +272,51 @@ head('before Telegram is connected');
   const who = await dir.lookup(1);
   t('the id answers as unknown rather than hanging', who.id === '1' && who.username === '');
   t('and asking for a photo is not an error', (await dir.photo(1)) === null);
+}
+
+// ---------------------------------------------------------------------- geo
+
+head('naming a place');
+{
+  t('a road you are on is named',
+    placeName({ road: { name: 'Vakilabad Blvd', metres: 12 }, area: { name: 'Mashhad', metres: 400 } })
+      === 'Vakilabad Blvd, Mashhad');
+
+  t('a road far away is not',
+    placeName({ road: { name: 'Some Highway', metres: 4000 }, area: { name: 'Mashhad', metres: 900 } })
+      === 'Mashhad');
+
+  t('an area alone still places you',
+    placeName({ area: { name: 'Kuh Park', metres: 250 } }) === 'Kuh Park');
+
+  t('an area on another continent does not',
+    placeName({ area: { name: 'Mashhad', metres: 4_000_000 } }) === '');
+
+  t('an area with no distance is not trusted either',
+    placeName({ area: { name: 'Mashhad', metres: null } }) === '');
+
+  t('nothing found says nothing', placeName({}) === '');
+  t('and undefined is not a crash', placeName() === '');
+
+  t('the same name is not said twice',
+    placeName({ road: { name: 'Mashhad', metres: 10 }, area: { name: 'Mashhad', metres: 10 } })
+      === 'Mashhad');
+
+  t('a road distance that is not a number is not trusted',
+    placeName({ road: { name: 'Nowhere', metres: null }, area: { name: 'Somewhere', metres: 5 } })
+      === 'Somewhere');
+}
+
+head('geo without a database');
+{
+  const geo = makeGeo({ url: '', log: { info() {}, error() {} } });
+  t('connecting says no rather than throwing', (await geo.connect()) === false);
+  t('it reports itself disabled', geo.enabled() === false);
+  t('recording is a no-op', (await geo.record({ id: '1', latitude: 1, longitude: 2, at: 1 })) === false);
+  t('describing a point is empty', (await geo.placeOf(35.7, 51.4)) === '');
+  t('history is empty, not an error', (await geo.historyOf('1')).length === 0);
+  t('erasing removes nothing and does not throw', (await geo.forget('1')) === 0);
+  await geo.close();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

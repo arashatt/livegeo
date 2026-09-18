@@ -16,3 +16,35 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+    depends_on:
+      postgis:
+        condition: service_healthy
+
+  # Optional: without DATABASE_URL in the env file the app ignores this and
+  # runs exactly as it did before. Bound to loopback for the same reason the
+  # dashboard is — nothing here belongs on the open internet.
+  postgis:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    env_file:
+      - /etc/telegram-live-location.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-livegeo}
+      POSTGRES_USER: ${POSTGRES_USER:-livegeo}
+    ports:
+      - "127.0.0.1:${PGPORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Applied once, on an empty data directory.
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-livegeo} -d ${POSTGRES_DB:-livegeo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  pgdata:
