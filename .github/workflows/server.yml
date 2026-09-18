@@ -34,6 +34,8 @@ on:
           - status
           - setup-postgis
           - restart
+          - clean-history          # reports only
+          - clean-history-apply    # deletes
 
 concurrency:
   group: deploy          # never run alongside a rollout
@@ -85,6 +87,19 @@ jobs:
               # Piped rather than copied: the script runs from the commit being
               # dispatched and leaves nothing behind on the server.
               $SSH "$TARGET" "cd '$WORKDIR' && DIR='$WORKDIR' sh -s" < bin/setup-postgis.sh
+              ;;
+
+            clean-history)
+              # Reports what it would remove and removes nothing. Separate from
+              # the applying variant on purpose: this deletes a record of where
+              # people were, and a dry run should not be a flag someone forgets.
+              $SSH "$TARGET" "set -eu; cd '$WORKDIR'; \
+                docker compose exec -T app node bin/clean-history.mjs"
+              ;;
+
+            clean-history-apply)
+              $SSH "$TARGET" "set -eu; cd '$WORKDIR'; \
+                docker compose exec -T app node bin/clean-history.mjs --apply"
               ;;
 
             restart)
