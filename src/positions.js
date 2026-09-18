@@ -93,12 +93,43 @@ function nameOf(message) {
   return named || (s.username ? `@${s.username}` : '');
 }
 
+// Metres between two points. Haversine rather than comparing degrees: a degree
+// of longitude is 111km at the equator and nothing at all at the pole, so a
+// threshold in degrees means something different for every person on the map.
+export function metresBetween(a, b) {
+  if (!a || !b || a.latitude === null || b.latitude === null) return Infinity;
+  const R = 6371000;
+  const rad = Math.PI / 180;
+  const dLat = (b.latitude - a.latitude) * rad;
+  const dLon = (b.longitude - a.longitude) * rad;
+  const s = Math.sin(dLat / 2) ** 2
+    + Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+// How far a point has to be from the last one before it is evidence of travel
+// rather than of a phone sitting still.
+//
+// A stationary phone does not report a stationary position: the fix wanders
+// inside its own accuracy radius, several times a minute. Recorded, that draws
+// a scribble where somebody stood. And since two fixes each accurate to r can
+// differ by nearly 2r through noise alone, the radius itself is the least that
+// can count as movement — below it there is simply no information.
+//
+// `minMove` is the floor for when Telegram reports no accuracy, or an
+// improbably good one.
+export function movementThreshold(prev, next, minMove) {
+  return Math.max(minMove, prev?.accuracy ?? 0, next?.accuracy ?? 0);
+}
+
 // ---------- the store ----------
 
 export class Positions {
-  constructor({ staleAfter = 3600, trailMax = 120, now = () => Math.floor(Date.now() / 1000) } = {}) {
+  constructor({ staleAfter = 3600, trailMax = 120, minMove = 25,
+                now = () => Math.floor(Date.now() / 1000) } = {}) {
     this.staleAfter = staleAfter;
     this.trailMax = trailMax;
+    this.minMove = minMove;
     this.now = now;
     this.people = new Map();
   }
@@ -113,12 +144,19 @@ export class Positions {
     const moved = !prev
       || prev.latitude === null
       || position.latitude === null
-      || Math.abs(prev.latitude - position.latitude) >= 1e-5
-      || Math.abs(prev.longitude - position.longitude) >= 1e-5;
+      || metresBetween(prev, position) > movementThreshold(prev, position, this.minMove);
 
     const wasLive = Boolean(prev && prev.liveUntil);
     const isLive = Boolean(position.liveUntil);
-    if (!moved && wasLive === isLive && prev.stopped === position.stopped) return null;
+    if (!moved && wasLive === isLive && prev.stopped === position.stopped) {
+      // Still there, just not anywhere new. The entry has to stay fresh or a
+      // person standing still expires out of the map after STALE_AFTER, but
+      // there is nothing to wake an open map for.
+      prev.at = position.at;
+      prev.liveUntil = position.liveUntil;
+      if (position.accuracy !== null && position.accuracy !== undefined) prev.accuracy = position.accuracy;
+      return null;
+    }
 
     const trail = prev ? prev.trail.slice() : [];
     if (moved && position.latitude !== null) {
@@ -128,8 +166,10 @@ export class Positions {
     const next = {
       ...position,
       // A stop keeps the last place it was seen rather than blanking the map.
-      latitude: position.latitude ?? prev?.latitude ?? null,
-      longitude: position.longitude ?? prev?.longitude ?? null,
+      // So does a reading that did not clear the threshold: the marker stays
+      // on the last point actually known, instead of twitching around it.
+      latitude: (moved ? position.latitude : prev?.latitude) ?? prev?.latitude ?? null,
+      longitude: (moved ? position.longitude : prev?.longitude) ?? prev?.longitude ?? null,
       name: position.name || prev?.name || '',
       trail: trail.slice(-this.trailMax),
       firstSeen: prev?.firstSeen ?? position.at,

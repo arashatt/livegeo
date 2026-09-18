@@ -76,6 +76,7 @@ PORT=8080
 HOST=127.0.0.1
 STALE_AFTER=3600              # drop a position nobody updated for this long
 TRAIL_MAX=120                 # points kept in the path behind each person
+MIN_MOVE=25                   # metres before a fix counts as travel, not noise
 DATABASE_URL=                 # optional PostGIS — see «Places and history»
 TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
 TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
@@ -144,6 +145,24 @@ point that is never marked live.
 The dashboard lists everyone currently sharing, marks live ones, counts down
 the time remaining, and draws the path behind each. Clicking a person centres
 the map on them.
+
+### Why the path is not every reading
+
+A phone that is not moving does not report a position that is not moving: the
+fix wanders inside its own accuracy radius several times a minute. Drawn, that
+is a scribble where somebody stood still — and since two fixes each accurate to
+r can differ by nearly 2r through noise alone, small differences carry no
+information at all.
+
+So a reading only joins the path when it is further from the last one than the
+uncertainty in it — `MIN_MOVE` metres, or the accuracy Telegram reports for
+that fix, whichever is larger. Below that the marker stays where it is rather
+than twitching, and nothing is recorded. The entry is still kept alive, so
+standing still does not make somebody expire off the map.
+
+Raise `MIN_MOVE` if paths still look restless, lower it if short walks are
+being missed. It is only the floor: a poor fix always raises the bar for
+itself.
 
 ## How live locations actually work
 

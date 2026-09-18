@@ -45,6 +45,9 @@ export function defaults() {
     // A position nobody has updated for this long stops being shown.
     staleAfter: Number(process.env.STALE_AFTER || 3600),
     trailMax: Number(process.env.TRAIL_MAX || 120),
+    // Metres a fix must move before it counts as travel rather than GPS noise.
+    // Only the floor — a reported accuracy worse than this raises it.
+    minMove: Number(process.env.MIN_MOVE || 25),
   };
 }
 

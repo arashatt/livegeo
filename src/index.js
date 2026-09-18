@@ -9,7 +9,9 @@ import { makeDirectory } from './directory.js';
 import { makeGeo } from './geo.js';
 
 const config = load();
-const positions = new Positions({ staleAfter: config.staleAfter, trailMax: config.trailMax });
+const positions = new Positions({
+  staleAfter: config.staleAfter, trailMax: config.trailMax, minMove: config.minMove,
+});
 // Built before either side so the page can ask about an id straight away;
 // it simply answers "unknown" until Telegram is connected below.
 const directory = makeDirectory();

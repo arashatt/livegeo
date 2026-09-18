@@ -8,7 +8,7 @@
 // It can only be exercised against Telegram itself — see README «Verifying».
 
 import { Api } from 'teleproto';
-import { fromMessage, senderOf, Positions } from '../src/positions.js';
+import { fromMessage, senderOf, Positions, metresBetween, movementThreshold } from '../src/positions.js';
 import { personOf, makeDirectory } from '../src/directory.js';
 import { placeName, makeGeo } from '../src/geo.js';
 import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
@@ -536,6 +536,84 @@ head('the Worker in front of the dashboard');
 
   globalThis.fetch = realFetch;
   delete globalThis.caches;
+}
+
+// ------------------------------------------------------- noise vs travel
+
+head('measuring a distance');
+{
+  // Mashhad to Tehran, about 740km by great circle.
+  const d = metresBetween({ latitude: 36.2605, longitude: 59.6168 },
+                          { latitude: 35.6892, longitude: 51.3890 });
+  t('a long distance is right to within a percent', Math.abs(d - 740000) < 8000, Math.round(d));
+
+  // One of the real jitter hops from the screenshot: a few metres.
+  const near = metresBetween({ latitude: 36.36457, longitude: 59.49061 },
+                             { latitude: 36.36461, longitude: 59.49065 });
+  t('a few metres reads as a few metres', near > 3 && near < 8, near);
+
+  t('the same point is zero', metresBetween({ latitude: 1, longitude: 1 }, { latitude: 1, longitude: 1 }) === 0);
+  t('a missing point is infinitely far', metresBetween(null, { latitude: 1, longitude: 1 }) === Infinity);
+}
+
+head('how far counts as moving');
+{
+  t('the floor applies when nothing is known',
+    movementThreshold({}, {}, 25) === 25);
+  t('a poor fix raises it',
+    movementThreshold({ accuracy: 100 }, { accuracy: 10 }, 25) === 100);
+  t('the worse of the two wins',
+    movementThreshold({ accuracy: 10 }, { accuracy: 80 }, 25) === 80);
+  t('a very good fix does not lower it below the floor',
+    movementThreshold({ accuracy: 3 }, { accuracy: 3 }, 25) === 25);
+}
+
+head('a phone standing still');
+{
+  const store = new Positions({ minMove: 25, now: () => 2000 });
+  const at = (lat, lon, accuracy, when) => ({
+    id: '509090598', latitude: lat, longitude: lon, accuracy, at: when, liveUntil: 9999, stopped: false, name: '',
+  });
+
+  const first = store.update(at(36.36457, 59.49061, 100, 1000));
+  t('the first fix is always recorded', first !== null && first.trail.length === 1);
+
+  // Four hops of a few metres each, well inside a 100m accuracy radius —
+  // exactly the scribble in the screenshot.
+  const jitter = [
+    at(36.36461, 59.49065, 100, 1010),
+    at(36.36452, 59.49058, 100, 1020),
+    at(36.36466, 59.49070, 100, 1030),
+    at(36.36449, 59.49055, 100, 1040),
+  ].map((p) => store.update(p));
+
+  t('none of the jitter is published', jitter.every((r) => r === null), jitter.filter(Boolean).length);
+  t('and the trail does not grow', store.get('509090598').trail.length === 1,
+    store.get('509090598').trail.length);
+  t('the marker stays on the point actually known',
+    store.get('509090598').latitude === 36.36457);
+  t('but the entry stays fresh, so standing still is not vanishing',
+    store.get('509090598').at === 1040, store.get('509090598').at);
+
+  // Now a real walk: ~300m north, far beyond the uncertainty.
+  const walked = store.update(at(36.36730, 59.49061, 100, 1100));
+  t('a move larger than the uncertainty is travel', walked !== null);
+  t('and it joins the trail', walked.trail.length === 2, walked.trail.length);
+}
+
+head('a good fix moving a short way');
+{
+  // With accuracy of 5m, a 40m walk is unambiguous — the floor must not hide it.
+  const store = new Positions({ minMove: 25, now: () => 2000 });
+  const p = (lat, accuracy, when) => ({
+    id: 'a', latitude: lat, longitude: 59.0, accuracy, at: when, liveUntil: 9999, stopped: false, name: '',
+  });
+  store.update(p(36.0000, 5, 10));
+  const short = store.update(p(36.00036, 5, 20));    // ~40m
+  t('40m with a 5m fix is movement', short !== null && short.trail.length === 2, short && short.trail.length);
+
+  const tiny = store.update(p(36.00046, 5, 30));     // ~11m further
+  t('11m further is below the floor and is not', tiny === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
