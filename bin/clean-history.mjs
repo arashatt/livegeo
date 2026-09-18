@@ -66,8 +66,9 @@ for (const r of rows) {
 
 const doomed = [];
 let kept = 0;
+let nth = 0;
 
-for (const [person, points] of byPerson) {
+for (const [, points] of byPerson) {
   let anchor = null;
   let keptHere = 0;
   for (const p of points) {
@@ -76,7 +77,11 @@ for (const [person, points] of byPerson) {
     if (far) { anchor = p; keptHere += 1; } else { doomed.push(p.id); }
   }
   kept += keptHere;
-  console.log(`  ${person}: ${points.length} recorded → ${keptHere} travel, ${points.length - keptHere} noise`);
+  nth += 1;
+  // Counted, not named. This runs from a workflow whose logs are public, and
+  // a Telegram id is an identifier — the numbers are what the decision needs,
+  // and knowing whose they are adds nothing to it.
+  console.log(`  person ${nth}: ${points.length} recorded → ${keptHere} travel, ${points.length - keptHere} noise`);
 }
 
 console.log(`\n${rows.length} rows, ${kept} worth keeping, ${doomed.length} noise`);
