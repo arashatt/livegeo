@@ -89,36 +89,18 @@ jobs:
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      # TEMPORARY (debugging the 255 on erfan@95.156.253.107): reports which
-      # stage the connection dies at instead of leaving "Connection closed" to
-      # be guessed at. Never fails the job — the real step below still gates.
-      - name: Diagnose the connection
-        env:
-          HOST: ${{ vars.DEPLOY_HOST }}
-          USER: ${{ vars.DEPLOY_USER }}
-        run: |
-          echo '--- tcp/22 reachable? ---'
-          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/${HOST}/22"; then
-            echo 'tcp/22 accepts connections'
-          else
-            echo 'tcp/22 refused, filtered, or timed out'
-          fi
-          echo '--- ssh -vvv, non-fatal ---'
-          set +e
-          ssh -vvv -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
-            "${USER:-root}@${HOST}" 'echo ssh-ok; id; docker --version' 2>&1 | tail -70
-          echo "ssh exit status: ${PIPESTATUS[0]}"
-          set -e
-
       - name: Pull and restart
         env:
           HOST: ${{ vars.DEPLOY_HOST }}
           USER: ${{ vars.DEPLOY_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
           DIR: ${{ vars.DEPLOY_PATH }}
           IMAGE: ${{ needs.image.outputs.image }}:main
           PORT: ${{ vars.DEPLOY_PORT }}
         run: |
-          ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "${USER:-root}@${HOST}" \
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            -p "${SSH_PORT:-22}" "${USER:-root}@${HOST}" \
             "set -eu; cd '${DIR:-/opt/telegram-live-location}'; \
              export IMAGE='${IMAGE}' PORT='${PORT:-8080}'; \
              docker compose pull; \
@@ -129,12 +111,19 @@ jobs:
         env:
           HOST: ${{ vars.DEPLOY_HOST }}
           USER: ${{ vars.DEPLOY_USER }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT }}
           PORT: ${{ vars.DEPLOY_PORT }}
         run: |
-          ok=0
-          for i in $(seq 1 20); do
-            if ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "${USER:-root}@${HOST}" \
-                 "curl -fsS http://127.0.0.1:${PORT:-8080}/healthz"; then ok=1; break; fi
-            sleep 3
-          done
-          [ "$ok" = "1" ] || { echo '::error::the service did not come back healthy'; exit 1; }
+          # The wait happens inside one session rather than one login per
+          # attempt. Twenty logins in a minute is the pattern fail2ban and
+          # `ufw limit` exist to stop, and a banned runner looks exactly like
+          # a service that never came back.
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            -p "${SSH_PORT:-22}" "${USER:-root}@${HOST}" \
+            "for _ in \$(seq 1 20); do \
+               curl -fsS http://127.0.0.1:${PORT:-8080}/healthz && exit 0; \
+               sleep 3; \
+             done; \
+             exit 1" \
+            || { echo '::error::the service did not come back healthy'; exit 1; }

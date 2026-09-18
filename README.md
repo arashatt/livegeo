@@ -196,13 +196,25 @@ Then in the repository, under **Settings → Secrets and variables → Actions**
 |---|---|---|
 | Variable | `DEPLOY_HOST` | the server's hostname or address — **setting this is what turns the rollout on** |
 | Variable | `DEPLOY_USER` | the ssh user (default `root`) |
+| Variable | `DEPLOY_SSH_PORT` | the ssh port (default `22`) — not to be confused with `DEPLOY_PORT` |
 | Variable | `DEPLOY_PATH` | where `compose.yml` lives (default `/opt/telegram-live-location`) |
 | Variable | `DEPLOY_PORT` | host port to publish on loopback (default `8080`) |
 | Secret | `DEPLOY_SSH_KEY` | a private key whose public half is in the server's `authorized_keys` |
-| Secret | `DEPLOY_KNOWN_HOSTS` | output of `ssh-keyscan <host>` |
+| Secret | `DEPLOY_KNOWN_HOSTS` | output of `ssh-keyscan <host>`, or of `ssh-keyscan -p <port> <host>` when ssh is not on 22 |
 
 `DEPLOY_KNOWN_HOSTS` is not optional padding: the deploy pins the server's host
 key instead of accepting whatever answers on that address.
+
+On a non-standard ssh port the host must be bracketed, or the pinned key will
+never match what is being connected to:
+
+```
+[198.51.100.7]:3031 ssh-ed25519 AAAAC3Nza…
+```
+
+`ssh-keyscan -p` writes that form for you. Reading the keys off the server
+itself (`/etc/ssh/ssh_host_*_key.pub`) is better still when you have a shell
+there, since nothing can intercept a scan that never crosses the network.
 
 Make a key that is only good for this:
 
@@ -210,6 +222,7 @@ Make a key that is only good for this:
 ssh-keygen -t ed25519 -f deploy_key -N '' -C 'github-actions'
 ssh-copy-id -i deploy_key.pub <user>@<host>       # or append it yourself
 ssh-keyscan <host>                                 # → DEPLOY_KNOWN_HOSTS
+ssh-keyscan -p <port> <host>                       # …if ssh is not on 22
 cat deploy_key                                     # → DEPLOY_SSH_KEY, then delete it
 ```
 
