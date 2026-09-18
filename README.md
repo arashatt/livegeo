@@ -192,10 +192,13 @@ section is most of what a renderer needs anyway.
 
 ## Places and history
 
-Turn it on with one command on the server:
+Turn it on, on the server. The deploy copies `compose.yml` but nothing else,
+so fetch the script alongside it:
 
 ```sh
-cd /opt/telegram-live-location && ./bin/setup-postgis.sh
+cd /opt/telegram-live-location
+curl -fsSLO https://raw.githubusercontent.com/arashatt/livegeo/main/bin/setup-postgis.sh
+chmod +x setup-postgis.sh && ./setup-postgis.sh
 ```
 
 It invents a password, writes `DATABASE_URL`, starts PostGIS and restarts the
