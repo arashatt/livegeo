@@ -165,6 +165,67 @@ so an empty point is the only real end-of-sharing signal. The parser keeps a
 check for the flag anyway, and a test pins down that the wire format does not
 carry one.
 
+## Putting it behind a Cloudflare Worker
+
+The dashboard is bound to loopback, so reaching it means an ssh tunnel. A
+Worker on `*.workers.dev` is a free public HTTPS hostname with no domain and no
+tunnel — useful when the network you read it from blocks more than it allows.
+
+One browser rule decides the shape of this. **An HTTPS page cannot call an HTTP
+API**, and this service cannot serve HTTPS without a certificate it has no
+domain to obtain. So the Worker is the browser's only origin: it serves the
+vendored Leaflet, caches tiles at the edge, and proxies everything else here.
+
+**That means live positions pass through Cloudflare.** Today they never leave
+your server. This is the one thing to decide before setting it up, and it is
+why none of it is on by default.
+
+Nothing in `public/index.html` changes — every path on the page is relative, and
+a single origin keeps them all resolving.
+
+### Setting it up
+
+On the server, in the environment file:
+
+```sh
+EDGE_KEY=…      # openssl rand -hex 24; the Worker must send this
+BIND=0.0.0.0    # the deliberate act that exposes the port
+```
+
+`EDGE_KEY` means a scanner that finds the open port gets `403` without having
+to guess the dashboard token to learn that. Firewalling the port to
+[Cloudflare's published ranges](https://www.cloudflare.com/ips/) is worth doing
+as well.
+
+Then deploy the Worker:
+
+```sh
+cd worker
+npx wrangler secret put ORIGIN            # http://<your-ip>:8080
+npx wrangler secret put EDGE_KEY          # the same value
+npx wrangler secret put DASHBOARD_TOKEN   # the same value again
+npx wrangler deploy
+```
+
+`DASHBOARD_TOKEN` is there so the Worker can gate tiles the way this service
+does, rather than becoming an open tile proxy for anyone who finds the
+hostname.
+
+### Switching back
+
+Remove `BIND` and `EDGE_KEY` and `docker compose up -d`. The service is
+untouched by any of this — it serves its own page, its own tiles and its own
+API throughout — so going back is closing the port, not a migration. The Worker
+can be left deployed; without a reachable origin it simply stops being useful.
+
+### What it costs
+
+The free tier allows 100k requests a day, and every tile is one invocation even
+when the edge already has it — roughly one to two thousand map pans. The app's
+25-second heartbeat keeps `/api/stream` inside Cloudflare's 100-second idle
+timeout. How many simultaneous streams the free tier tolerates is not something
+this has been measured against; for a handful of viewers it has not come up.
+
 ## The basemap comes from here
 
 The page makes no third-party requests. Leaflet is served from

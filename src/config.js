@@ -25,6 +25,12 @@ export function defaults() {
     // name a place or remember where anyone has been. Never need().
     databaseUrl: process.env.DATABASE_URL || '',
 
+    // When set, only a caller presenting this header is answered — which is
+    // how the origin can be exposed to the internet for a Cloudflare Worker to
+    // reach without being exposed to everyone who finds the address. Unset
+    // means no such check, which is the state the service has always been in.
+    edgeKey: process.env.EDGE_KEY || '',
+
     // The basemap is proxied through this service so the browser never has to
     // reach a third party. Point this at your own renderer if you outgrow the
     // public OpenStreetMap tiles.

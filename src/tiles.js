@@ -16,28 +16,11 @@
 
 import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { tileUrl } from './tile-path.js';
 
-const MAX_ZOOM = 19;
-
-// The only thing standing between a URL and a filesystem path, so it is
-// strict, it is pure, and it is tested: three integers in range, or nothing.
-// Digits only means no traversal survives it, encoded or otherwise.
-export function parseTilePath(pathname) {
-  const m = /^\/tiles\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.png$/.exec(pathname || '');
-  if (!m) return null;
-  const z = Number(m[1]);
-  const x = Number(m[2]);
-  const y = Number(m[3]);
-  if (z < 0 || z > MAX_ZOOM) return null;
-  // Beyond the edge of the world at this zoom there is no such tile.
-  const span = 2 ** z;
-  if (x < 0 || x >= span || y < 0 || y >= span) return null;
-  return { z, x, y };
-}
-
-export function tileUrl(template, { z, x, y }) {
-  return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
-}
+// Re-exported so existing callers keep importing tiles.js, while the Worker
+// imports tile-path.js directly.
+export { parseTilePath, tileUrl } from './tile-path.js';
 
 export function makeTiles({
   cacheDir,

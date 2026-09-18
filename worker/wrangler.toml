@@ -1,0 +1,25 @@
+# The dashboard's front door. See worker/src/index.js for what it does and why.
+#
+# Deploy:
+#   cd worker
+#   npx wrangler secret put ORIGIN            # http://<vps-ip>:8080
+#   npx wrangler secret put EDGE_KEY          # must match EDGE_KEY on the VPS
+#   npx wrangler secret put DASHBOARD_TOKEN   # same value the service uses
+#   npx wrangler deploy
+#
+# All three are secrets rather than vars: ORIGIN reveals where the service
+# lives, and the other two are credentials.
+
+name = "livegeo"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Only the vendored Leaflet files are uploaded. Pointing this at ../public
+# would publish index.html, which belongs behind the origin's token check.
+[assets]
+directory = "../public/vendor"
+binding = "ASSETS"
+
+# Everything the page asks for is routed by the Worker itself, so assets must
+# not be served ahead of it.
+run_worker_first = true

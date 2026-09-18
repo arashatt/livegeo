@@ -13,6 +13,7 @@ import { personOf, makeDirectory } from '../src/directory.js';
 import { placeName, makeGeo } from '../src/geo.js';
 import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
+import worker from '../worker/src/index.js';
 import { serve, staticFile } from '../src/server.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -433,6 +434,108 @@ head('choosing what to backfill from');
   t('undefined dialogs do not throw', peersFor([], undefined).length === 0);
   t('undefined chats fall through to dialogs',
     JSON.stringify(peersFor(undefined, [{ id: 7 }])) === JSON.stringify([7]));
+}
+
+// --------------------------------------------------------------- the edge
+
+head('the Worker in front of the dashboard');
+{
+  // A stand-in for the edge cache. Workers have `caches`; Node does not.
+  const cached = new Map();
+  globalThis.caches = {
+    default: {
+      async match(req) {
+        const hit = cached.get(req.url);
+        return hit ? new Response(hit, { headers: { 'x-tile-source': 'cache' } }) : undefined;
+      },
+      async put(req, res) { cached.set(req.url, await res.arrayBuffer()); },
+    },
+  };
+  const pending = [];
+  const ctx = { waitUntil: (p) => { pending.push(p); return p; } };
+  const realFetch = globalThis.fetch;
+
+  let asked = [];
+  const png = 'PNGBYTES';
+  globalThis.fetch = async (input, init = {}) => {
+    const u = typeof input === 'string' ? input : (input.url ?? String(input));
+    asked.push({ url: u, init });
+    if (u.includes('tile.openstreetmap.org')) return new Response(png, { status: 200 });
+    return new Response('from-origin', { status: 200, headers: { 'x-from': 'origin' } });
+  };
+
+  const env = {
+    ORIGIN: 'http://10.0.0.1:8080',
+    EDGE_KEY: 'edge-secret',
+    DASHBOARD_TOKEN: 'tok',
+    ASSETS: { fetch: async (req) => new Response('leaflet:' + new URL(req.url).pathname) },
+  };
+  const get = (path, headers = {}) =>
+    worker.fetch(new Request('https://edge.test' + path, { headers }), env, ctx);
+
+  // --- tiles ---
+  const noAuth = await get('/tiles/9/337/201.png');
+  t('a tile without the token is refused', noAuth.status === 401, noAuth.status);
+
+  const first = await get('/tiles/9/337/201.png?token=tok');
+  t('with the token it is fetched', first.status === 200, first.status);
+  t('and reported as coming from upstream', first.headers.get('x-tile-source') === 'upstream');
+  t('from OpenStreetMap, identifying itself',
+    asked.at(-1).url.includes('tile.openstreetmap.org/9/337/201.png')
+    && asked.at(-1).init.headers['user-agent'].startsWith('livegeo/'), asked.at(-1));
+
+  await Promise.all(pending);   // the cache write is deferred, as at the edge
+  const before = asked.length;
+  const second = await get('/tiles/9/337/201.png?token=tok');
+  t('a second ask is served from the edge cache',
+    second.headers.get('x-tile-source') === 'cache', second.headers.get('x-tile-source'));
+  t('and does not go upstream again', asked.length === before, asked.length - before);
+
+  t('a cookie works as well as a query token',
+    (await get('/tiles/9/337/201.png', { cookie: 'tll_token=tok' })).status === 200);
+
+  // URL parsing collapses traversal before any of this runs, and it decodes
+  // %2e to do it — so neither `..` nor `%2e%2e` can reach the tile handler in
+  // the first place. What is worth asserting is the consequence: such a path
+  // never turns into a fetch for a tile.
+  asked = [];
+  const trav = await get('/tiles/%2e%2e/1/1.png?token=tok');
+  t('an encoded traversal never becomes a tile fetch',
+    !asked.some((a) => a.url.includes('tile.openstreetmap.org')), asked.map((a) => a.url));
+  t('and is not served as one', trav.headers.get('x-tile-source') === null);
+
+  const short = await get('/tiles/9/337.png?token=tok');
+  t('a malformed tile path stays under /tiles and is 404', short.status === 404, short.status);
+
+  // --- assets ---
+  const assetBody = await (await get('/vendor/leaflet/leaflet.js')).text();
+  t('a vendored file comes from the assets binding, prefix stripped',
+    assetBody === 'leaflet:/leaflet/leaflet.js', assetBody);
+
+  // --- proxying ---
+  asked = [];
+  const api = await get('/api/positions?token=tok');
+  t('the api is proxied to the origin',
+    asked[0].url === 'http://10.0.0.1:8080/api/positions?token=tok', asked[0] && asked[0].url);
+  t('carrying the edge key', asked[0].init.headers.get('x-edge-key') === 'edge-secret');
+  t('and the response comes back', api.headers.get('x-from') === 'origin');
+
+  asked = [];
+  await worker.fetch(new Request('https://edge.test/api/forget/7', {
+    method: 'POST', headers: { 'x-edge-key': 'forged-by-the-caller' },
+  }), env, ctx);
+  t('the method survives the proxy', asked[0].init.method === 'POST', asked[0].init.method);
+  t('a caller cannot supply its own edge key',
+    asked[0].init.headers.get('x-edge-key') === 'edge-secret',
+    asked[0].init.headers.get('x-edge-key'));
+
+  const noOrigin = await worker.fetch(new Request('https://edge.test/api/positions'),
+    { ...env, ORIGIN: '' }, ctx);
+  t('with no origin configured it says so rather than pretending',
+    noOrigin.status === 503, noOrigin.status);
+
+  globalThis.fetch = realFetch;
+  delete globalThis.caches;
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

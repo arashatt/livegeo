@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { parseTilePath, makeTiles } from './tiles.js';
+import { COOKIE, sameToken, tokenOf } from './token.js';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 const PAGE = resolve(PUBLIC, 'index.html');
@@ -31,23 +32,6 @@ export function staticFile(pathname) {
   if (file !== PUBLIC && !file.startsWith(PUBLIC + sep)) return null;
   const type = STATIC_TYPES[extname(file).toLowerCase()];
   return type ? { file, type } : null;
-}
-const COOKIE = 'tll_token';
-
-// Compare without letting response time reveal how much of the token matched.
-function sameToken(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-function tokenOf(req, url) {
-  const q = url.searchParams.get('token');
-  if (q) return q;
-  const header = req.headers.cookie || '';
-  const hit = header.split(';').map((s) => s.trim()).find((s) => s.startsWith(`${COOKIE}=`));
-  return hit ? decodeURIComponent(hit.slice(COOKIE.length + 1)) : '';
 }
 
 export function serve(positions, config, { log = console, directory = null, geo = null } = {}) {
@@ -76,16 +60,29 @@ export function serve(positions, config, { log = console, directory = null, geo 
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    const ok = sameToken(tokenOf(req, url), config.dashboardToken);
+    const ok = sameToken(tokenOf(req.headers.cookie, url), config.dashboardToken);
 
     const deny = () => {
       res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
       res.end('401 — append ?token=… to the URL');
     };
 
+    // /healthz is deliberately before this: the rollout's health check runs on
+    // the server itself, over loopback, and has no key to present. It reports
+    // counts and nothing else.
     if (url.pathname === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, watching: watchers.size, people: positions.list().length }));
+      return;
+    }
+
+    // Answer only the edge, when an edge has been configured. This is what
+    // makes binding to a public interface safe enough to do: a scanner that
+    // finds the port gets nothing, without having to guess the dashboard
+    // token to find that out.
+    if (config.edgeKey && !sameToken(req.headers['x-edge-key'] || '', config.edgeKey)) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end('403');
       return;
     }
 

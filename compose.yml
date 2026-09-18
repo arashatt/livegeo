@@ -12,7 +12,10 @@ services:
     # Bound to loopback on purpose: put a TLS terminator in front rather than
     # exposing a dashboard of people's locations straight to the internet.
     ports:
-      - "127.0.0.1:${PORT:-8080}:8080"
+      # Loopback unless deliberately changed. BIND=0.0.0.0 is the single act
+      # that exposes this to the internet, and it should be paired with
+      # EDGE_KEY in the environment file.
+      - "${BIND:-127.0.0.1}:${PORT:-8080}:8080"
     volumes:
       # Tiles are slow to fetch and cheap to keep; losing them on every deploy
       # would hammer OpenStreetMap for no reason.
