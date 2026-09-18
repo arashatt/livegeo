@@ -203,7 +203,46 @@ why none of it is on by default.
 Nothing in `public/index.html` changes — every path on the page is relative, and
 a single origin keeps them all resolving.
 
-### Setting it up
+### First, the way in that opens no way in
+
+Before the published port below: there is a second route, and for most people
+it is the better one. Cloudflare Tunnel is **outbound**. `cloudflared` dials
+Cloudflare on port 7844 and requests arrive back down the connection it opened,
+so the service keeps its loopback binding, nothing is published, and the
+question of whether `ufw` can filter a Docker port never comes up. It also puts
+TLS on the Cloudflare-to-server hop, which the published-port route cannot do
+at all, having no certificate and no name to get one for.
+
+```sh
+docker compose --profile tunnel up -d
+docker compose logs tunnel | grep -o 'https://[^ ]*trycloudflare.com'
+```
+
+That prints a public HTTPS address for the dashboard. No account, no domain, no
+Worker. Leave `EDGE_KEY` unset for this — with it set the tunnel arrives at a
+service that answers nobody.
+
+What it costs: a quick tunnel's hostname is random and **changes every time
+cloudflared restarts**, and Cloudflare offers it with no uptime guarantee. It
+is the right tool for reaching the dashboard today and the wrong one to build a
+habit on. Any domain on Cloudflare's nameservers turns it into a named tunnel
+with a hostname you keep — set `TUNNEL_TOKEN` from the Zero Trust dashboard and
+`TUNNEL_ARGS=run` in `.env`, beside `compose.yml`.
+
+If UDP is filtered where this runs, `TUNNEL_PROTOCOL=http2` moves the same
+connection to TCP on the same port.
+
+A named tunnel is also what makes Cloudflare Access possible, which would
+replace the shared dashboard token with per-person sign-in. Worth knowing,
+because the token is one secret held by everyone who has it and there is no
+taking it back from one of them.
+
+The two combine: point the Worker's `ORIGIN` at the tunnel hostname and you get
+edge tile caching and a stable `workers.dev` address in front of an origin that
+is still not listening for anything. That also sidesteps the IP problem
+described further down, since a tunnel hostname is a hostname.
+
+### Setting it up with a published port
 
 On the server. **These go in two different files**, and putting them in the
 wrong one fails quietly: `EDGE_KEY` is read by the service, while `BIND` is
@@ -270,7 +309,8 @@ hostname.
 
 ### Switching back
 
-Remove `BIND` and `EDGE_KEY` and `docker compose up -d`. The service is
+Remove `BIND` and `EDGE_KEY` and `docker compose up -d`; stop a tunnel with
+`docker compose --profile tunnel down`. The service is
 untouched by any of this — it serves its own page, its own tiles and its own
 API throughout — so going back is closing the port, not a migration. The Worker
 can be left deployed; without a reachable origin it simply stops being useful.

@@ -32,6 +32,36 @@ services:
         # has not opted in would fail to start the app at all.
         required: false
 
+  # Optional: a way in that never opens a way in. cloudflared dials *out* to
+  # Cloudflare and requests arrive back down that connection, so the app keeps
+  # its loopback binding, nothing is published to the internet, and the
+  # question of whether ufw can filter a Docker port stops mattering. It also
+  # puts TLS on the hop this service cannot terminate itself, having no
+  # certificate and no name to get one for.
+  #
+  #   docker compose --profile tunnel up -d
+  #   docker compose logs tunnel | grep -o 'https://.*trycloudflare.com'
+  #
+  # Left alone this is a quick tunnel: no account, no domain, and a new random
+  # hostname every time it restarts. Set TUNNEL_TOKEN and TUNNEL_ARGS=run for
+  # your own named tunnel on your own hostname, which is the version to trust
+  # with anything lasting.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    # The default is the quick tunnel's `--url http://app:8080`; reaching the
+    # app by service name is why no port needs publishing at all.
+    command: tunnel --no-autoupdate --protocol ${TUNNEL_PROTOCOL:-auto} ${TUNNEL_ARGS:---url http://app:8080}
+    environment:
+      # Empty for a quick tunnel. cloudflared ignores it when it is blank.
+      TUNNEL_TOKEN: "${TUNNEL_TOKEN:-}"
+    depends_on:
+      - app
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # Optional: without DATABASE_URL in the env file the app ignores this and
   # runs exactly as it did before. Bound to loopback for the same reason the
   # dashboard is — nothing here belongs on the open internet.
