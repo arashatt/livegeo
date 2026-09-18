@@ -82,12 +82,28 @@ while [ "$i" -lt 60 ]; do
 done
 [ "$i" -lt 60 ] || { echo; echo "postgis did not become ready — docker compose logs postgis" >&2; exit 1; }
 
+# The app creates the extension and the tables on connect, so it has to go
+# first — an empty database is the expected state at this point.
+echo "restarting the app so it picks up DATABASE_URL…"
+docker compose --profile postgis up -d --force-recreate app
+
+printf 'waiting for it to apply the schema'
+i=0
+while [ "$i" -lt 30 ]; do
+  if docker compose exec -T postgis psql -U "$USER" -d "$DB" -tAc \
+       "SELECT to_regclass('public.positions') IS NOT NULL;" 2>/dev/null | grep -q t; then
+    echo " ok"
+    break
+  fi
+  printf '.'
+  i=$((i + 1))
+  sleep 2
+done
+[ "$i" -lt 30 ] || { echo; echo "the app did not create its tables — docker compose logs app" >&2; exit 1; }
+
 echo "postgis version: $(docker compose exec -T postgis psql -U "$USER" -d "$DB" -tAc 'SELECT postgis_version();')"
 echo "tables: $(docker compose exec -T postgis psql -U "$USER" -d "$DB" -tAc \
   "SELECT string_agg(tablename, ' ') FROM pg_tables WHERE schemaname='public';")"
-
-echo "restarting the app so it picks up DATABASE_URL…"
-docker compose --profile postgis up -d --force-recreate app
 
 echo
 echo "done. History is recording now."

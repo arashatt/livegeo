@@ -14,6 +14,10 @@
 // the same way personOf is in directory.js.
 
 import pg from 'pg';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+const SCHEMA = fileURLToPath(new URL('../sql/schema.sql', import.meta.url));
 
 // A road only tells you where someone is if they are on or beside it; the
 // nearest named road to a point in open country can be kilometres away and
@@ -84,7 +88,14 @@ export function makeGeo({ url, log = console } = {}) {
       pool = new pg.Pool({ connectionString: url, max: 4 });
       try {
         await pool.query('SELECT 1');
-        log.info('geo: connected');
+        // The schema ships with the code and is applied on every boot. It was
+        // briefly mounted into docker-entrypoint-initdb.d instead, which is
+        // wrong twice over: that directory only runs on first initialisation,
+        // so no later migration would ever apply, and it needs a file on the
+        // server that the rollout does not put there. Every statement is
+        // IF NOT EXISTS, so running it each time costs a few milliseconds.
+        await pool.query(await readFile(SCHEMA, 'utf8'));
+        log.info('geo: connected, schema applied');
         return true;
       } catch (e) {
         // A database that is configured but unreachable must not stop the
