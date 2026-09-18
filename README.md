@@ -77,6 +77,9 @@ HOST=127.0.0.1
 STALE_AFTER=3600              # drop a position nobody updated for this long
 TRAIL_MAX=120                 # points kept in the path behind each person
 DATABASE_URL=                 # optional PostGIS — see «Places and history»
+TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
+TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
+TILE_MAX_AGE=2592000          # seconds before a cached tile is refetched
 ```
 
 Leaving `TELEGRAM_CHATS` empty means *every chat the account is in* is
@@ -161,6 +164,31 @@ One detail worth knowing: `stopped` is a field of `inputMediaGeoLive`, the
 so an empty point is the only real end-of-sharing signal. The parser keeps a
 check for the flag anyway, and a test pins down that the wire format does not
 carry one.
+
+## The basemap comes from here
+
+The page makes no third-party requests. Leaflet is served from
+`public/vendor`, and map tiles come through `/tiles/{z}/{x}/{y}.png`, which
+fetches from OpenStreetMap once and then caches on disk.
+
+This is not about speed. The browser and the server are often on very
+different networks — the dashboard is frequently reached over an ssh tunnel
+from somewhere that filters heavily, while the server itself sits somewhere
+that does not. Proxying means the map works whenever the *server* can reach
+OSM, rather than requiring it of whoever is looking at the page.
+
+It also degrades the right way. If the upstream is unreachable and a tile was
+fetched before, the cached copy is served and the response says
+`x-tile-source: stale` — a slightly old map beats a grid of grey squares.
+
+Tiles are behind the dashboard token like everything else, so this cannot be
+used as somebody else's free tile proxy.
+
+OSM's [tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
+covers a private dashboard with a month-long cache. If this ever serves more
+than a handful of people, run your own renderer and point `TILE_UPSTREAM` at
+it — it is one environment variable, and the PostGIS extract from the next
+section is most of what a renderer needs anyway.
 
 ## Places and history
 

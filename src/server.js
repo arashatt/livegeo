@@ -6,8 +6,32 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { resolve, sep, extname } from 'node:path';
+import { parseTilePath, makeTiles } from './tiles.js';
 
-const PAGE = fileURLToPath(new URL('../public/index.html', import.meta.url));
+const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
+const PAGE = resolve(PUBLIC, 'index.html');
+
+const STATIC_TYPES = {
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+};
+
+// Resolves a request path inside public/, or returns null. The prefix check is
+// the point: URL parsing collapses a literal "..", but a percent-encoded one
+// survives to decodeURIComponent, and only comparing the resolved path catches
+// that.
+export function staticFile(pathname) {
+  let rel;
+  try { rel = decodeURIComponent(pathname); } catch { return null; }
+  if (rel.includes('\0')) return null;
+  const file = resolve(PUBLIC, '.' + (rel.startsWith('/') ? rel : `/${rel}`));
+  if (file !== PUBLIC && !file.startsWith(PUBLIC + sep)) return null;
+  const type = STATIC_TYPES[extname(file).toLowerCase()];
+  return type ? { file, type } : null;
+}
 const COOKIE = 'tll_token';
 
 // Compare without letting response time reveal how much of the token matched.
@@ -28,6 +52,14 @@ function tokenOf(req, url) {
 
 export function serve(positions, config, { log = console, directory = null, geo = null } = {}) {
   const watchers = new Set();
+
+  const tiles = makeTiles({
+    cacheDir: config.tileCache,
+    upstream: config.tileUpstream,
+    userAgent: config.tileUserAgent,
+    maxAge: config.tileMaxAge,
+    log,
+  });
 
   const send = (res, event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -91,6 +123,33 @@ export function serve(positions, config, { log = console, directory = null, geo 
       // Proxies drop a connection that goes quiet; a comment costs nothing.
       const beat = setInterval(() => { try { res.write(': beat\n\n'); } catch { /* gone */ } }, 25000);
       req.on('close', () => { clearInterval(beat); watchers.delete(res); });
+      return;
+    }
+
+    // Leaflet, served from here. The page used to pull it from a CDN, which
+    // is one more thing that has to be reachable for the map to exist.
+    if (url.pathname.startsWith('/vendor/')) {
+      const hit = staticFile(url.pathname);
+      if (!hit) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
+      const bytes = await readFile(hit.file).catch(() => null);
+      if (!bytes) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
+      res.writeHead(200, { 'content-type': hit.type, 'cache-control': 'private, max-age=604800' });
+      res.end(bytes);
+      return;
+    }
+
+    // The basemap. Guarded like everything else, so this cannot be used as
+    // somebody else's free tile proxy.
+    const tile = parseTilePath(url.pathname);
+    if (tile) {
+      const got = await tiles.get(tile);
+      if (!got) { res.writeHead(502, { 'content-type': 'text/plain' }); res.end('no tile'); return; }
+      res.writeHead(200, {
+        'content-type': 'image/png',
+        'cache-control': 'private, max-age=604800',
+        'x-tile-source': got.from,
+      });
+      res.end(got.bytes);
       return;
     }
 

@@ -7,17 +7,12 @@ const need = (name) => {
   return v;
 };
 
-export function load() {
+// Everything that has a sensible default and no secret in it. Split out so
+// bin/selfcheck.mjs — which runs the dashboard with no Telegram account — gets
+// the same settings rather than restating a subset of them and quietly
+// shipping a page whose map cannot load.
+export function defaults() {
   return {
-    apiId: Number(need('TELEGRAM_API_ID')),
-    apiHash: need('TELEGRAM_API_HASH'),
-    // Produced once by `npm run login`; it is as good as the account password,
-    // so it belongs in the environment and never in the repository.
-    session: need('TELEGRAM_SESSION'),
-
-    // The dashboard shows where people are. It is never served without one.
-    dashboardToken: need('DASHBOARD_TOKEN'),
-
     port: Number(process.env.PORT || 8080),
     host: process.env.HOST || '127.0.0.1',
 
@@ -30,8 +25,34 @@ export function load() {
     // name a place or remember where anyone has been. Never need().
     databaseUrl: process.env.DATABASE_URL || '',
 
+    // The basemap is proxied through this service so the browser never has to
+    // reach a third party. Point this at your own renderer if you outgrow the
+    // public OpenStreetMap tiles.
+    tileUpstream: process.env.TILE_UPSTREAM || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    tileCache: process.env.TILE_CACHE || '/tmp/livegeo-tiles',
+    tileMaxAge: Number(process.env.TILE_MAX_AGE || 30 * 24 * 3600),
+    // OSM asks that clients say who they are; an anonymous proxy is the kind
+    // that gets blocked.
+    tileUserAgent: process.env.TILE_USER_AGENT
+      || 'livegeo/1.0 (+https://github.com/arashatt/livegeo)',
+
     // A position nobody has updated for this long stops being shown.
     staleAfter: Number(process.env.STALE_AFTER || 3600),
     trailMax: Number(process.env.TRAIL_MAX || 120),
+  };
+}
+
+export function load() {
+  return {
+    apiId: Number(need('TELEGRAM_API_ID')),
+    apiHash: need('TELEGRAM_API_HASH'),
+    // Produced once by `npm run login`; it is as good as the account password,
+    // so it belongs in the environment and never in the repository.
+    session: need('TELEGRAM_SESSION'),
+
+    // The dashboard shows where people are. It is never served without one.
+    dashboardToken: need('DASHBOARD_TOKEN'),
+
+    ...defaults(),
   };
 }

@@ -9,9 +9,13 @@
 
 import { Api } from 'teleproto';
 import { fromMessage, senderOf, Positions } from '../src/positions.js';
-import { serve } from '../src/server.js';
 import { personOf, makeDirectory } from '../src/directory.js';
 import { placeName, makeGeo } from '../src/geo.js';
+import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
+import { serve, staticFile } from '../src/server.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 let pass = 0, fail = 0;
 const t = (name, cond, extra) => {
@@ -317,6 +321,76 @@ head('geo without a database');
   t('history is empty, not an error', (await geo.historyOf('1')).length === 0);
   t('erasing removes nothing and does not throw', (await geo.forget('1')) === 0);
   await geo.close();
+}
+
+// -------------------------------------------------------------------- tiles
+
+head('a tile path is three integers or nothing');
+{
+  const ok = parseTilePath('/tiles/13/5242/3162.png');
+  t('a real tile parses', ok && ok.z === 13 && ok.x === 5242 && ok.y === 3162, ok);
+  t('zoom 0 has exactly one tile', parseTilePath('/tiles/0/0/0.png') !== null);
+
+  t('past the edge of the world is not a tile', parseTilePath('/tiles/0/1/0.png') === null);
+  t('past max zoom is not a tile', parseTilePath('/tiles/25/1/1.png') === null);
+  t('negatives do not parse', parseTilePath('/tiles/-1/0/0.png') === null);
+  t('decimals do not parse', parseTilePath('/tiles/1.5/0/0.png') === null);
+
+  // The reason this function exists: it feeds a filesystem path.
+  t('traversal does not parse', parseTilePath('/tiles/../../etc/passwd') === null);
+  t('encoded traversal does not parse', parseTilePath('/tiles/%2e%2e/1/1.png') === null);
+  t('a slash smuggled in does not parse', parseTilePath('/tiles/1/1/..%2f..%2fetc.png') === null);
+  t('an empty path does not parse', parseTilePath('') === null);
+  t('undefined does not throw', parseTilePath() === null);
+
+  t('the upstream url is filled in',
+    tileUrl('https://example.test/{z}/{x}/{y}.png', { z: 3, x: 4, y: 5 })
+      === 'https://example.test/3/4/5.png');
+}
+
+head('static files stay inside public/');
+{
+  t('a vendored file resolves', staticFile('/vendor/leaflet/leaflet.js') !== null);
+  t('its type is known', staticFile('/vendor/leaflet/leaflet.css').type.startsWith('text/css'));
+  t('an image resolves', staticFile('/vendor/leaflet/images/layers.png').type === 'image/png');
+
+  t('encoded traversal is refused', staticFile('/vendor/%2e%2e/%2e%2e/etc/passwd') === null);
+  t('a deep encoded escape is refused', staticFile('/vendor/..%2f..%2f..%2fetc/shadow') === null);
+  t('an unknown extension is refused', staticFile('/vendor/leaflet/leaflet.map') === null);
+  t('a null byte is refused', staticFile('/vendor/leaflet\0.js') === null);
+}
+
+head('tiles are cached, and stale beats blank');
+{
+  const dir = await mkdtemp(join(tmpdir(), 'tiles-'));
+  let calls = 0;
+  const png = Buffer.from('\x89PNG-one');
+  const fetchImpl = async () => { calls += 1; return { ok: true, arrayBuffer: async () => png }; };
+  const quiet = { info() {}, error() {} };
+
+  const tiles = makeTiles({ cacheDir: dir, upstream: 'https://x.test/{z}/{x}/{y}.png',
+                            userAgent: 'test', log: quiet, fetchImpl });
+
+  const first = await tiles.get({ z: 2, x: 1, y: 1 });
+  t('the first ask goes upstream', first.from === 'upstream' && calls === 1, first.from);
+  t('and returns the bytes', first.bytes.equals(png));
+
+  const second = await tiles.get({ z: 2, x: 1, y: 1 });
+  t('the second ask is served from disk', second.from === 'cache', second.from);
+  t('and upstream was not asked again', calls === 1, calls);
+
+  // Now the network goes away, as it does on the sort of connection this was
+  // built for.
+  const broken = makeTiles({ cacheDir: dir, upstream: 'https://x.test/{z}/{x}/{y}.png',
+                             userAgent: 'test', log: quiet, maxAge: -1,
+                             fetchImpl: async () => { throw new Error('unreachable'); } });
+  const stale = await broken.get({ z: 2, x: 1, y: 1 });
+  t('an unreachable upstream serves the stale tile', stale && stale.from === 'stale', stale);
+
+  const missing = await broken.get({ z: 2, x: 0, y: 0 });
+  t('but a tile never seen is simply absent', missing === null);
+
+  await rm(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
