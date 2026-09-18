@@ -81,6 +81,7 @@ DATABASE_URL=                 # optional PostGIS — see «Places and history»
 TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
 TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
 TILE_MAX_AGE=2592000          # seconds before a cached tile is refetched
+SHARE_TTL=604800              # how long a shared path link stays readable
 ```
 
 Leaving `TELEGRAM_CHATS` empty means *every chat the account is in* is
@@ -269,6 +270,29 @@ covers a private dashboard with a month-long cache. If this ever serves more
 than a handful of people, run your own renderer and point `TILE_UPSTREAM` at
 it — it is one environment variable, and the PostGIS extract from the next
 section is most of what a renderer needs anyway.
+
+## Handing a path to somebody
+
+Clicking a person opens their card; if they have gone anywhere, it offers a
+link. Anyone with that link sees that one path on a map, without the dashboard
+token.
+
+It is a **frozen copy**, not a window. The link shows what had been travelled
+at the moment of sharing and does not keep following the person afterwards,
+which is the difference between sharing a walk and handing over a tracker. It
+expires after `SHARE_TTL` — a week by default — and the card can revoke it
+before that.
+
+The link admits exactly three things: the viewer page, the one path behind it,
+and the map tiles that page draws on. It is not a way into the dashboard, the
+positions, or anybody else's path, and there are tests that say so.
+
+Worth being deliberate about, because this is the one feature here that hands
+somebody else's movements to a third party. The person walking agreed to share
+a live location in a chat. A link is a further step, and it is yours to take on
+their behalf — which is why it expires on its own and why revoking is one
+click. Requires PostGIS; without `DATABASE_URL` the button reports that rather
+than appearing to work.
 
 ## Places and history
 

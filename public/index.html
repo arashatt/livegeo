@@ -75,6 +75,13 @@
     border:1px solid var(--hairline);border-radius:999px;padding:.15rem .6rem;
   }
   .ghost:hover{border-color:var(--quiet);color:var(--ink)}
+  .card .ghost.share{margin-top:.45rem}
+  .shared{margin-top:.45rem;display:grid;gap:.2rem}
+  .shared input{
+    font:inherit;font-size:.78rem;width:100%;padding:.25rem .4rem;
+    border:1px solid var(--hairline);border-radius:6px;background:var(--paper);color:var(--ink);
+  }
+  .shared .meta{font-size:.72rem;color:var(--quiet)}
   /* The card behind a marker: a face and a handle, so a dot stops being a number. */
   .card{display:flex;gap:.6rem;align-items:center;min-width:11rem}
   .card img,.card .noface{
@@ -212,10 +219,36 @@
       (who && who.username ? '<div class="chandle">' + esc(who.username) + '</div>' : '') +
       '<div class="cid">' + esc(p.id) + '</div>' +
       '<div class="chandle">' + esc(whereabouts(p)) + '</div>' +
+      ((p.trail || []).length > 1
+        ? '<button class="ghost share" data-id="' + esc(p.id) + '">Share this path</button>'
+        : '') +
       '</div></div>';
   }
 
   // Opening the card is what pulls the photo — hovering should stay cheap.
+  // Handing a path to somebody without the dashboard. The link is a frozen
+  // copy, not a window that keeps following them, and it expires.
+  function share(id, button) {
+    button.disabled = true;
+    button.textContent = 'sharing…';
+    fetch('/api/share/' + encodeURIComponent(id), { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d && res.d.error);
+        var link = location.origin + res.d.path;
+        var days = Math.round(res.d.expiresIn / 86400);
+        button.outerHTML =
+          '<div class="shared"><input readonly value="' + esc(link) + '" />' +
+          '<span class="meta">expires in ' + days + ' day' + (days === 1 ? '' : 's') + '</span></div>';
+        var input = document.querySelector('.shared input');
+        if (input) { input.focus(); input.select(); }
+      })
+      .catch(function (e) {
+        button.disabled = false;
+        button.textContent = (e && e.message) === 'no database' ? 'needs PostGIS' : 'could not share';
+      });
+  }
+
   function openCard(p, marker) {
     // autoPan off: opening a card must not shove the map. Lighting a path
     // fits the whole of it, and a popup panning to make room for itself
@@ -281,6 +314,15 @@
 
   // Tapping the map itself puts everything back.
   map.on('click', function () { lit = null; hovered = null; shine(); });
+
+  // Delegated: the card's markup is replaced when the identity lookup lands,
+  // so a handler bound to the button would not survive it.
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('button.share');
+    if (!b) return;
+    e.preventDefault();
+    share(b.getAttribute('data-id'), b);
+  });
 
   function draw(p) {
     if (p.latitude === null || p.longitude === null) return;

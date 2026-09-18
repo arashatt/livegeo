@@ -45,3 +45,17 @@ CREATE TABLE IF NOT EXISTS fence_events (
   at       timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS fence_events_person_at_idx ON fence_events (person, at DESC);
+
+-- A path somebody chose to hand to somebody else. A frozen copy rather than a
+-- reference: the link should show what was shared at the moment of sharing,
+-- and should not quietly keep following a person afterwards. It expires by
+-- itself, and can be revoked before that.
+CREATE TABLE IF NOT EXISTS shares (
+  token      text PRIMARY KEY,
+  person     text NOT NULL,
+  name       text NOT NULL DEFAULT '',
+  path       geography(LineString, 4326) NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shares_expires_idx ON shares (expires_at);

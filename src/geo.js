@@ -171,6 +171,48 @@ export function makeGeo({ url, log = console } = {}) {
       }));
     },
 
+    // A LineString needs two points; one place is not a path, and refusing is
+    // better than sharing a link that opens on nothing.
+    async createShare({ token, person, name = '', points, ttlSeconds }) {
+      if (!pool || !Array.isArray(points) || points.length < 2) return false;
+      const wkt = points.map((p) => `${p.longitude} ${p.latitude}`).join(',');
+      await pool.query(
+        `INSERT INTO shares (token, person, name, path, expires_at)
+         VALUES ($1, $2, $3, ST_GeogFromText($4),
+                 now() + make_interval(secs => $5))`,
+        [token, String(person), name, `SRID=4326;LINESTRING(${wkt})`, Number(ttlSeconds)],
+      );
+      return true;
+    },
+
+    // Expired shares answer as though they never existed, which is the whole
+    // point of the expiry.
+    async readShare(token) {
+      if (!pool) return null;
+      const { rows } = await pool.query(
+        `SELECT name,
+                extract(epoch FROM created_at)::bigint AS at,
+                ST_AsGeoJSON(path::geometry) AS geojson
+           FROM shares
+          WHERE token = $1 AND expires_at > now()`,
+        [String(token)],
+      );
+      if (!rows[0]) return null;
+      const coords = JSON.parse(rows[0].geojson).coordinates || [];
+      return {
+        name: rows[0].name || '',
+        at: Number(rows[0].at),
+        // GeoJSON is longitude first; the map wants latitude first.
+        points: coords.map(([lon, lat]) => [lat, lon]),
+      };
+    },
+
+    async revokeShare(token) {
+      if (!pool) return 0;
+      const res = await pool.query('DELETE FROM shares WHERE token = $1', [String(token)]);
+      return res.rowCount;
+    },
+
     async historyOf(person, { limit = 500 } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(
@@ -195,8 +237,10 @@ export function makeGeo({ url, log = console } = {}) {
       if (!pool) return 0;
       const { rows } = await pool.query(
         `WITH gone AS (DELETE FROM positions WHERE person = $1 RETURNING 1),
-              ev   AS (DELETE FROM fence_events WHERE person = $1 RETURNING 1)
-         SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM ev) AS n`,
+              ev   AS (DELETE FROM fence_events WHERE person = $1 RETURNING 1),
+              sh   AS (DELETE FROM shares WHERE person = $1 RETURNING 1)
+         SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM ev)
+              + (SELECT count(*) FROM sh) AS n`,
         [String(person)],
       );
       return Number(rows[0]?.n ?? 0);

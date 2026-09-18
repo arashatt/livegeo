@@ -31,6 +31,10 @@ export function defaults() {
     // means no such check, which is the state the service has always been in.
     edgeKey: process.env.EDGE_KEY || '',
 
+    // How long a shared path stays readable. A link that never expires is a
+    // link somebody forgot they made.
+    shareTtl: Number(process.env.SHARE_TTL || 7 * 24 * 3600),
+
     // The basemap is proxied through this service so the browser never has to
     // reach a third party. Point this at your own renderer if you outgrow the
     // public OpenStreetMap tiles.

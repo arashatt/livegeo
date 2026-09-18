@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>A shared path</title>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+<style>
+  :root{ --ink:#14181d; --paper:#fff; --quiet:#6b7480; --hairline:#e3e6ea; --live:#0a7d33 }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e8eaed; --paper:#14181d; --quiet:#9aa3ad; --hairline:#2a2f36 }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    color:var(--ink);background:var(--paper);
+    height:100svh;display:grid;grid-template-rows:auto 1fr;
+  }
+  header{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;
+         padding:.7rem 1rem;border-bottom:1px solid var(--hairline)}
+  h1{font-size:1rem;font-weight:600;letter-spacing:-.01em}
+  .meta{color:var(--quiet);font-size:.85rem}
+  #map{height:100%;width:100%;background:var(--paper)}
+  @media (prefers-color-scheme: dark){
+    .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92)}
+  }
+  .gone{padding:2rem;text-align:center;color:var(--quiet)}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="who">A shared path</h1>
+  <span class="meta" id="when"></span>
+</header>
+<div id="map"></div>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script>
+(function () {
+  // The token is the last segment of the path this page was served from, and
+  // it is also what admits the tiles below — this page has no other key.
+  var token = location.pathname.split('/').filter(Boolean).pop() || '';
+
+  var map = L.map('map', { zoomControl: true, worldCopyJump: true, minZoom: 3 });
+  L.tileLayer('/tiles/{z}/{x}/{y}.png?s=' + encodeURIComponent(token), {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+  function resize() { map.invalidateSize({ animate: false }); }
+  window.addEventListener('resize', resize);
+  setTimeout(resize, 0);
+
+  function ago(at) {
+    var s = Math.max(0, Math.round(Date.now() / 1000 - at));
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + ' minutes ago';
+    if (s < 86400) return Math.round(s / 3600) + ' hours ago';
+    return Math.round(s / 86400) + ' days ago';
+  }
+
+  fetch('/api/shared/' + encodeURIComponent(token))
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      if (!d || !d.points || d.points.length < 2) {
+        document.body.innerHTML = '<p class="gone">This link has expired, or the path behind it was removed.</p>';
+        return;
+      }
+      if (d.name) document.getElementById('who').textContent = d.name + '’s path';
+      document.getElementById('when').textContent = 'shared ' + ago(d.at);
+
+      var colour = getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33';
+      // The same two-line treatment the dashboard uses when a path is lit:
+      // a wide soft line under a solid one.
+      L.polyline(d.points, { weight: 14, opacity: .2, color: colour, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+      var line = L.polyline(d.points, { weight: 4, opacity: 1, color: colour }).addTo(map);
+
+      L.circleMarker(d.points[0], { radius: 6, weight: 3, color: colour, fillColor: '#fff', fillOpacity: 1 })
+        .addTo(map).bindTooltip('start');
+      L.circleMarker(d.points[d.points.length - 1], { radius: 7, weight: 3, color: colour, fillColor: colour, fillOpacity: 1 })
+        .addTo(map).bindTooltip('end');
+
+      map.fitBounds(line.getBounds().pad(0.2));
+    })
+    .catch(function () {
+      document.body.innerHTML = '<p class="gone">This link could not be opened.</p>';
+    });
+})();
+</script>
+</body>
+</html>

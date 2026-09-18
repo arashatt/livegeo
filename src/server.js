@@ -9,9 +9,11 @@ import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { parseTilePath, makeTiles } from './tiles.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
+import { randomBytes } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 const PAGE = resolve(PUBLIC, 'index.html');
+const SHARE_PAGE = resolve(PUBLIC, 'share.html');
 
 const STATIC_TYPES = {
   '.js': 'application/javascript; charset=utf-8',
@@ -36,6 +38,29 @@ export function staticFile(pathname) {
 
 export function serve(positions, config, { log = console, directory = null, geo = null } = {}) {
   const watchers = new Set();
+
+  // Share tokens seen to be good, and when that answer goes stale. A share page
+  // asks for dozens of tiles; one database round trip covers all of them.
+  const shareCache = new Map();
+  const SHARE_CACHE_MS = 60_000;
+
+  async function validShare(token) {
+    if (!token || !/^[A-Za-z0-9_-]{8,64}$/.test(token) || !geo) return false;
+    const seen = shareCache.get(token);
+    if (seen && seen > Date.now()) return true;
+    const found = await geo.readShare(token).catch(() => null);
+    if (!found) { shareCache.delete(token); return false; }
+    shareCache.set(token, Date.now() + SHARE_CACHE_MS);
+    return true;
+  }
+
+  async function serveStatic(url, res) {
+    const hit = staticFile(url.pathname);
+    const bytes = hit ? await readFile(hit.file).catch(() => null) : null;
+    if (!bytes) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
+    res.writeHead(200, { 'content-type': hit.type, 'cache-control': 'private, max-age=604800' });
+    res.end(bytes);
+  }
 
   const tiles = makeTiles({
     cacheDir: config.tileCache,
@@ -86,7 +111,42 @@ export function serve(positions, config, { log = console, directory = null, geo 
       return;
     }
 
-    if (!ok) return deny();
+    // Leaflet is a public library and a share page needs it, so it is not
+    // behind the dashboard token. It carries no data.
+    if (url.pathname.startsWith('/vendor/')) return serveStatic(url, res);
+
+    // A share link is a second key, and a far narrower one: it opens the
+    // viewer, the one path behind it, and the tiles that page draws on.
+    // Nothing else, and only until it expires.
+    const shareToken = url.pathname.startsWith('/share/')
+      ? url.pathname.slice('/share/'.length)
+      : (url.pathname.startsWith('/api/shared/')
+        ? url.pathname.slice('/api/shared/'.length)
+        : url.searchParams.get('s') || '');
+
+    if (url.pathname.startsWith('/share/')) {
+      if (!(await validShare(shareToken))) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('no such share'); return; }
+      const html = await readFile(SHARE_PAGE, 'utf8').catch(() => null);
+      if (!html) { res.writeHead(500); res.end('missing page'); return; }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(html);
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/shared/')) {
+      const shared = (await validShare(shareToken)) && geo ? await geo.readShare(shareToken) : null;
+      if (!shared) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"error":"gone"}'); return; }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(shared));
+      return;
+    }
+
+    // Tiles for a share page. Checked against the database once and then
+    // remembered, because a map draws dozens of tiles and none of them should
+    // cost a query.
+    const tileForShare = parseTilePath(url.pathname) && shareToken && await validShare(shareToken);
+
+    if (!ok && !tileForShare) return deny();
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
       const html = await readFile(PAGE, 'utf8').catch(() => null);
@@ -123,18 +183,6 @@ export function serve(positions, config, { log = console, directory = null, geo 
       return;
     }
 
-    // Leaflet, served from here. The page used to pull it from a CDN, which
-    // is one more thing that has to be reachable for the map to exist.
-    if (url.pathname.startsWith('/vendor/')) {
-      const hit = staticFile(url.pathname);
-      if (!hit) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
-      const bytes = await readFile(hit.file).catch(() => null);
-      if (!bytes) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
-      res.writeHead(200, { 'content-type': hit.type, 'cache-control': 'private, max-age=604800' });
-      res.end(bytes);
-      return;
-    }
-
     // The basemap. Guarded like everything else, so this cannot be used as
     // somebody else's free tile proxy.
     const tile = parseTilePath(url.pathname);
@@ -168,6 +216,34 @@ export function serve(positions, config, { log = console, directory = null, geo 
       const points = geo ? await geo.historyOf(id, { limit: 1000 }) : [];
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ id, points }));
+      return;
+    }
+
+    // Hand one person's path to somebody who does not have the dashboard.
+    if (url.pathname.startsWith('/api/share/') && req.method === 'POST') {
+      const id = decodeURIComponent(url.pathname.slice('/api/share/'.length));
+      const person = positions.get(id);
+      const points = (person?.trail || []).filter((t) => t.latitude !== null);
+      if (!geo || !geo.enabled()) { res.writeHead(503, { 'content-type': 'application/json' }); res.end('{"error":"no database"}'); return; }
+      if (points.length < 2) { res.writeHead(409, { 'content-type': 'application/json' }); res.end('{"error":"no path yet"}'); return; }
+
+      const token = randomBytes(18).toString('base64url');
+      const made = await geo.createShare({
+        token, person: id, name: person.name || '', points, ttlSeconds: config.shareTtl,
+      }).catch((e) => { log.error('share:', e && e.message ? e.message : e); return false; });
+      if (!made) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":"could not share"}'); return; }
+
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ token, path: `/share/${token}`, expiresIn: config.shareTtl }));
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/share/') && req.method === 'DELETE') {
+      const token = decodeURIComponent(url.pathname.slice('/api/share/'.length));
+      const gone = geo ? await geo.revokeShare(token) : 0;
+      shareCache.delete(token);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ revoked: gone }));
       return;
     }
 

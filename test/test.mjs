@@ -616,5 +616,47 @@ head('a good fix moving a short way');
   t('11m further is below the floor and is not', tiny === null);
 }
 
+// ------------------------------------------------------------- sharing
+
+head('sharing a path');
+{
+  // Without a database there is nowhere to keep a share, and the routes must
+  // say so rather than half-working.
+  const geo = makeGeo({ url: '', log: { info() {}, error() {} } });
+  await geo.connect();
+  t('creating a share needs a database',
+    (await geo.createShare({ token: 'x', person: '1', points: [{ latitude: 1, longitude: 1 }, { latitude: 2, longitude: 2 }], ttlSeconds: 60 })) === false);
+  t('reading one comes back empty', (await geo.readShare('x')) === null);
+  t('revoking one removes nothing', (await geo.revokeShare('x')) === 0);
+
+  // One point is a place, not a path.
+  t('a single point is refused before it reaches the database',
+    (await geo.createShare({ token: 'x', person: '1', points: [{ latitude: 1, longitude: 1 }], ttlSeconds: 60 })) === false);
+
+  const store = new Positions();
+  const { server } = serve(store, {
+    dashboardToken: 'tok', port: 0, host: '127.0.0.1', staleAfter: 3600, trailMax: 10, shareTtl: 600,
+  }, { geo, log: { info() {}, error() {} } });
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  t('Leaflet is public, because a share page needs it and it carries no data',
+    (await fetch(`${base}/vendor/leaflet/leaflet.css`)).status === 200);
+  t('a share link that does not exist is 404, not 401',
+    (await fetch(`${base}/share/nosuchtokenhere`)).status === 404);
+  t('and neither does its data',
+    (await fetch(`${base}/api/shared/nosuchtokenhere`)).status === 404);
+
+  // The important one: a share token is not a way into anything else.
+  t('a share token does not open the dashboard',
+    (await fetch(`${base}/?s=nosuchtokenhere`)).status === 401);
+  t('nor the positions behind it',
+    (await fetch(`${base}/api/positions?s=nosuchtokenhere`)).status === 401);
+  t('creating a share still needs the dashboard token',
+    (await fetch(`${base}/api/share/someone`, { method: 'POST' })).status === 401);
+
+  server.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
