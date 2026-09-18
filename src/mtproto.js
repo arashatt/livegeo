@@ -13,6 +13,14 @@ import { TelegramClient, Api } from 'teleproto';
 import { StringSession } from 'teleproto/sessions/index.js';
 import { fromMessage, chatOf } from './positions.js';
 
+// Which chats to ask for locations already being shared. Pure, and exported,
+// because it is the one judgement in this file: everything else here is
+// connection wiring that can only be exercised against Telegram itself.
+export function peersFor(chats, dialogs) {
+  if (chats && chats.length) return chats;
+  return (dialogs || []).map((d) => d?.inputEntity ?? d?.id).filter(Boolean);
+}
+
 export async function connect(config, { onPosition, directory = null, log = console }) {
   const client = new TelegramClient(
     new StringSession(config.session),
@@ -66,7 +74,22 @@ export async function connect(config, { onPosition, directory = null, log = cons
   // sends updates from now on, so without this a restart forgets everyone
   // until their next move.
   async function backfill() {
-    for (const chat of config.chats) {
+    // Without TELEGRAM_CHATS this loop used to have nothing to iterate, so a
+    // restart quietly forgot everyone until their next move — which for
+    // someone standing still, or whose sharing had just ended, was never. Ask
+    // the account which chats it is in instead.
+    let peers = config.chats;
+    if (!peers.length) {
+      try {
+        peers = peersFor(config.chats, await client.getDialogs({ limit: 50 }));
+        log.info(`backfill: no TELEGRAM_CHATS, asking ${peers.length} recent chats`);
+      } catch (e) {
+        log.error('backfill: cannot list chats —', e && e.message ? e.message : e);
+        peers = [];
+      }
+    }
+
+    for (const chat of peers) {
       try {
         const res = await client.invoke(new Api.messages.GetRecentLocations({
           peer: chat, limit: 50, hash: 0,

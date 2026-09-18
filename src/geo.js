@@ -100,10 +100,11 @@ export function makeGeo({ url, log = console } = {}) {
     async record(p) {
       if (!pool || !p || p.latitude === null || p.longitude === null) return false;
       await pool.query(
-        `INSERT INTO positions (person, chat, at, geom, accuracy, heading, live)
-         VALUES ($1, $2, to_timestamp($3), ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography, $6, $7, $8)`,
+        `INSERT INTO positions (person, chat, at, geom, accuracy, heading, live, live_until)
+         VALUES ($1, $2, to_timestamp($3), ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography,
+                 $6, $7, $8, to_timestamp($9))`,
         [String(p.id), p.chat ?? null, p.at, p.longitude, p.latitude,
-         p.accuracy ?? null, p.heading ?? null, Boolean(p.liveUntil)],
+         p.accuracy ?? null, p.heading ?? null, Boolean(p.liveUntil), p.liveUntil ?? null],
       );
       return true;
     },
@@ -122,6 +123,41 @@ export function makeGeo({ url, log = console } = {}) {
         log.error('geo: cannot describe a point —', e && e.message ? e.message : e);
         return '';
       }
+    },
+
+    // The last known position of everyone seen recently — what the in-memory
+    // store would have held if the process had not restarted. Bounded by the
+    // same window the store uses, so this cannot bring back someone the store
+    // would have dropped anyway.
+    async latest(maxAgeSeconds) {
+      if (!pool) return [];
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (person)
+                person, chat,
+                extract(epoch FROM at)::bigint AS at,
+                extract(epoch FROM live_until)::bigint AS live_until,
+                ST_Y(geom::geometry) AS latitude,
+                ST_X(geom::geometry) AS longitude,
+                accuracy, heading
+           FROM positions
+          WHERE at > now() - make_interval(secs => $1)
+          ORDER BY person, at DESC`,
+        [Number(maxAgeSeconds)],
+      );
+      // Shaped as positions.update() expects, so restoring is the same code
+      // path as an arriving update rather than a second way in.
+      return rows.map((r) => ({
+        id: String(r.person),
+        chat: r.chat ?? null,
+        name: '',
+        latitude: Number(r.latitude),
+        longitude: Number(r.longitude),
+        accuracy: r.accuracy === null ? null : Number(r.accuracy),
+        heading: r.heading === null ? null : Number(r.heading),
+        at: Number(r.at),
+        liveUntil: r.live_until === null ? null : Number(r.live_until),
+        stopped: false,
+      }));
     },
 
     async historyOf(person, { limit = 500 } = {}) {

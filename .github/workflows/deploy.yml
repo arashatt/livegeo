@@ -97,11 +97,18 @@ jobs:
           DIR: ${{ vars.DEPLOY_PATH }}
           IMAGE: ${{ needs.image.outputs.image }}:main
           PORT: ${{ vars.DEPLOY_PORT }}
+          COMPOSE_URL: ${{ github.server_url }}/${{ github.repository }}/raw/${{ github.sha }}/compose.yml
         run: |
+          # compose.yml used to be whatever had been copied onto the server by
+          # hand, so every change to it here — a new service, a new volume —
+          # silently never took effect. It is deployed from the commit being
+          # rolled out, so a rollback rolls the file back with it.
           ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
             -p "${SSH_PORT:-22}" "${USER:-root}@${HOST}" \
             "set -eu; cd '${DIR:-/opt/telegram-live-location}'; \
+             curl -fsSL -o compose.yml.new '${COMPOSE_URL}'; \
+             mv compose.yml.new compose.yml; \
              export IMAGE='${IMAGE}' PORT='${PORT:-8080}'; \
              docker compose pull; \
              docker compose up -d --remove-orphans; \

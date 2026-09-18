@@ -23,6 +23,10 @@ services:
     depends_on:
       postgis:
         condition: service_healthy
+        # Not started unless the postgis profile is on, and the app is built to
+        # run without it. Without `required: false` a deploy on a server that
+        # has not opted in would fail to start the app at all.
+        required: false
 
   # Optional: without DATABASE_URL in the env file the app ignores this and
   # runs exactly as it did before. Bound to loopback for the same reason the
@@ -30,6 +34,10 @@ services:
   postgis:
     image: postgis/postgis:16-3.4
     restart: unless-stopped
+    # Off unless asked for. `docker compose up -d` on a server that has not run
+    # bin/setup-postgis.sh leaves this alone entirely, which is what keeps a
+    # deploy from breaking on a missing POSTGRES_PASSWORD.
+    profiles: ["postgis"]
     env_file:
       - /etc/telegram-live-location.env
     environment:

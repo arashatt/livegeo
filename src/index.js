@@ -17,6 +17,15 @@ const geo = makeGeo({ url: config.databaseUrl });
 await geo.connect();
 const { publish } = serve(positions, config, { directory, geo });
 
+// A restart used to blank the map until everyone happened to move again. What
+// was last recorded is what the store would have held, so put it back before
+// Telegram is even connected — the dashboard then has people the moment it is
+// up rather than minutes later.
+const restored = await geo.latest(config.staleAfter)
+  .then((rows) => rows.filter((p) => positions.update(p)).length)
+  .catch((e) => { console.error('geo:', e && e.message ? e.message : e); return 0; });
+if (restored) console.log(`restored ${restored} from the last run`);
+
 const telegram = await connect(config, {
   directory,
   onPosition: (position) => {

@@ -12,6 +12,7 @@ import { fromMessage, senderOf, Positions } from '../src/positions.js';
 import { personOf, makeDirectory } from '../src/directory.js';
 import { placeName, makeGeo } from '../src/geo.js';
 import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
+import { peersFor } from '../src/mtproto.js';
 import { serve, staticFile } from '../src/server.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -391,6 +392,28 @@ head('tiles are cached, and stale beats blank');
   t('but a tile never seen is simply absent', missing === null);
 
   await rm(dir, { recursive: true, force: true });
+}
+
+// ----------------------------------------------------------- which chats
+
+head('choosing what to backfill from');
+{
+  t('named chats win outright',
+    JSON.stringify(peersFor(['111', '222'], [{ id: 999 }])) === JSON.stringify(['111', '222']));
+
+  // The case that lost 509090598: no TELEGRAM_CHATS used to mean no backfill,
+  // so a restart forgot everyone until their next move.
+  const dialogs = [{ id: 1, inputEntity: 'peer-1' }, { id: 2 }, { id: 3, inputEntity: 'peer-3' }];
+  t('with none named, the account\'s own chats are used',
+    JSON.stringify(peersFor([], dialogs)) === JSON.stringify(['peer-1', 2, 'peer-3']));
+
+  t('a dialog with nothing usable is skipped',
+    JSON.stringify(peersFor([], [{ id: 1 }, {}, null])) === JSON.stringify([1]));
+
+  t('no chats and no dialogs is empty, not a crash', peersFor([], []).length === 0);
+  t('undefined dialogs do not throw', peersFor([], undefined).length === 0);
+  t('undefined chats fall through to dialogs',
+    JSON.stringify(peersFor(undefined, [{ id: 7 }])) === JSON.stringify([7]));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

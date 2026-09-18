@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS positions (
   heading   real,
   live      boolean NOT NULL DEFAULT false
 );
+-- Added after the fact: `live` says a position was live when it was recorded,
+-- but not for how long. Without the deadline a restored position cannot be
+-- shown as live with time remaining, which is most of what makes it useful.
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS live_until timestamptz;
+
 CREATE INDEX IF NOT EXISTS positions_geom_idx ON positions USING gist (geom);
 -- Reading a history is always "this person, most recent first".
 CREATE INDEX IF NOT EXISTS positions_person_at_idx ON positions (person, at DESC);

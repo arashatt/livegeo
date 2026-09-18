@@ -192,14 +192,35 @@ section is most of what a renderer needs anyway.
 
 ## Places and history
 
+Turn it on with one command on the server:
+
+```sh
+cd /opt/telegram-live-location && ./bin/setup-postgis.sh
+```
+
+It invents a password, writes `DATABASE_URL`, starts PostGIS and restarts the
+app. Running it twice is harmless — it will not rotate a working password.
+
+PostGIS is off until then. The service sits behind a compose profile, so an
+ordinary deploy never starts it and never needs a password; a server that has
+not run the script deploys exactly as before.
+
 Without `DATABASE_URL` the service is as it always was: positions live in
-memory and `STALE_AFTER` throws them away. With it, PostGIS does two things.
+memory and `STALE_AFTER` throws them away. With it, PostGIS does three things.
 
 **It names places.** `36.36457, 59.49061` becomes *Vakilabad Blvd, Mashhad*,
 by asking an OpenStreetMap extract what is nearest. A road is only named if
 you are within 120m of it and an area within 25km, because the nearest named
 thing to a point at sea is a city on another continent and saying so would be
 worse than saying nothing.
+
+**It survives a restart.** The store is in memory, so a deploy used to blank
+the map until everyone happened to move again — which, for someone standing
+still or whose sharing had just ended, was never. At startup the last known
+position of everyone seen within `STALE_AFTER` is read back, before Telegram is
+even connected. Without a database the same gap is narrowed by asking the
+account's own chats what is currently being shared, so a restart recovers
+whoever is still sharing even with `TELEGRAM_CHATS` empty.
 
 **It remembers.** Every position that actually moved is written to the
 `positions` table and kept until deleted. This is the part to be deliberate
