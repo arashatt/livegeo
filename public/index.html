@@ -57,6 +57,19 @@
   @media (prefers-reduced-motion:reduce){ .person.live .who i{animation:none} }
   .person .meta{font-size:.8rem;color:var(--quiet);font-variant-numeric:tabular-nums}
   .empty{color:var(--quiet);font-size:.88rem;padding:1rem;text-align:center}
+  /* Spotlight: the map recedes so one path can be read against it. The dark
+     theme already filters the tiles, so its rule has to carry both. */
+  .leaflet-tile-pane{transition:filter .18s ease}
+  body.spotlight .leaflet-tile-pane{filter:grayscale(.8) opacity(.4)}
+  @media (prefers-color-scheme: dark){
+    body.spotlight .leaflet-tile-pane{
+      filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92) grayscale(.8) opacity(.4);
+    }
+  }
+  body.spotlight .person{opacity:.45;transition:opacity .18s ease}
+  body.spotlight .person.lit{opacity:1;border-color:var(--ink)}
+  .person.lit{border-color:var(--ink)}
+
   .ghost{
     font:inherit;font-size:.8rem;color:var(--quiet);background:none;cursor:pointer;
     border:1px solid var(--hairline);border-radius:999px;padding:.15rem .6rem;
@@ -204,11 +217,70 @@
 
   // Opening the card is what pulls the photo — hovering should stay cheap.
   function openCard(p, marker) {
-    marker.bindPopup(card(p), { minWidth: 180 }).openPopup();
+    // autoPan off: opening a card must not shove the map. Lighting a path
+    // fits the whole of it, and a popup panning to make room for itself
+    // undoes that immediately.
+    marker.bindPopup(card(p), { minWidth: 180, autoPan: false }).openPopup();
     identify(p.id).then(function () {
       if (marker.isPopupOpen()) marker.setPopupContent(card(p));
     });
   }
+
+  // Which path is being looked at. `lit` is pinned by a click or a tap and
+  // stays; `hovered` is transient and only exists on a device with a pointer.
+  var lit = null;
+  var hovered = null;
+
+  function shine() {
+    var id = lit || hovered;
+    document.body.classList.toggle('spotlight', Boolean(id));
+
+    people.forEach(function (e, key) {
+      if (!e.data) return;
+      var focus = Boolean(id) && key === id;
+      var dim = Boolean(id) && !focus;
+
+      if (e.marker) {
+        e.marker.setStyle({ opacity: dim ? .2 : 1, fillOpacity: dim ? .25 : 1 });
+        e.marker.setRadius(focus ? 9 : 7);
+      }
+      if (e.halo) e.halo.setStyle({ opacity: dim ? .05 : .3, fillOpacity: dim ? .01 : .06 });
+      if (e.path) {
+        e.path.setStyle({
+          opacity: focus ? 1 : (dim ? .08 : .45),
+          weight: focus ? 4 : 2,
+          // Solid when lit: a dashed line reads as provisional, and this is
+          // the one thing being asserted.
+          dashArray: focus ? null : '4 4',
+        });
+      }
+
+      // A wider, softer line underneath is what makes it look lit rather than
+      // merely thicker.
+      if (focus && e.path) {
+        var pts = e.path.getLatLngs();
+        if (!e.glow) {
+          e.glow = L.polyline(pts, {
+            weight: 14, opacity: .2, lineCap: 'round', lineJoin: 'round',
+            color: e.path.options.color,
+          }).addTo(map);
+        }
+        e.glow.setLatLngs(pts).setStyle({ color: e.path.options.color });
+        e.glow.bringToBack();
+      } else if (e.glow) {
+        map.removeLayer(e.glow);
+        e.glow = null;
+      }
+    });
+  }
+
+  function pin(id) {
+    lit = (lit === id) ? null : id;
+    shine();
+  }
+
+  // Tapping the map itself puts everything back.
+  map.on('click', function () { lit = null; hovered = null; shine(); });
 
   function draw(p) {
     if (p.latitude === null || p.longitude === null) return;
@@ -229,9 +301,18 @@
       // Hovering resolves the id to a handle; the tooltip is rewritten once
       // the answer lands, so the first hover shows the number only briefly.
       entry.marker.on('mouseover', function () {
+        hovered = p.id;
+        shine();
         identify(p.id).then(function () { entry.marker.setTooltipContent(label(entry.data)); });
       });
-      entry.marker.on('click', function () { openCard(entry.data, entry.marker); });
+      entry.marker.on('mouseout', function () { hovered = null; shine(); });
+      entry.marker.on('click', function (e) {
+        // Without this the map's own click handler fires too and immediately
+        // unpins what was just pinned.
+        L.DomEvent.stopPropagation(e);
+        pin(p.id);
+        openCard(entry.data, entry.marker);
+      });
     } else {
       entry.marker.setTooltipContent(label(p));
     }
@@ -245,6 +326,7 @@
     if (line.length > 1) {
       if (!entry.path) entry.path = L.polyline(line, { weight: 2, opacity: .45, dashArray: '4 4', color: colour }).addTo(map);
       else entry.path.setLatLngs(line).setStyle({ color: colour });
+      if (entry.glow) entry.glow.setLatLngs(line);
     }
 
     people.set(p.id, entry);
@@ -274,12 +356,15 @@
       rows.length ? rows.length + (rows.length === 1 ? ' person' : ' people') : '';
     document.getElementById('recentre').hidden = !rows.length;
 
+    if (lit && !people.has(lit)) { lit = null; shine(); }
+    if (hovered && !people.has(hovered)) { hovered = null; shine(); }
+
     if (!rows.length) { list.innerHTML = '<p class="empty">Nobody is sharing a location yet.</p>'; return; }
 
     list.innerHTML = '';
     rows.forEach(function (p) {
       var el = document.createElement('button');
-      el.className = 'person' + (live(p) ? ' live' : '');
+      el.className = 'person' + (live(p) ? ' live' : '') + (lit === p.id ? ' lit' : '');
       el.innerHTML =
         '<span class="who"><i></i>' + esc(label(p)) + '</span>' +
         '<span class="meta">' +
@@ -297,10 +382,21 @@
           if (who_el) who_el.innerHTML = '<i></i>' + esc(label(p));
         }
       });
+      // The list is the other way in: hovering a row lights the same path the
+      // marker does, and on a touch screen tapping one is the only way in.
+      el.onmouseenter = function () { hovered = p.id; shine(); };
+      el.onmouseleave = function () { hovered = null; shine(); };
       el.onclick = function () {
+        pin(p.id);
         if (p.latitude === null) return;
-        map.setView([p.latitude, p.longitude], 16);
         var entry = people.get(p.id);
+        // Fit the whole path when lighting one, rather than zooming to the
+        // last point — the point of lighting it is to see where it went.
+        if (lit === p.id && entry && entry.path && (p.trail || []).length > 1) {
+          map.fitBounds(entry.path.getBounds().pad(0.25));
+        } else {
+          map.setView([p.latitude, p.longitude], 16);
+        }
         if (entry && entry.marker) openCard(p, entry.marker);
       };
       list.appendChild(el);
