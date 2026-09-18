@@ -21,6 +21,12 @@ ENV NODE_ENV=production \
     PORT=8080
 
 EXPOSE 8080
+
+# The tile cache is a named volume. Docker gives a fresh one the ownership of
+# whatever is at this path in the image, so creating it here is what lets a
+# non-root app write to it at all.
+RUN mkdir -p /tmp/livegeo-tiles && chown node:node /tmp/livegeo-tiles
+
 USER node
 
 # /healthz is the one route that needs no token, which is exactly what makes

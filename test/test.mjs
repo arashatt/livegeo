@@ -14,7 +14,7 @@ import { placeName, makeGeo } from '../src/geo.js';
 import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
 import { serve, staticFile } from '../src/server.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -390,6 +390,25 @@ head('tiles are cached, and stale beats blank');
 
   const missing = await broken.get({ z: 2, x: 0, y: 0 });
   t('but a tile never seen is simply absent', missing === null);
+
+  // What broke the live map: a fresh Docker volume is root-owned and the app
+  // is not root, so the very first cache write fails. The tile had already
+  // been fetched; discarding it over that is the bug.
+  let warned = '';
+  const notADir = join(dir, 'a-file-not-a-directory');
+  await writeFile(notADir, 'x');
+  const unwritable = makeTiles({
+    cacheDir: notADir,   // a regular file: mkdir under it fails, as EACCES would
+    upstream: 'https://x.test/{z}/{x}/{y}.png',
+    userAgent: 'test',
+    log: { info() {}, error: (...a) => { warned = a.join(' '); } },
+    fetchImpl: async () => ({ ok: true, arrayBuffer: async () => png }),
+  });
+  const served = await unwritable.get({ z: 4, x: 2, y: 3 });
+  t('a tile that cannot be cached is still served',
+    served !== null && served.bytes.equals(png), served);
+  t('and it is still reported as fresh', served.from === 'upstream', served && served.from);
+  t('while the cache failure is logged, not swallowed', warned.includes('could not cache'), warned);
 
   await rm(dir, { recursive: true, force: true });
 }

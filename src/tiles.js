@@ -75,9 +75,19 @@ export function makeTiles({
         });
         if (!res.ok) throw new Error(`upstream ${res.status}`);
         const bytes = Buffer.from(await res.arrayBuffer());
-        const file = fileFor(tile);
-        await mkdir(dirname(file), { recursive: true });
-        await writeFile(file, bytes);
+
+        // Caching is an optimisation, and it is allowed to fail. A fresh
+        // Docker named volume is owned by root while this runs as `node`, so
+        // the first write can be EACCES — and throwing here would discard a
+        // tile that had already been fetched, turning slow into blank.
+        try {
+          const file = fileFor(tile);
+          await mkdir(dirname(file), { recursive: true });
+          await writeFile(file, bytes);
+        } catch (e) {
+          log.error('tiles: fetched but could not cache —', e && e.message ? e.message : e);
+        }
+
         return { bytes, from: 'upstream' };
       } catch (e) {
         // A stale tile is a better map than a grey square, and on the network
