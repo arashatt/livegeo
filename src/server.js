@@ -26,7 +26,7 @@ function tokenOf(req, url) {
   return hit ? decodeURIComponent(hit.slice(COOKIE.length + 1)) : '';
 }
 
-export function serve(positions, config, { log = console } = {}) {
+export function serve(positions, config, { log = console, directory = null } = {}) {
   const watchers = new Set();
 
   const send = (res, event, data) => {
@@ -91,6 +91,35 @@ export function serve(positions, config, { log = console } = {}) {
       // Proxies drop a connection that goes quiet; a comment costs nothing.
       const beat = setInterval(() => { try { res.write(': beat\n\n'); } catch { /* gone */ } }, 25000);
       req.on('close', () => { clearInterval(beat); watchers.delete(res); });
+      return;
+    }
+
+    // Who a numeric id belongs to. Asked on hover, so it must be cheap: the
+    // directory caches, and answers "unknown" rather than blocking when
+    // Telegram cannot say.
+    if (url.pathname.startsWith('/api/person/')) {
+      const id = decodeURIComponent(url.pathname.slice('/api/person/'.length));
+      const person = directory
+        ? await directory.lookup(id)
+        : { id, name: '', username: '', photo: false };
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(person));
+      return;
+    }
+
+    // The profile photo, fetched only when someone opens a card — there is no
+    // reason to pull every face just to draw dots on a map.
+    if (url.pathname.startsWith('/api/photo/')) {
+      const id = decodeURIComponent(url.pathname.slice('/api/photo/'.length));
+      const bytes = directory ? await directory.photo(id) : null;
+      if (!bytes || !bytes.length) {
+        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.end('no photo');
+        return;
+      }
+      // Private and short: this is a picture of a person, behind the token.
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=300' });
+      res.end(bytes);
       return;
     }
 

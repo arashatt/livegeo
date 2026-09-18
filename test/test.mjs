@@ -10,6 +10,7 @@
 import { Api } from 'teleproto';
 import { fromMessage, senderOf, Positions } from '../src/positions.js';
 import { serve } from '../src/server.js';
+import { personOf, makeDirectory } from '../src/directory.js';
 
 let pass = 0, fail = 0;
 const t = (name, cond, extra) => {
@@ -212,6 +213,64 @@ head('the dashboard');
 
   await reader.cancel().catch(() => {});
   server.close();
+}
+
+// ---------------------------------------------------------------- directory
+
+head('turning an id into a person');
+{
+  const u = personOf({ firstName: 'Arash', lastName: 'A', username: 'arashatt', photo: {} }, 108205212);
+  t('the name is joined', u.name === 'Arash A', u.name);
+  t('the handle carries an @', u.username === '@arashatt', u.username);
+  t('having a photo is reported', u.photo === true);
+  t('the id comes back as a string', u.id === '108205212');
+
+  const group = personOf({ title: 'The group' }, 7);
+  t('a group falls back to its title', group.name === 'The group', group.name);
+
+  const bare = personOf({ firstName: 'Solo' }, 9);
+  t('no handle is empty, never undefined', bare.username === '');
+  t('no photo is false', bare.photo === false);
+}
+
+head('the directory does not ask twice');
+{
+  let asked = 0;
+  const dir = makeDirectory();
+  dir.attach({
+    getEntity: async (id) => { asked += 1; return { firstName: 'Once', username: 'once' }; },
+    downloadProfilePhoto: async () => Buffer.from('jpegbytes'),
+  });
+
+  const a = await dir.lookup(108205212);
+  const b = await dir.lookup('108205212');
+  t('the answer comes back', a.username === '@once', a);
+  t('a number and a string are the same id', b.username === '@once');
+  t('Telegram was asked once, not twice', asked === 1, asked);
+
+  const photo = await dir.photo(108205212);
+  t('the photo comes back as bytes', Buffer.isBuffer(photo) && photo.length > 0);
+}
+
+head('an id it cannot resolve still answers');
+{
+  const dir = makeDirectory();
+  dir.attach({
+    getEntity: async () => { throw new Error('no access hash'); },
+    downloadProfilePhoto: async () => { throw new Error('nope'); },
+  });
+
+  const who = await dir.lookup(42);
+  t('the page gets a shape rather than an error', who.id === '42' && who.name === '', who);
+  t('and no photo', (await dir.photo(42)) === null);
+}
+
+head('before Telegram is connected');
+{
+  const dir = makeDirectory();
+  const who = await dir.lookup(1);
+  t('the id answers as unknown rather than hanging', who.id === '1' && who.username === '');
+  t('and asking for a photo is not an error', (await dir.photo(1)) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

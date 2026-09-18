@@ -5,12 +5,17 @@ import { load } from './config.js';
 import { Positions } from './positions.js';
 import { serve } from './server.js';
 import { connect } from './mtproto.js';
+import { makeDirectory } from './directory.js';
 
 const config = load();
 const positions = new Positions({ staleAfter: config.staleAfter, trailMax: config.trailMax });
-const { publish } = serve(positions, config);
+// Built before either side so the page can ask about an id straight away;
+// it simply answers "unknown" until Telegram is connected below.
+const directory = makeDirectory();
+const { publish } = serve(positions, config, { directory });
 
 const telegram = await connect(config, {
+  directory,
   onPosition: (position) => {
     // update() returns null when nothing actually changed, which keeps a
     // phone repeating itself from waking every open map.

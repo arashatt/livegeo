@@ -56,12 +56,29 @@
   @media (prefers-reduced-motion:reduce){ .person.live .who i{animation:none} }
   .person .meta{font-size:.8rem;color:var(--quiet);font-variant-numeric:tabular-nums}
   .empty{color:var(--quiet);font-size:.88rem;padding:1rem;text-align:center}
+  .ghost{
+    font:inherit;font-size:.8rem;color:var(--quiet);background:none;cursor:pointer;
+    border:1px solid var(--hairline);border-radius:999px;padding:.15rem .6rem;
+  }
+  .ghost:hover{border-color:var(--quiet);color:var(--ink)}
+  /* The card behind a marker: a face and a handle, so a dot stops being a number. */
+  .card{display:flex;gap:.6rem;align-items:center;min-width:11rem}
+  .card img,.card .noface{
+    width:3rem;height:3rem;border-radius:50%;flex:none;object-fit:cover;
+    background:var(--hairline);display:grid;place-items:center;
+    font-weight:600;color:var(--quiet);
+  }
+  .card .cname{font-weight:600;line-height:1.3}
+  .card .chandle{font-size:.82rem;color:var(--quiet)}
+  .card .cid{font-size:.75rem;color:var(--quiet);font-variant-numeric:tabular-nums;opacity:.7}
+  .leaflet-popup-content{margin:.7rem .8rem}
 </style>
 </head>
 <body>
 <header>
   <h1>Live locations</h1>
   <span class="count" id="count"></span>
+  <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
   <span class="conn" id="conn"><i></i><span>connecting…</span></span>
 </header>
 <main>
@@ -73,11 +90,30 @@
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 <script>
 (function () {
-  var map = L.map('map', { zoomControl: true }).setView([35.6892, 51.389], 4);
+  var map = L.map('map', {
+    zoomControl: true,
+    // Pan past the dateline and the world keeps going, with the markers
+    // following you into the copy you are looking at.
+    worldCopyJump: true,
+    // Far enough out to see a continent, never so far that the whole world
+    // shrinks into a band with empty space above and below it.
+    minZoom: 3
+  }).setView([35.6892, 51.389], 13);
+
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   }).addTo(map);
+
+  // Leaflet measures the container when the map is built, and this one is
+  // sized by a CSS grid that may not have settled yet. Measured too early it
+  // renders tiles for a viewport that no longer exists — a narrow strip of
+  // map floating in a large empty box. Re-measuring costs nothing.
+  function resize() { map.invalidateSize({ animate: false }); }
+  window.addEventListener('resize', resize);
+  window.addEventListener('load', resize);
+  setTimeout(resize, 0);
+  setTimeout(resize, 250);
 
   var people = new Map();   // id -> { data, marker, halo, path }
   var fitted = false;
@@ -98,6 +134,55 @@
     return s > 3600 ? Math.round(s / 3600) + 'h left' : Math.max(1, Math.round(s / 60)) + 'm left';
   }
 
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // id -> { name, username, photo } once Telegram has been asked, or null
+  // while the asking is in flight. The server caches too; this only keeps the
+  // page from asking again on every mousemove.
+  var identities = new Map();
+  function identify(id) {
+    if (identities.has(id)) return Promise.resolve(identities.get(id));
+    identities.set(id, null);
+    return fetch('/api/person/' + encodeURIComponent(id), { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (who) { identities.set(id, who); return who; })
+      .catch(function () { identities.set(id, null); return null; });
+  }
+
+  // What to call someone: their handle if Telegram told us, then whatever name
+  // rode along on the message, and the bare id only as a last resort.
+  function label(p) {
+    var who = identities.get(p.id);
+    if (who && who.username) return who.username;
+    if (who && who.name) return who.name;
+    return p.name || p.id;
+  }
+
+  function card(p) {
+    var who = identities.get(p.id);
+    var title = (who && (who.name || who.username)) || p.name || '';
+    var face = who && who.photo
+      ? '<img src="/api/photo/' + encodeURIComponent(p.id) + '" alt="" />'
+      : '<div class="noface">' + esc((title || '?').trim().charAt(0).toUpperCase() || '?') + '</div>';
+    return '<div class="card">' + face + '<div>' +
+      '<div class="cname">' + esc(title || p.id) + '</div>' +
+      (who && who.username ? '<div class="chandle">' + esc(who.username) + '</div>' : '') +
+      '<div class="cid">' + esc(p.id) + '</div>' +
+      '</div></div>';
+  }
+
+  // Opening the card is what pulls the photo — hovering should stay cheap.
+  function openCard(p, marker) {
+    marker.bindPopup(card(p), { minWidth: 180 }).openPopup();
+    identify(p.id).then(function () {
+      if (marker.isPopupOpen()) marker.setPopupContent(card(p));
+    });
+  }
+
   function draw(p) {
     if (p.latitude === null || p.longitude === null) return;
     var here = [p.latitude, p.longitude];
@@ -110,7 +195,19 @@
       entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
     }
     entry.marker.setLatLng(here).setStyle({ color: colour });
-    entry.marker.bindTooltip(p.name || p.id, { permanent: false });
+
+    if (!entry.wired) {
+      entry.wired = true;
+      entry.marker.bindTooltip(label(p), { permanent: false });
+      // Hovering resolves the id to a handle; the tooltip is rewritten once
+      // the answer lands, so the first hover shows the number only briefly.
+      entry.marker.on('mouseover', function () {
+        identify(p.id).then(function () { entry.marker.setTooltipContent(label(entry.data)); });
+      });
+      entry.marker.on('click', function () { openCard(entry.data, entry.marker); });
+    } else {
+      entry.marker.setTooltipContent(label(p));
+    }
 
     if (p.accuracy) {
       if (!entry.halo) entry.halo = L.circle(here, { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
@@ -125,8 +222,20 @@
 
     people.set(p.id, entry);
 
-    if (!fitted) { map.setView(here, 14); fitted = true; }
-    else if (live(p)) { map.panTo(here, { animate: true }); }
+    // Fit once, to everyone. After that the map stays where it was put: a
+    // view that jumps to whoever moved last is unusable the moment two people
+    // are sharing, so recentring is a button rather than a surprise.
+    if (!fitted) { fit(); fitted = true; }
+  }
+
+  function fit() {
+    var pts = [];
+    people.forEach(function (e) {
+      if (e.data && e.data.latitude !== null) pts.push([e.data.latitude, e.data.longitude]);
+    });
+    if (!pts.length) return;
+    if (pts.length === 1) map.setView(pts[0], 15);
+    else map.fitBounds(L.latLngBounds(pts).pad(0.25));
   }
 
   function render() {
@@ -136,6 +245,7 @@
 
     document.getElementById('count').textContent =
       rows.length ? rows.length + (rows.length === 1 ? ' person' : ' people') : '';
+    document.getElementById('recentre').hidden = !rows.length;
 
     if (!rows.length) { list.innerHTML = '<p class="empty">Nobody is sharing a location yet.</p>'; return; }
 
@@ -144,7 +254,7 @@
       var el = document.createElement('button');
       el.className = 'person' + (live(p) ? ' live' : '');
       el.innerHTML =
-        '<span class="who"><i></i>' + (p.name || p.id).replace(/[<&]/g, '') + '</span>' +
+        '<span class="who"><i></i>' + esc(label(p)) + '</span>' +
         '<span class="meta">' +
           (p.stopped ? 'stopped · ' : '') +
           (live(p) ? 'live · ' + left(p) + ' · ' : '') + ago(p.at) +
@@ -152,8 +262,18 @@
         '<span class="meta">' +
           (p.latitude === null ? '—' : p.latitude.toFixed(5) + ', ' + p.longitude.toFixed(5)) +
         '</span>';
+      // Rows resolve lazily too, so a list of numbers fills in with handles.
+      identify(p.id).then(function (who) {
+        if (who && (who.username || who.name)) {
+          var who_el = el.querySelector('.who');
+          if (who_el) who_el.innerHTML = '<i></i>' + esc(label(p));
+        }
+      });
       el.onclick = function () {
-        if (p.latitude !== null) map.setView([p.latitude, p.longitude], 16);
+        if (p.latitude === null) return;
+        map.setView([p.latitude, p.longitude], 16);
+        var entry = people.get(p.id);
+        if (entry && entry.marker) openCard(p, entry.marker);
       };
       list.appendChild(el);
     });
@@ -189,6 +309,9 @@
       // EventSource retries by itself; this only keeps the label honest.
     };
   }
+  var recentre = document.getElementById('recentre');
+  recentre.onclick = function () { fit(); };
+
   stream();
 
   // Keeps «live · 4m left» and «2m ago» from going stale between updates.

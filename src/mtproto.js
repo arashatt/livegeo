@@ -13,7 +13,7 @@ import { TelegramClient, Api } from 'teleproto';
 import { StringSession } from 'teleproto/sessions/index.js';
 import { fromMessage, chatOf } from './positions.js';
 
-export async function connect(config, { onPosition, log = console }) {
+export async function connect(config, { onPosition, directory = null, log = console }) {
   const client = new TelegramClient(
     new StringSession(config.session),
     config.apiId,
@@ -33,6 +33,10 @@ export async function connect(config, { onPosition, log = console }) {
 
   const me = await client.getMe();
   log.info(`signed in as ${me.username ? '@' + me.username : me.firstName || me.id}`);
+
+  // From here the dashboard can turn a sender id into a name and a photo.
+  // Before this point it answers "unknown" rather than making the page wait.
+  directory?.attach(client);
 
   const wanted = new Set(config.chats.map(String));
   const allowed = (message) => wanted.size === 0 || wanted.has(String(chatOf(message) ?? ''));
