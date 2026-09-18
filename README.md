@@ -205,17 +205,38 @@ a single origin keeps them all resolving.
 
 ### Setting it up
 
-On the server, in the environment file:
+On the server. **These go in two different files**, and putting them in the
+wrong one fails quietly: `EDGE_KEY` is read by the service, while `BIND` is
+read by Compose when it builds the port mapping, and Compose does not look at
+`env_file` for that.
 
 ```sh
-EDGE_KEY=…      # openssl rand -hex 24; the Worker must send this
-BIND=0.0.0.0    # the deliberate act that exposes the port
+cd /opt/telegram-live-location
+
+# read by the service, inside the container
+echo "EDGE_KEY=$(openssl rand -hex 24)" >> /etc/telegram-live-location.env
+
+# read by Compose, substituted into the port mapping
+echo 'BIND=0.0.0.0' >> .env
+
+docker compose up -d
+docker ps --format '{{.Names}}  {{.Ports}}'    # expect 0.0.0.0:8080->8080
 ```
 
+Set `EDGE_KEY` **last**, or set it after the Worker is deployed: from the
+moment it exists the service answers nobody else, so an ssh tunnel to the
+dashboard gets `403` until there is an edge to come through.
+
 `EDGE_KEY` means a scanner that finds the open port gets `403` without having
-to guess the dashboard token to learn that. Firewalling the port to
-[Cloudflare's published ranges](https://www.cloudflare.com/ips/) is worth doing
-as well.
+to guess the dashboard token to learn that. It is the control that matters
+here.
+
+An IP allowlist is defence in depth on top of it, and **`ufw` cannot provide
+it**: Docker publishes a port by inserting its own rules ahead of ufw's INPUT
+chain, so `ufw deny 8080` appears to work and does nothing. It has to go in the
+`DOCKER-USER` chain instead, and a mistake in the ordering there locks you out
+of the machine rather than the port. Worth doing deliberately, with console
+access to hand, rather than as a final step over ssh.
 
 Then deploy the Worker:
 

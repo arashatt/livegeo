@@ -13,8 +13,9 @@ services:
     # exposing a dashboard of people's locations straight to the internet.
     ports:
       # Loopback unless deliberately changed. BIND=0.0.0.0 is the single act
-      # that exposes this to the internet, and it should be paired with
-      # EDGE_KEY in the environment file.
+      # that exposes this to the internet, and it belongs in the .env file
+      # beside this one — Compose substitutes from there, never from the
+      # env_file above, which is only the container's own environment.
       - "${BIND:-127.0.0.1}:${PORT:-8080}:8080"
     volumes:
       # Tiles are slow to fetch and cheap to keep; losing them on every deploy
