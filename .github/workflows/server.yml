@@ -11,10 +11,17 @@ name: Server
 #   workflow. The choices below are the whole surface.
 #
 #   Nothing sensitive is printed. This repository is public, so its Actions
-#   logs are public. The service logs positions (`new: <id> <lat>,<lng>`) and a
-#   failed database connection can echo DATABASE_URL with its password in it;
-#   none of that may end up here. `status` reports counts and health, never
-#   coordinates, ids, or the contents of the environment file.
+#   logs are public. The service logs positions and a failed database
+#   connection can echo DATABASE_URL with its password in it; none of that may
+#   end up here.
+#
+#   The filter below is an allowlist of exact messages, not of prefixes. A
+#   prefix let coordinates through once already: positions are logged as
+#   `<via>: <id> <lat>,<lng>` where via is new, edit or backfill, so a pattern
+#   of `backfill:` — meant for a startup message — matched every restored
+#   position and published two people's locations. Anything added here must be
+#   a message that cannot carry a position, and the substitution at the end is
+#   a backstop for when that judgement is wrong again.
 
 on:
   workflow_dispatch:
@@ -111,8 +118,8 @@ jobs:
                 fi; \
                 echo; echo '--- app, structural lines only ---'; \
                 docker compose logs app --tail 200 2>/dev/null \
-                  | grep -E 'geo:|tiles:|restored |backfill:|dashboard on|is not set' \
-                  | sed -E 's#(postgres://[^:]+:)[^@]*@#\1***@#g; s/[0-9a-f]{32,}/***/g' \
+                  | grep -E 'geo: |tiles: |restored [0-9]|backfill: no TELEGRAM_CHATS|dashboard on|is not set' \
+                  | sed -E 's#(postgres://[^:]+:)[^@]*@#\1***@#g; s/[0-9a-f]{32,}/***/g; s/-?[0-9]+\.[0-9]{3,},-?[0-9]+\.[0-9]{3,}/<position redacted>/g' \
                   | tail -15 || echo '(nothing)'"
               ;;
           esac
