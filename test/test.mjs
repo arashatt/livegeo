@@ -209,6 +209,19 @@ head('the dashboard');
   // Compression implies buffering, and a buffered stream is not a stream.
   t('and asking not to be recompressed on the way',
     /no-transform/.test(res.headers.get('cache-control')), res.headers.get('cache-control'));
+
+  // The page opens this with POST, because cloudflared delivers a stream over
+  // POST and holds the identical one over GET. Both have to work: the origin
+  // is reached directly as often as through anything.
+  const posted = await fetch(`${base}/api/stream`, {
+    method: 'POST', headers: { cookie: 'tll_token=sekret' },
+  });
+  t('the stream opens over POST as well',
+    posted.status === 200 && /event-stream/.test(posted.headers.get('content-type')),
+    posted.status);
+  const firstEvent = await posted.body.getReader().read();
+  t('and greets the caller straight away',
+    /event: hello/.test(new TextDecoder().decode(firstEvent.value)));
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const readChunk = async () => decoder.decode((await reader.read()).value || new Uint8Array());

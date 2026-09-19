@@ -127,6 +127,10 @@ asking `/api/positions` every five seconds and says `polling` where it would say
 `live`. That is there because a proxy that buffers a stream produces a dashboard
 that looks connected and shows nothing, which is the worst way for this to fail.
 
+Falling back is not permanent. It retries the stream every minute and goes back
+to `live` the moment one delivers, so a page left open across a change in what
+is in front of it recovers on its own.
+
 Behind nginx, **turn buffering off** or the live stream will arrive in
 lumps — the app sends `X-Accel-Buffering: no`, but be explicit:
 
@@ -228,15 +232,12 @@ That prints a public HTTPS address for the dashboard. No account, no domain, no
 Worker. Leave `EDGE_KEY` unset for this — with it set the tunnel arrives at a
 service that answers nobody.
 
-**A quick tunnel does not deliver the live stream.** cloudflared buffers
-server-sent events on a GET request and releases them only when the connection
-closes ([cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449),
-open), so the greeting this page opens with never arrives. The dashboard now
-notices that and falls back to asking every five seconds — the badge reads
-`polling` rather than `live` and updates land within five seconds instead of
-immediately. Everything works; it is simply no longer live in the strict sense.
-Whether a named tunnel has the same problem is not recorded in that issue and
-this has not tested it.
+cloudflared buffers server-sent events on a **GET** request and releases them
+only when the connection closes ([cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449),
+open) — and delivers the identical stream over **POST** as it arrives. So the
+page opens `/api/stream` with POST and reads it by hand, rather than using
+`EventSource`, which can only ever issue a GET. That keeps the dashboard live
+through a tunnel instead of degrading it to polling.
 
 What it costs: a quick tunnel's hostname is random and **changes every time
 cloudflared restarts**, and Cloudflare offers it with no uptime guarantee. It
@@ -345,8 +346,8 @@ timeout. How many simultaneous streams the free tier tolerates is not something
 this has been measured against; for a handful of viewers it has not come up.
 
 A Worker passes the stream through unbuffered — it returns the upstream body
-rather than reading it — so this route stays live where a quick tunnel does
-not.
+rather than reading it — so this route was live before the POST change and is
+unaffected by it.
 
 ## The basemap comes from here
 
