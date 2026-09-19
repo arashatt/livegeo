@@ -121,6 +121,12 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
+The page does not depend on that stream arriving. If nothing comes within eight
+seconds of opening it, or if the stream goes quiet for seventy, it falls back to
+asking `/api/positions` every five seconds and says `polling` where it would say
+`live`. That is there because a proxy that buffers a stream produces a dashboard
+that looks connected and shows nothing, which is the worst way for this to fail.
+
 Behind nginx, **turn buffering off** or the live stream will arrive in
 lumps — the app sends `X-Accel-Buffering: no`, but be explicit:
 
@@ -221,6 +227,16 @@ docker compose logs tunnel | grep -o 'https://[^ ]*trycloudflare.com'
 That prints a public HTTPS address for the dashboard. No account, no domain, no
 Worker. Leave `EDGE_KEY` unset for this — with it set the tunnel arrives at a
 service that answers nobody.
+
+**A quick tunnel does not deliver the live stream.** cloudflared buffers
+server-sent events on a GET request and releases them only when the connection
+closes ([cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449),
+open), so the greeting this page opens with never arrives. The dashboard now
+notices that and falls back to asking every five seconds — the badge reads
+`polling` rather than `live` and updates land within five seconds instead of
+immediately. Everything works; it is simply no longer live in the strict sense.
+Whether a named tunnel has the same problem is not recorded in that issue and
+this has not tested it.
 
 What it costs: a quick tunnel's hostname is random and **changes every time
 cloudflared restarts**, and Cloudflare offers it with no uptime guarantee. It
@@ -327,6 +343,10 @@ when the edge already has it — roughly one to two thousand map pans. The app's
 25-second heartbeat keeps `/api/stream` inside Cloudflare's 100-second idle
 timeout. How many simultaneous streams the free tier tolerates is not something
 this has been measured against; for a handful of viewers it has not come up.
+
+A Worker passes the stream through unbuffered — it returns the upstream body
+rather than reading it — so this route stays live where a quick tunnel does
+not.
 
 ## The basemap comes from here
 

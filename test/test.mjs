@@ -206,6 +206,9 @@ head('the dashboard');
   // The stream: connect, read the greeting, then a pushed update.
   const res = await fetch(`${base}/api/stream`, { headers: { cookie: 'tll_token=sekret' } });
   t('the stream opens', res.status === 200 && /event-stream/.test(res.headers.get('content-type')));
+  // Compression implies buffering, and a buffered stream is not a stream.
+  t('and asking not to be recompressed on the way',
+    /no-transform/.test(res.headers.get('cache-control')), res.headers.get('cache-control'));
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const readChunk = async () => decoder.decode((await reader.read()).value || new Uint8Array());

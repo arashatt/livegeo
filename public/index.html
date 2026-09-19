@@ -453,27 +453,85 @@
     conn.lastElementChild.textContent = text;
   }
 
+  function drop(id) {
+    var entry = people.get(id);
+    if (!entry) return false;
+    ['marker', 'halo', 'path'].forEach(function (k) { if (entry[k]) map.removeLayer(entry[k]); });
+    people.delete(id);
+    return true;
+  }
+
+  // Asking, rather than being told. This is the fallback, not the plan: it
+  // cannot show a change sooner than the next ask, and it re-sends everyone
+  // each time. It exists because the stream cannot be relied on to arrive —
+  // cloudflared buffers server-sent events on a GET until the connection
+  // closes, so behind a tunnel the greeting this page waits for never comes
+  // and the dashboard sat on «connecting…» with nothing to say about why.
+  var polling = null;
+  function poll() {
+    if (polling) return;
+    status(true, 'polling');
+    var ask = function () {
+      fetch('/api/positions', { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d) { status(false, 'offline'); return; }
+          status(true, 'polling');
+          var seen = {};
+          d.people.forEach(function (p) { seen[p.id] = true; draw(p); });
+          // Nothing tells us about a departure here, so it has to be noticed:
+          // anyone the server no longer lists has gone.
+          Array.from(people.keys()).forEach(function (id) {
+            if (!seen[id]) drop(id);
+          });
+          render();
+        })
+        .catch(function () { status(false, 'offline'); });
+    };
+    ask();
+    polling = setInterval(ask, 5000);
+  }
+
   function stream() {
     var es = new EventSource('/api/stream');
+    var last = 0;
+
+    // Anything at all counts, heartbeats included — the point is whether the
+    // stream is delivering, not whether anybody moved.
+    function heard() { last = Date.now(); }
+
     es.addEventListener('hello', function (e) {
+      heard();
       status(true, 'live');
       JSON.parse(e.data).people.forEach(apply);
       render();
     });
-    es.addEventListener('position', function (e) { apply(JSON.parse(e.data)); });
+    es.addEventListener('beat', heard);
+    es.addEventListener('position', function (e) { heard(); apply(JSON.parse(e.data)); });
     es.addEventListener('forget', function (e) {
-      var id = JSON.parse(e.data).id;
-      var entry = people.get(id);
-      if (entry) {
-        ['marker', 'halo', 'path'].forEach(function (k) { if (entry[k]) map.removeLayer(entry[k]); });
-        people.delete(id);
-        render();
-      }
+      heard();
+      if (drop(JSON.parse(e.data).id)) render();
     });
     es.onerror = function () {
-      status(false, 'reconnecting…');
       // EventSource retries by itself; this only keeps the label honest.
+      if (!polling) status(false, 'reconnecting…');
     };
+
+    // The greeting is written the moment the connection is accepted, so if
+    // several seconds pass with nothing, something between here and there is
+    // holding it. Give up on being told and start asking.
+    //
+    // Two windows, because the failures differ: the first is a stream that
+    // never delivered at all, the second one that stopped. Without the
+    // second, a stalled stream reads as «live» and an empty map, which is the
+    // worst of the three states to be in.
+    var started = Date.now();
+    var watch = setInterval(function () {
+      if (polling) { clearInterval(watch); es.close(); return; }
+      var quiet = Date.now() - (last || started);
+      // 70s allows two missed heartbeats before calling a stream stalled.
+      if (quiet > (last ? 70000 : 8000)) { es.close(); poll(); }
+    }, 2000);
   }
   var recentre = document.getElementById('recentre');
   recentre.onclick = function () { fit(); };

@@ -171,14 +171,22 @@ export function serve(positions, config, { log = console, directory = null, geo 
     if (url.pathname === '/api/stream') {
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-store',
-        connection: 'keep-alive',
+        // no-transform asks the middle of the internet not to recompress this.
+        // Compression implies buffering, and a buffered stream is not one.
+        'cache-control': 'no-store, no-transform',
         'x-accel-buffering': 'no',   // nginx would otherwise hold the stream
       });
+      // No `connection: keep-alive` here: it is the HTTP/1.1 default and Node
+      // sends it regardless, so setting it said nothing. It is forbidden in
+      // HTTP/2, but a gateway is required to strip it on the way, so this is
+      // tidying rather than a fix for anything.
       watchers.add(res);
       send(res, 'hello', { people: positions.list() });
-      // Proxies drop a connection that goes quiet; a comment costs nothing.
-      const beat = setInterval(() => { try { res.write(': beat\n\n'); } catch { /* gone */ } }, 25000);
+      // A named event rather than a bare `: comment`, which costs a few bytes
+      // and buys the page the ability to tell a quiet stream from a stalled
+      // one: EventSource never surfaces comments to JavaScript, so a stream
+      // that silently stopped delivering looked exactly like nobody moving.
+      const beat = setInterval(() => { try { send(res, 'beat', {}); } catch { /* gone */ } }, 25000);
       req.on('close', () => { clearInterval(beat); watchers.delete(res); });
       return;
     }
