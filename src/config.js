@@ -52,6 +52,14 @@ export function defaults() {
     // Metres a fix must move before it counts as travel rather than GPS noise.
     // Only the floor — a reported accuracy worse than this raises it.
     minMove: Number(process.env.MIN_MOVE || 25),
+
+    // How far inside or outside a fence a fix has to be before it is taken as
+    // proof of which side it is on, and how long a crossing must hold before
+    // anybody is told. Both exist because a phone resting on a boundary would
+    // otherwise send a message every time it twitched. Same floor idea as
+    // minMove: a fix that admits to worse accuracy raises the bar itself.
+    fenceFloor: Number(process.env.FENCE_FLOOR || 50),
+    fenceDwell: Number(process.env.FENCE_DWELL || 60),
   };
 }
 

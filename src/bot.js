@@ -214,6 +214,19 @@ export async function connect(config, {
     api,
     client: makeBotDirectoryClient(api),
     me,
+    // The bot can speak as well as listen, which is what makes an arrival
+    // alert possible at all. A private chat's id is the person's own id, and
+    // Telegram refuses a message to somebody who has never started the bot —
+    // so this returns false rather than throwing, and the caller carries on.
+    notify: async (chatId, text) => {
+      try {
+        await api.call('sendMessage', { chat_id: chatId, text });
+        return true;
+      } catch (e) {
+        log.error('bot: cannot notify —', e.message);
+        return false;
+      }
+    },
     stop: async () => { running = false; await Promise.allSettled([done, inFlight]); },
   };
 }

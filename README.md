@@ -466,6 +466,54 @@ their behalf — which is why it expires on its own and why revoking is one
 click. Requires PostGIS; without `DATABASE_URL` the button reports that rather
 than appearing to work.
 
+## Telling you when somebody arrives
+
+A fence is a named circle. When somebody crosses into one or out of it, the bot
+sends a message to everyone on `DASHBOARD_USERS`, the crossing is written down,
+and every open map redraws.
+
+Make one by pressing **New fence** and clicking the map: it asks for a name and
+a radius. Click a fence to remove it. Both need PostGIS — without
+`DATABASE_URL` the button does not appear, the same way place names do not.
+
+### Why it does not tell you constantly
+
+A geofence is a machine for crying wolf. A phone resting near a boundary
+reports itself inside, then outside, then inside, indefinitely, and each flip
+would be a message on somebody's lock screen. An alert nobody trusts is worse
+than no alert, so two rules decide what gets sent:
+
+- **A fix closer to the edge than its own accuracy proves nothing.**
+  `FENCE_FLOOR` (default 50 m) is the floor, and a fix reporting worse accuracy
+  than that raises the bar itself — the same idea as `MIN_MOVE` for travel.
+  Twelve fixes flapping across a line produce nothing at all.
+- **A crossing has to hold.** `FENCE_DWELL` (default 60 s) is how long, so
+  driving past the end of the road is not arriving home.
+
+The first sighting of somebody is never an arrival — they were already there —
+and where everyone was is read back from `fence_events` on startup, so a deploy
+neither forgets nor re-announces. `/stop` erases somebody's crossings along
+with everything else.
+
+Two things worth knowing. **The bot can only message somebody who has started
+it**, so a viewer who has never opened it is simply not told. And with no
+`DASHBOARD_USERS` — a `DASHBOARD_TOKEN`-only setup, or the account ingest,
+which has no way to send a message — crossings are still recorded and still
+drawn, they just are not pushed anywhere.
+
+To check the whole chain against your own database:
+
+```sh
+docker compose exec -T app node bin/fence-check.mjs
+```
+
+It walks a phone past a fence it creates and removes, and asserts what should
+and should not be said. It exists because every piece of this was individually
+correct the first time and the feature still did nothing: fences were being
+checked only for positions that passed the movement filter, so somebody who
+arrived and put their phone down never produced the fix that would have
+confirmed it. Only an end-to-end run showed that.
+
 ## Places and history
 
 Turn it on, on the server. The deploy copies `compose.yml` but nothing else,

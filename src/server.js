@@ -47,6 +47,9 @@ export function staticFile(pathname) {
 
 export function serve(positions, config, {
   log = console, directory = null, geo = null, links = null,
+  // Told when a fence is deleted, so whatever is watching them can drop the
+  // state it holds about it.
+  onFenceDeleted = null,
 } = {}) {
   const watchers = new Set();
   const viewers = makeViewers(config.viewers);
@@ -104,18 +107,25 @@ export function serve(positions, config, {
       log.error('geo: erasure failed —', e && e.message ? e.message : e);
       return null;
     }) : 0;
-    for (const w of watchers) { try { send(w, 'forget', { id }); } catch { watchers.delete(w); } }
+    broadcast('forget', { id });
     return erased;
   }
+
+  const broadcast = (event, data) => {
+    for (const res of watchers) {
+      try { send(res, event, data); } catch { watchers.delete(res); }
+    }
+  };
 
   // Called whenever a position changes; every open map hears about it at once,
   // which is the whole point of doing this over MTProto rather than polling.
   const publish = (person) => {
-    const payload = { ...person, live: Boolean(person.liveUntil && person.liveUntil > Date.now() / 1000) };
-    for (const res of watchers) {
-      try { send(res, 'position', payload); } catch { watchers.delete(res); }
-    }
+    broadcast('position', { ...person, live: Boolean(person.liveUntil && person.liveUntil > Date.now() / 1000) });
   };
+
+  // A fence crossed, or the set of fences changed. Open maps redraw rather
+  // than waiting for somebody to reload.
+  const publishFence = (data) => broadcast('fence', data);
 
   // Who this request is, if anyone. Returns a Telegram id or null.
   const signedIn = (req) => {
@@ -390,6 +400,66 @@ export function serve(positions, config, {
       return;
     }
 
+    // Fences. Parameters ride in the query string rather than a JSON body,
+    // which is how every other write here works — adding a body reader would
+    // mean size limits and content types for the sake of four values.
+    if (url.pathname === '/api/fences') {
+      if (!geo || !geo.enabled()) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end('{"error":"no database"}');
+        return;
+      }
+      if (req.method === 'POST') {
+        const name = (url.searchParams.get('name') || '').trim().slice(0, 80);
+        const latitude = Number(url.searchParams.get('lat'));
+        const longitude = Number(url.searchParams.get('lon'));
+        const radius = Number(url.searchParams.get('radius'));
+        // A fence with no name cannot be announced usefully, and one of no
+        // size or of absurd size is a mistake rather than an intention.
+        const sane = name
+          && Number.isFinite(latitude) && Math.abs(latitude) <= 90
+          && Number.isFinite(longitude) && Math.abs(longitude) <= 180
+          && Number.isFinite(radius) && radius >= 25 && radius <= 50_000;
+        if (!sane) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end('{"error":"need a name, a point, and a radius between 25m and 50km"}');
+          return;
+        }
+        const id = await geo.createFence({ name, latitude, longitude, radius })
+          .catch((e) => { log.error('fence:', e && e.message ? e.message : e); return null; });
+        if (id === null) {
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end('{"error":"could not create"}');
+          return;
+        }
+        publishFence({ changed: true });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, id }));
+        return;
+      }
+      const fences = await geo.listFences().catch(() => []);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ fences }));
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/fences/') && req.method === 'DELETE') {
+      const id = Number(url.pathname.slice('/api/fences/'.length));
+      if (!geo || !geo.enabled() || !Number.isFinite(id)) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end('{"error":"no such fence"}');
+        return;
+      }
+      const gone = await geo.deleteFence(id).catch(() => 0);
+      // The watcher holds state per person and fence; leaving it behind would
+      // mean a recreated fence inherited somebody's old position.
+      onFenceDeleted?.(id);
+      publishFence({ changed: true });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, deleted: gone }));
+      return;
+    }
+
     if (url.pathname.startsWith('/api/forget/') && req.method === 'POST') {
       const id = decodeURIComponent(url.pathname.slice('/api/forget/'.length));
       const erased = await forget(id);
@@ -407,7 +477,7 @@ export function serve(positions, config, {
   });
 
   return {
-    server, publish, forget, watchers,
+    server, publish, publishFence, forget, watchers,
     // Told once the bot has connected, so the login page can name it.
     setBot: (username) => { botName = username || ''; },
   };

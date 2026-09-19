@@ -17,6 +17,7 @@ import worker from '../worker/src/index.js';
 import { fromUpdate } from '../src/positions.js';
 import { connect as connectBot, commandIn } from '../src/bot.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
+import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { createHash, createHmac } from 'node:crypto';
 import { serve, staticFile } from '../src/server.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -855,6 +856,131 @@ head('who may look');
   t('an unknown link opens nothing', links.redeem('nope') === null);
   const stale = makeLinks({ life: -1 });
   t('and an expired one is gone', stale.redeem(stale.issue('42')) === null);
+}
+
+
+// -------------------------------------------------- arriving, and not saying
+// so when nothing happened
+
+head('which side of a fence a reading proves');
+{
+  const at = (margin, inside, accuracy = null) => verdict({ inside, margin, accuracy }, { floor: 50 });
+  t('well inside is inside', at(200, true) === 'in');
+  t('well outside is outside', at(200, false) === 'out');
+  // The floor exists because every fix is uncertain even when it does not say
+  // by how much.
+  t('a metre from the edge proves nothing', at(1, true) === null, at(1, true));
+  t('nor does forty-nine', at(49, false) === null);
+  t('fifty-one does', at(51, false) === 'out');
+  // A fix that admits to being worse than the floor raises the bar itself.
+  t('a poor fix needs more room', at(80, true, 200) === null, at(80, true, 200));
+  t('and gets there eventually', at(300, true, 200) === 'in');
+  t('a missing margin decides nothing', at(undefined, true) === null);
+}
+
+head('a phone sitting on a boundary');
+{
+  const w = makeWatcher({ floor: 50, dwell: 60 });
+  const fence = { fence: 1, name: 'home' };
+  // Settled inside first, so there is a state for the jitter to flap against.
+  w.observe({ person: 'p', at: 0, accuracy: 10, readings: [{ ...fence, inside: true, margin: 400 }] });
+  t('being somewhere is not arriving there', w.where('p', 1) === 'in');
+
+  // Now the phone sits by the gate: every fix lands within its own accuracy of
+  // the edge, on alternating sides. This is the case that decides whether the
+  // feature is usable or a notification firehose.
+  let events = [];
+  for (let i = 0; i < 40; i++) {
+    events = events.concat(w.observe({
+      person: 'p', at: 100 + i * 30, accuracy: 50,
+      readings: [{ ...fence, inside: i % 2 === 0, margin: 10 + (i % 3) }],
+    }));
+  }
+  t('forty flips across the line produce nothing at all', events.length === 0, events.length);
+  t('and it is still recorded as being there', w.where('p', 1) === 'in');
+}
+
+head('actually arriving, and actually leaving');
+{
+  const w = makeWatcher({ floor: 50, dwell: 60 });
+  const fence = { fence: 7, name: 'the office' };
+  const see = (at, inside, margin) =>
+    w.observe({ person: 'p', at, accuracy: 10, readings: [{ ...fence, inside, margin }] });
+
+  see(0, false, 900);                       // first sighting: outside, silent
+  t('turning up outside announces nothing', w.where('p', 7) === 'out');
+
+  t('crossing does not announce immediately', see(100, true, 300).length === 0);
+  t('nor before the dwell is up', see(140, true, 320).length === 0);
+  const arrived = see(200, true, 340);
+  t('but it does once it has held', arrived.length === 1, arrived.length);
+  t('as an arrival, named', arrived[0].entered === true && arrived[0].name === 'the office');
+
+  t('staying there says nothing more', see(400, true, 350).length === 0);
+
+  see(1000, false, 300);
+  const left = see(1100, false, 320);
+  t('and leaving is announced once', left.length === 1 && left[0].entered === false);
+  t('and only once', see(1200, false, 400).length === 0);
+}
+
+head('a car that turns round');
+{
+  const w = makeWatcher({ floor: 50, dwell: 60 });
+  const fence = { fence: 3, name: 'school' };
+  const see = (at, inside, margin) =>
+    w.observe({ person: 'p', at, accuracy: 5, readings: [{ ...fence, inside, margin }] });
+
+  see(0, false, 800);
+  t('driving in says nothing yet', see(10, true, 200).length === 0);
+  // Out again well before the dwell elapses — a transit, not an arrival.
+  t('and driving straight out says nothing ever', see(30, false, 200).length === 0);
+  t('leaving the state where it started', w.where('p', 3) === 'out');
+  t('a later real arrival still works', (() => {
+    see(100, true, 300);
+    return see(170, true, 300).length === 1;
+  })());
+}
+
+head('fences across a restart');
+{
+  const fence = { fence: 1, name: 'home' };
+  const fresh = makeWatcher({ floor: 50, dwell: 0 });
+  // Without seeding, the first fix after a restart is a first sighting and
+  // says nothing — which is right, but it also means the state is unknown.
+  t('a cold watcher announces nothing on first sight',
+    fresh.observe({ person: 'p', at: 0, accuracy: 5, readings: [{ ...fence, inside: true, margin: 400 }] }).length === 0);
+
+  const seeded = makeWatcher({ floor: 50, dwell: 0 });
+  seeded.seed([{ person: 'p', fence: 1, where: 'in' }]);
+  t('a seeded one knows where everybody was', seeded.where('p', 1) === 'in');
+  t('and does not re-announce it',
+    seeded.observe({ person: 'p', at: 0, accuracy: 5, readings: [{ ...fence, inside: true, margin: 400 }] }).length === 0);
+  const out = seeded.observe({ person: 'p', at: 10, accuracy: 5, readings: [{ ...fence, inside: false, margin: 400 }] });
+  t('but does announce a change against it', out.length === 1 && out[0].entered === false);
+}
+
+head('forgetting reaches the fences too');
+{
+  const w = makeWatcher({ floor: 50, dwell: 0 });
+  w.observe({ person: 'p', at: 0, accuracy: 5, readings: [{ fence: 1, name: 'home', inside: true, margin: 400 }] });
+  w.observe({ person: 'q', at: 0, accuracy: 5, readings: [{ fence: 1, name: 'home', inside: true, margin: 400 }] });
+  t('two people are tracked', w.size === 2, w.size);
+  w.forget('p');
+  // /stop has to reach here, or somebody who asked to be forgotten could still
+  // set off an alert about a place they had been.
+  t('forgetting one leaves the other', w.size === 1 && w.where('p', 1) === null);
+  w.dropFence(1);
+  t('and deleting a fence clears what was held about it', w.size === 0, w.size);
+}
+
+head('what the message says');
+{
+  t('an arrival reads plainly',
+    announce({ who: 'Ada', name: 'home', entered: true }) === 'Ada arrived at home');
+  t('and a departure', announce({ who: 'Ada', name: 'home', entered: false }) === 'Ada left home');
+  t('somebody with no name is still somebody',
+    announce({ who: '', name: 'home', entered: true }) === 'Someone arrived at home');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

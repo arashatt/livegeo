@@ -213,6 +213,107 @@ export function makeGeo({ url, log = console } = {}) {
       return res.rowCount;
     },
 
+    // ------------------------------------------------------------- fences
+    //
+    // The tables have been in schema.sql since PostGIS arrived and nothing
+    // used them until now.
+
+    async listFences() {
+      if (!pool) return [];
+      const { rows } = await pool.query(
+        `SELECT id, name, ST_AsGeoJSON(area::geometry) AS geojson,
+                ST_Y(ST_Centroid(area::geometry)) AS latitude,
+                ST_X(ST_Centroid(area::geometry)) AS longitude
+           FROM fences ORDER BY name`,
+      );
+      return rows.map((r) => ({
+        id: Number(r.id),
+        name: r.name,
+        latitude: Number(r.latitude),
+        longitude: Number(r.longitude),
+        // GeoJSON is longitude first; the map wants latitude first.
+        ring: (JSON.parse(r.geojson).coordinates?.[0] || []).map(([lon, lat]) => [lat, lon]),
+      }));
+    },
+
+    // A circle, expressed as the polygon the column already expects.
+    // ST_Buffer on geography takes metres, so the radius means what it says
+    // without anybody choosing a projection.
+    async createFence({ name, latitude, longitude, radius }) {
+      if (!pool) return null;
+      const { rows } = await pool.query(
+        `INSERT INTO fences (name, area)
+         VALUES ($1, ST_Buffer(ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)::geography)
+         RETURNING id`,
+        [String(name), Number(longitude), Number(latitude), Number(radius)],
+      );
+      return Number(rows[0].id);
+    },
+
+    async deleteFence(id) {
+      if (!pool) return 0;
+      // fence_events cascades on the foreign key, so the history of a deleted
+      // fence goes with it rather than becoming rows pointing at nothing.
+      const res = await pool.query('DELETE FROM fences WHERE id = $1', [Number(id)]);
+      return res.rowCount;
+    },
+
+    // One point against every fence: which side, and how far from the edge.
+    //
+    // Distances in metres because both sides are geography. ST_ExteriorRing
+    // rather than ST_Boundary only because it is typed LINESTRING and so casts
+    // back to geography cleanly; checked against PostGIS 3.4, the two agree to
+    // the metre.
+    //
+    // No WHERE clause. An ST_DWithin prefilter would use the index but would
+    // silently omit the fence somebody has just walked out of, which is the
+    // event most worth having. At tens of fences this is a trivial scan; if it
+    // ever became thousands, the fix is to prefilter and union in the fences
+    // the watcher already holds state for.
+    async fencesAt(lat, lon) {
+      if (!pool || !Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+      const point = `SRID=4326;POINT(${lon} ${lat})`;
+      const { rows } = await pool.query(
+        `SELECT id, name,
+                ST_Intersects(area, $1::geography) AS inside,
+                ST_Distance($1::geography, ST_ExteriorRing(area::geometry)::geography) AS margin
+           FROM fences`,
+        [point],
+      );
+      return rows.map((r) => ({
+        fence: Number(r.id),
+        name: r.name,
+        inside: r.inside === true,
+        margin: Number(r.margin),
+      }));
+    },
+
+    async recordFenceEvent({ person, fence, entered, at }) {
+      if (!pool) return false;
+      await pool.query(
+        `INSERT INTO fence_events (person, fence_id, entered, at)
+         VALUES ($1, $2, $3, to_timestamp($4))`,
+        [String(person), Number(fence), Boolean(entered), Number(at)],
+      );
+      return true;
+    },
+
+    // The last thing recorded about each person and fence, so a restart picks
+    // up where it left off instead of announcing that everybody has just
+    // arrived everywhere.
+    async lastFenceStates() {
+      if (!pool) return [];
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (person, fence_id) person, fence_id, entered
+           FROM fence_events ORDER BY person, fence_id, at DESC`,
+      );
+      return rows.map((r) => ({
+        person: String(r.person),
+        fence: Number(r.fence_id),
+        where: r.entered ? 'in' : 'out',
+      }));
+    },
+
     async historyOf(person, { limit = 500 } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(

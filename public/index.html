@@ -93,6 +93,11 @@
   .card .chandle{font-size:.82rem;color:var(--quiet)}
   .card .cid{font-size:.75rem;color:var(--quiet);font-variant-numeric:tabular-nums;opacity:.7}
   .leaflet-popup-content{margin:.7rem .8rem}
+  /* A fence is a place, not a person: drawn quietly, under everything else. */
+  .fencing #map{cursor:crosshair}
+  .fencing #newfence{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  .fence-label{font-size:.72rem;font-weight:600;color:var(--quiet);
+               background:none;border:none;box-shadow:none;padding:0}
 </style>
 </head>
 <body>
@@ -100,6 +105,7 @@
   <h1>Live locations</h1>
   <span class="count" id="count"></span>
   <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
+  <button class="ghost" id="newfence" type="button" hidden>New fence</button>
   <span class="conn" id="conn"><i></i><span>connecting…</span></span>
 </header>
 <main>
@@ -453,6 +459,79 @@
     conn.lastElementChild.textContent = text;
   }
 
+  // ------------------------------------------------------------- fences
+  //
+  // Drawn as the polygon PostGIS actually stores rather than as a circle, so
+  // what is on screen is what the boundary test uses. ST_Buffer makes a
+  // thirty-two sided ring, which at any useful zoom is a circle.
+  var fenceLayer = L.layerGroup().addTo(map);
+  var arming = false;
+
+  function drawFences(list) {
+    fenceLayer.clearLayers();
+    (list || []).forEach(function (f) {
+      if (!f.ring || f.ring.length < 3) return;
+      var shape = L.polygon(f.ring, {
+        color: '#7a6ff0', weight: 1.5, opacity: .7,
+        fillColor: '#7a6ff0', fillOpacity: .07, interactive: true
+      }).addTo(fenceLayer);
+      // Above the centre rather than on it: a fence usually has somebody
+      // standing in the middle of it, and the label was landing under them.
+      shape.bindTooltip(f.name, { permanent: true, direction: 'top', className: 'fence-label' });
+      shape.on('click', function (e) {
+        // Only swallow the click when it means something here. Stopping it
+        // unconditionally made the inside of an existing fence a dead zone:
+        // the map never saw the click, so a new fence could not overlap an
+        // old one.
+        if (arming) return;
+        L.DomEvent.stopPropagation(e);
+        if (!window.confirm('Remove the fence “' + f.name + '”?')) return;
+        fetch('/api/fences/' + encodeURIComponent(f.id), { method: 'DELETE' })
+          .then(loadFences)
+          .catch(function () { /* the list redraws on the next change anyway */ });
+      });
+    });
+  }
+
+  function loadFences() {
+    return fetch('/api/fences', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        // 503 means no PostGIS, which is an ordinary state: fences are a
+        // capability, like place names. The button simply stays hidden.
+        if (!d) return;
+        document.getElementById('newfence').hidden = false;
+        drawFences(d.fences);
+      })
+      .catch(function () {});
+  }
+
+  function arm(on) {
+    arming = on;
+    document.body.classList.toggle('fencing', on);
+    document.getElementById('newfence').textContent = on ? 'Click the map…' : 'New fence';
+  }
+
+  document.getElementById('newfence').onclick = function () { arm(!arming); };
+
+  map.on('click', function (e) {
+    if (!arming) return;
+    arm(false);
+    var name = window.prompt('What is this place called?');
+    if (!name) return;
+    var radius = Number(window.prompt('How far across, in metres?', '150'));
+    if (!radius || radius < 25 || radius > 50000) {
+      window.alert('A fence needs a radius between 25 m and 50 km.');
+      return;
+    }
+    var q = '?name=' + encodeURIComponent(name)
+      + '&lat=' + e.latlng.lat + '&lon=' + e.latlng.lng + '&radius=' + radius;
+    fetch('/api/fences' + q, { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.error) window.alert(d.error); return loadFences(); })
+      .catch(function () { window.alert('Could not save that fence.'); });
+  });
+
   function drop(id) {
     var entry = people.get(id);
     if (!entry) return false;
@@ -516,6 +595,9 @@
     if (name === 'hello') { d.people.forEach(apply); render(); }
     else if (name === 'position') apply(d);
     else if (name === 'forget') { if (drop(d.id)) render(); }
+    // Either a fence was added or removed, or somebody crossed one. Both mean
+    // the drawn set may be stale, and redrawing is one small request.
+    else if (name === 'fence') loadFences();
   }
 
   // Read by hand over POST rather than with EventSource, for one reason:
@@ -579,6 +661,7 @@
   var recentre = document.getElementById('recentre');
   recentre.onclick = function () { fit(); };
 
+  loadFences();
   stream();
 
   // Keeps «live · 4m left» and «2m ago» from going stale between updates.
