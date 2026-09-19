@@ -37,18 +37,35 @@ jobs:
             await import('./src/positions.js');
             await import('./src/server.js');
             await import('./src/mtproto.js');
+            await import('./src/bot.js');
+            await import('./src/login.js');
             console.log('all modules load');
           "
 
       # A missing variable should be a clear message at startup, not a crash
-      # somewhere later. This proves the check is still wired up.
+      # somewhere later, and not a service that starts anyway. There are three
+      # ways to be half-configured and each has to name what is missing.
       - name: Startup refuses an incomplete environment
         run: |
-          set +e
-          output=$(node src/index.js 2>&1)
-          code=$?
           set -e
-          echo "$output"
-          if [ $code -eq 0 ]; then echo "::error::started without configuration"; exit 1; fi
-          echo "$output" | grep -q "TELEGRAM_API_ID is not set" \
-            || { echo "::error::unexpected failure message"; exit 1; }
+          refuses() {
+            local want="$1"; shift
+            local output code
+            set +e
+            output=$(env -u BOT_TOKEN -u TELEGRAM_SESSION -u TELEGRAM_API_ID \
+                         -u TELEGRAM_API_HASH -u DASHBOARD_TOKEN -u DASHBOARD_USERS \
+                         "$@" node src/index.js 2>&1)
+            code=$?
+            set -e
+            echo "--- $* -> $output"
+            if [ $code -eq 0 ]; then echo "::error::started without $want"; exit 1; fi
+            echo "$output" | grep -q "$want" \
+              || { echo "::error::expected a message naming '$want'"; exit 1; }
+          }
+
+          # Nothing at all: it should say how locations are meant to arrive.
+          refuses "neither BOT_TOKEN nor TELEGRAM_SESSION"
+          # A way in, but nothing deciding who may look at the map.
+          refuses "DASHBOARD_TOKEN" BOT_TOKEN=123:stub
+          # The account ingest still needs its own credentials.
+          refuses "TELEGRAM_API_ID is not set" TELEGRAM_SESSION=stub DASHBOARD_TOKEN=stub
