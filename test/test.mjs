@@ -14,6 +14,10 @@ import { placeName, makeGeo } from '../src/geo.js';
 import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
 import worker from '../worker/src/index.js';
+import { fromUpdate } from '../src/positions.js';
+import { connect as connectBot, commandIn } from '../src/bot.js';
+import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
+import { createHash, createHmac } from 'node:crypto';
 import { serve, staticFile } from '../src/server.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -688,6 +692,169 @@ head('sharing a path');
     (await fetch(`${base}/api/share/someone`, { method: 'POST' })).status === 401);
 
   server.close();
+}
+
+
+// ----------------------------------------------- locations shared with a bot
+
+head('what a bot is told');
+{
+  const at = 1_700_000_000;
+  const live = (extra = {}) => ({
+    update_id: 1,
+    message: {
+      message_id: 9, date: at, chat: { id: 555, type: 'private' },
+      from: { id: 42, is_bot: false, first_name: 'Ada', last_name: 'Lovelace' },
+      location: { latitude: 36.297, longitude: 59.606, live_period: 3600, horizontal_accuracy: 12, ...extra },
+    },
+  });
+
+  const first = fromUpdate(live(), { at });
+  t('a shared live location becomes a position', first !== null);
+  t('keyed on the sender, not the chat', first.id === '42', first.id);
+  t('carrying their name', first.name === 'Ada Lovelace', first.name);
+  t('the accuracy Telegram reports', first.accuracy === 12, first.accuracy);
+  t('and an expiry rather than a flag', first.liveUntil === at + 3600, first.liveUntil);
+  t('not stopped', first.stopped === false);
+
+  // The same message, edited — which is what movement actually is.
+  const moved = fromUpdate({
+    update_id: 2, edited_message: { ...live().message, location: { latitude: 36.31, longitude: 59.58, live_period: 3600 } },
+  }, { at });
+  t('an edit is a position too, and the same person', moved.id === '42' && moved.latitude === 36.31);
+
+  // live_period is documented as present for active live locations only, so
+  // an edit that has lost it is how sharing ends.
+  const ended = fromUpdate({
+    update_id: 3, edited_message: { ...live().message, location: { latitude: 36.31, longitude: 59.58 } },
+  }, { at });
+  t('an edit with no live period means sharing stopped', ended.stopped === true);
+  t('and is no longer live', ended.liveUntil === null);
+
+  // A plain pin is not a stop. Reading it as one would erase somebody from
+  // the map for sending a location on purpose.
+  const pin = fromUpdate({
+    update_id: 4, message: { ...live().message, location: { latitude: 36.31, longitude: 59.58 } },
+  }, { at });
+  t('but a plain dropped pin is not a stop', pin.stopped === false, pin.stopped);
+
+  t('a message with no location is not a position',
+    fromUpdate({ update_id: 5, message: { ...live().message, location: undefined } }) === null);
+  t('nor is one from another bot',
+    fromUpdate({ update_id: 6, message: { ...live().message, from: { id: 7, is_bot: true, first_name: 'B' } } }) === null);
+  t('an impossible latitude is refused',
+    fromUpdate({ update_id: 7, message: { ...live().message, location: { latitude: 99, longitude: 0 } } }) === null);
+
+  t('a command is recognised', commandIn({ message: { text: '/stop', chat: { id: 1 }, from: { id: 2 } } }).name === '/stop');
+  t('even addressed to the bot by name',
+    commandIn({ message: { text: '/stop@livegeobot extra', chat: { id: 1 }, from: { id: 2 } } }).name === '/stop');
+  t('and plain text is not one', commandIn({ message: { text: 'hello', chat: { id: 1 } } }) === null);
+}
+
+head('the bot loop, without Telegram');
+{
+  const calls = [];
+  const said = [];
+  let served = [[{
+    update_id: 100,
+    message: {
+      message_id: 1, date: 1, chat: { id: 555, type: 'private' },
+      from: { id: 42, is_bot: false, first_name: 'Ada' },
+      location: { latitude: 1, longitude: 2, live_period: 600 },
+    },
+  }, {
+    update_id: 101,
+    message: { message_id: 2, date: 2, chat: { id: 555, type: 'private' }, from: { id: 42, is_bot: false, first_name: 'Ada' }, text: '/stop' },
+  }]];
+
+  const stub = async (url, init) => {
+    const method = String(url).split('/').pop();
+    const body = init?.body ? JSON.parse(init.body) : {};
+    calls.push({ method, body });
+    if (method === 'getMe') return new Response(JSON.stringify({ ok: true, result: { id: 1, username: 'livegeobot' } }));
+    if (method === 'sendMessage') { said.push(body.text); return new Response(JSON.stringify({ ok: true, result: {} })); }
+    if (method === 'getUpdates') return new Response(JSON.stringify({ ok: true, result: served.shift() || [] }));
+    return new Response(JSON.stringify({ ok: true, result: {} }));
+  };
+
+  const got = [];
+  const forgotten = [];
+  const bot = await connectBot(
+    { botToken: 'T', chats: [] },
+    {
+      fetch: stub, poll: 0,
+      log: { info() {}, error() {} },
+      onPosition: (p) => got.push(p),
+      onForget: (id) => { forgotten.push(id); },
+      onLogin: (id) => `https://example.test/auth/${id}-link`,
+    },
+  );
+  // Waited on rather than slept through: a fixed pause is a test that fails
+  // on a loaded machine and passes everywhere else.
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !(got.length && forgotten.length && said.length)) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  await bot.stop();
+
+  t('it identifies itself first', calls[0].method === 'getMe', calls[0] && calls[0].method);
+  t('and clears any leftover webhook, which would break every poll',
+    calls.some((c) => c.method === 'deleteWebhook'));
+  t('it asks only for the two update kinds it handles',
+    calls.find((c) => c.method === 'getUpdates').body.allowed_updates.join() === 'message,edited_message');
+  t('a shared location reaches the store', got.length === 1 && got[0].id === '42', got.length);
+  t('/stop forgets the sender', forgotten.join() === '42', forgotten);
+  t('and says so', said.some((m) => /no longer shown/.test(m)), said);
+  t('the offset advances past what was handled',
+    calls.filter((c) => c.method === 'getUpdates').at(-1).body.offset === 102,
+    calls.filter((c) => c.method === 'getUpdates').at(-1).body.offset);
+}
+
+head('who may look');
+{
+  const botToken = '123456:AAstub';
+  const viewers = makeViewers(['42', '77']);
+  t('the list admits who is on it', viewers.has(42) && viewers.has('77'));
+  t('and nobody else', !viewers.has('43'));
+
+  const cookie = mint('42', { botToken });
+  t('a minted session reads back', readSession(cookie, { botToken }) === '42');
+  t('a tampered one does not', readSession(cookie.replace(/.$/, 'x'), { botToken }) === null);
+  t('nor one signed with a different bot token',
+    readSession(cookie, { botToken: 'other' }) === null);
+  t('nor an expired one',
+    readSession(mint('42', { botToken, life: -1 }), { botToken }) === null);
+  t('and nonsense is refused rather than thrown at', readSession('garbage', { botToken }) === null);
+
+  // The widget's payload, signed exactly as Telegram signs it.
+  const fields = {
+    id: '42', first_name: 'Ada', username: 'ada',
+    auth_date: String(Math.floor(Date.now() / 1000)),
+  };
+  const secret = createHash('sha256').update(botToken).digest();
+  const check = Object.keys(fields).sort().map((k) => `${k}=${fields[k]}`).join('\n');
+  const hash = createHmac('sha256', secret).update(check).digest('hex');
+  t('a correctly signed widget reply verifies',
+    checkWidget({ ...fields, hash }, { botToken }) === '42');
+  t('a forged one does not',
+    checkWidget({ ...fields, hash: hash.replace(/.$/, '0') }, { botToken }) === null);
+  t('an altered field invalidates the signature',
+    checkWidget({ ...fields, id: '43', hash }, { botToken }) === null);
+  // A signature stays valid forever; the timestamp is what stops a replay.
+  t('and an old one is refused however well signed', (() => {
+    const old = { ...fields, auth_date: String(Math.floor(Date.now() / 1000) - 86_401) };
+    const h = createHmac('sha256', secret)
+      .update(Object.keys(old).sort().map((k) => `${k}=${old[k]}`).join('\n')).digest('hex');
+    return checkWidget({ ...old, hash: h }, { botToken }) === null;
+  })());
+
+  const links = makeLinks();
+  const token = links.issue('42');
+  t('a link opens once', links.redeem(token) === '42');
+  t('and not twice', links.redeem(token) === null);
+  t('an unknown link opens nothing', links.redeem('nope') === null);
+  const stale = makeLinks({ life: -1 });
+  t('and an expired one is gone', stale.redeem(stale.issue('42')) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

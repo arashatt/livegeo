@@ -55,16 +55,50 @@ export function defaults() {
   };
 }
 
+// Which way locations arrive. A bot is told only about what is shared with
+// the bot; an account is told about anything shared in a chat it is in. The
+// bot needs one secret and no login, so it is what BOT_TOKEN selects.
+export function ingestOf(env = process.env) {
+  if (env.BOT_TOKEN) return 'bot';
+  if (env.TELEGRAM_SESSION) return 'account';
+  throw new Error('neither BOT_TOKEN nor TELEGRAM_SESSION is set — see README «Setting it up»');
+}
+
 export function load() {
+  const ingest = ingestOf();
+  // A dashboard of where people are, with no way of saying who may look at
+  // it, is not a state to start in. One of the two must exist.
+  if (!process.env.DASHBOARD_TOKEN && !process.env.DASHBOARD_USERS) {
+    throw new Error('set DASHBOARD_TOKEN, or DASHBOARD_USERS to sign in with Telegram — see README «Setting it up»');
+  }
   return {
-    apiId: Number(need('TELEGRAM_API_ID')),
-    apiHash: need('TELEGRAM_API_HASH'),
+    ingest,
+
+    // The bot's own credential, from @BotFather. One value, no login, and it
+    // can be revoked without touching an account.
+    botToken: process.env.BOT_TOKEN || '',
+
+    // Only needed by the account ingest, and asked for only then — a bot
+    // deployment should not have to invent an api_id to start.
+    apiId: ingest === 'account' ? Number(need('TELEGRAM_API_ID')) : 0,
+    apiHash: ingest === 'account' ? need('TELEGRAM_API_HASH') : '',
     // Produced once by `npm run login`; it is as good as the account password,
     // so it belongs in the environment and never in the repository.
-    session: need('TELEGRAM_SESSION'),
+    session: ingest === 'account' ? need('TELEGRAM_SESSION') : '',
 
-    // The dashboard shows where people are. It is never served without one.
-    dashboardToken: need('DASHBOARD_TOKEN'),
+    // The dashboard shows where people are. One of the two ways in must exist:
+    // a shared token, or Telegram sign-in against a list of who may look.
+    dashboardToken: process.env.DASHBOARD_TOKEN || '',
+    // Telegram ids allowed to sign in through the bot. Empty means nobody can,
+    // which is the safe direction for a page that shows where people are.
+    viewers: (process.env.DASHBOARD_USERS || '')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+    // Where the dashboard is reachable, so the bot can send a working link.
+    publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
+    // The domain registered for the bot with BotFather. Only the Login Widget
+    // needs it, and the widget cannot work without it, so it doubles as the
+    // switch for that button.
+    botDomain: process.env.BOT_DOMAIN || '',
 
     ...defaults(),
   };

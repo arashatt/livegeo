@@ -9,11 +9,13 @@ import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { parseTilePath, makeTiles } from './tiles.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
+import { SESSION_COOKIE, mint, readSession, checkWidget, makeViewers } from './login.js';
 import { randomBytes } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 const PAGE = resolve(PUBLIC, 'index.html');
 const SHARE_PAGE = resolve(PUBLIC, 'share.html');
+const LOGIN_PAGE = resolve(PUBLIC, 'login.html');
 
 const STATIC_TYPES = {
   '.js': 'application/javascript; charset=utf-8',
@@ -26,6 +28,13 @@ const STATIC_TYPES = {
 // the point: URL parsing collapses a literal "..", but a percent-encoded one
 // survives to decodeURIComponent, and only comparing the resolved path catches
 // that.
+// The bot username and domain are interpolated into the login page, and both
+// come from outside this file. Neither can contain a quote once escaped.
+function escapeAttr(value) {
+  return String(value).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 export function staticFile(pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return null; }
@@ -36,8 +45,17 @@ export function staticFile(pathname) {
   return type ? { file, type } : null;
 }
 
-export function serve(positions, config, { log = console, directory = null, geo = null } = {}) {
+export function serve(positions, config, {
+  log = console, directory = null, geo = null, links = null,
+} = {}) {
   const watchers = new Set();
+  const viewers = makeViewers(config.viewers);
+  // Sign-in is available only when there is a list of who may sign in. With
+  // no list there is nobody to let through, and a login page that can admit
+  // nobody is worse than no login page.
+  const signInOn = Boolean(config.botToken && viewers.size && links);
+  // Known only after the bot connects, which happens after this is listening.
+  let botName = '';
 
   // Share tokens seen to be good, and when that answer goes stale. A share page
   // asks for dozens of tiles; one database round trip covers all of them.
@@ -74,6 +92,22 @@ export function serve(positions, config, { log = console, directory = null, geo 
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
+  // Removing somebody, from wherever the request came from: the button on the
+  // page, or /stop sent to the bot. One implementation, because these must not
+  // be able to disagree about what forgetting means.
+  async function forget(id) {
+    positions.forget(id);
+    // Forgetting has to mean forgetting. History is kept indefinitely, so the
+    // one action that removes a person must clear the record too, not just
+    // take them off the map until the next update arrives.
+    const erased = geo ? await geo.forget(id).catch((e) => {
+      log.error('geo: erasure failed —', e && e.message ? e.message : e);
+      return null;
+    }) : 0;
+    for (const w of watchers) { try { send(w, 'forget', { id }); } catch { watchers.delete(w); } }
+    return erased;
+  }
+
   // Called whenever a position changes; every open map hears about it at once,
   // which is the whole point of doing this over MTProto rather than polling.
   const publish = (person) => {
@@ -83,13 +117,55 @@ export function serve(positions, config, { log = console, directory = null, geo 
     }
   };
 
+  // Who this request is, if anyone. Returns a Telegram id or null.
+  const signedIn = (req) => {
+    if (!signInOn) return null;
+    const raw = String(req.headers.cookie || '')
+      .split(';').map((c) => c.trim())
+      .find((c) => c.startsWith(`${SESSION_COOKIE}=`));
+    if (!raw) return null;
+    const id = readSession(decodeURIComponent(raw.slice(SESSION_COOKIE.length + 1)),
+      { botToken: config.botToken });
+    // Checked against the list on every request, not once at sign-in, so
+    // removing somebody from DASHBOARD_USERS takes effect immediately rather
+    // than whenever their cookie happens to expire.
+    return id && viewers.has(id) ? id : null;
+  };
+
+  const setSession = (res, id, to = '/') => {
+    res.writeHead(302, {
+      location: to,
+      'cache-control': 'no-store',
+      'set-cookie': `${SESSION_COOKIE}=${encodeURIComponent(mint(id, { botToken: config.botToken }))}`
+        + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000',
+    });
+    res.end();
+  };
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    const ok = sameToken(tokenOf(req.headers.cookie, url), config.dashboardToken);
+    // The `config.dashboardToken &&` is load-bearing: sameToken('', '') is
+    // true, so without it an unset token would admit everybody rather than
+    // nobody.
+    const ok = Boolean(config.dashboardToken
+      && sameToken(tokenOf(req.headers.cookie, url), config.dashboardToken))
+      || Boolean(signedIn(req));
 
-    const deny = () => {
+    // A browser gets a page explaining how to get in; anything else gets the
+    // one line it can act on. Being turned away should not be a dead end.
+    const deny = async () => {
+      const wantsPage = signInOn && /text\/html/.test(req.headers.accept || '');
+      const page = wantsPage ? await readFile(LOGIN_PAGE, 'utf8').catch(() => null) : null;
+      if (page) {
+        res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(page.replace('<body>',
+          `<body data-bot="${escapeAttr(botName)}" data-domain="${escapeAttr(config.botDomain || '')}">`));
+        return;
+      }
       res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-      res.end('401 — append ?token=… to the URL');
+      res.end(signInOn
+        ? '401 — send /login to the bot for a link that opens this'
+        : '401 — append ?token=… to the URL');
     };
 
     // /healthz is deliberately before this: the rollout's health check runs on
@@ -109,6 +185,36 @@ export function serve(positions, config, { log = console, directory = null, geo 
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
       res.end('403');
       return;
+    }
+
+    // Signing in necessarily happens before there is anything to sign in
+    // with, so these sit ahead of the gate rather than behind it.
+    if (signInOn && url.pathname.startsWith('/auth/')) {
+      const refuse = (why) => {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(why);
+      };
+
+      // The widget's reply, which Telegram signs. Off unless a domain has
+      // been registered for the bot, because without one the button cannot
+      // appear in the first place.
+      if (url.pathname === '/auth/widget') {
+        if (!config.botDomain) return refuse('the login widget is not configured');
+        const fields = Object.fromEntries(url.searchParams.entries());
+        const id = checkWidget(fields, { botToken: config.botToken });
+        if (!id) return refuse('that sign-in did not verify');
+        if (!viewers.has(id)) return refuse('that account is not on the list of who may look');
+        log.info('login: somebody signed in with the widget');
+        return setSession(res, id);
+      }
+
+      // A one-time link from the bot. Single use and short-lived, because a
+      // link sits in a chat history where somebody else may read it.
+      const id = links.redeem(url.pathname.slice('/auth/'.length));
+      if (!id) return refuse('that link has been used already, or has expired — send /login again');
+      if (!viewers.has(id)) return refuse('that account is not on the list of who may look');
+      log.info('login: somebody signed in through the bot');
+      return setSession(res, id);
     }
 
     // Leaflet is a public library and a share page needs it, so it is not
@@ -286,15 +392,7 @@ export function serve(positions, config, { log = console, directory = null, geo 
 
     if (url.pathname.startsWith('/api/forget/') && req.method === 'POST') {
       const id = decodeURIComponent(url.pathname.slice('/api/forget/'.length));
-      positions.forget(id);
-      // Forgetting has to mean forgetting. History is kept indefinitely, so
-      // the one button that removes a person must clear the record too, not
-      // just take them off the map until the next update arrives.
-      const erased = geo ? await geo.forget(id).catch((e) => {
-        log.error('geo: erasure failed —', e && e.message ? e.message : e);
-        return null;
-      }) : 0;
-      for (const w of watchers) { try { send(w, 'forget', { id }); } catch { watchers.delete(w); } }
+      const erased = await forget(id);
       res.writeHead(erased === null ? 500 : 200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(erased === null ? { ok: false, error: 'history not erased' } : { ok: true, erased }));
       return;
@@ -308,5 +406,9 @@ export function serve(positions, config, { log = console, directory = null, geo 
     log.info(`dashboard on http://${config.host}:${config.port}/?token=…`);
   });
 
-  return { server, publish, watchers };
+  return {
+    server, publish, forget, watchers,
+    // Told once the bot has connected, so the login page can name it.
+    setBot: (username) => { botName = username || ''; },
+  };
 }

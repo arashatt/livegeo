@@ -28,18 +28,87 @@ That last part stops being true the moment you set `DATABASE_URL`: positions
 are then written to PostGIS and kept until something deletes them. See
 «Places and history» before turning it on.
 
-## Why a user account rather than a bot
+## A bot, or your own account
 
-A bot is only told about locations shared **with the bot**. A user account is
-told about locations shared in **any chat it is in**. That is the only
-difference, and it is why this needs MTProto and therefore a real account —
-what Telegram calls a userbot.
+Locations can arrive either way, and which one runs is decided by which secret
+is set. Nothing downstream knows the difference: both produce the same
+position, and the map, the history and the sharing are identical.
 
-The consequence: this cannot run on Cloudflare Workers. MTProto is a binary
-protocol over a raw TCP socket, and the client holds a long-lived connection
-and session. It needs an always-on Node host — the smallest VPS will do.
+|  | **Bot** — `BOT_TOKEN` | **Account** — `TELEGRAM_SESSION` |
+|---|---|---|
+| Is told about | locations shared **with the bot** | locations shared in **any chat the account is in** |
+| People must | find the bot and press start | already be in a chat with you |
+| You must hold | one token from @BotFather | an api_id, an api_hash, and a session as good as your password |
+| Runs on | HTTPS to api.telegram.org | MTProto, a raw socket to a datacentre |
 
-## Setting it up
+**The bot is the one to start with.** It asks less of you — no login, no
+session string, and a token you can revoke without touching your account — and
+it asks less of the people sharing, who need no relationship with you beyond
+opening a chat. It is also far easier to reach from a restricted network,
+because it is ordinary HTTPS rather than a binary protocol to a hardcoded
+address.
+
+The account's one advantage is reach: it sees a live location shared into a
+group without anyone doing anything differently. If that is what you have, it
+still works exactly as before.
+
+Either way this needs an always-on Node host — the smallest VPS will do. The
+account cannot run on Workers because MTProto needs a raw socket; the bot
+could, one day, and does not today only because the positions live in this
+process's memory.
+
+## Setting it up with a bot
+
+**① Make the bot.** Message [@BotFather](https://t.me/BotFather), send
+`/newbot`, pick a name. He replies with a token — that is `BOT_TOKEN`, and it
+is the only credential this needs.
+
+Then `/setprivacy` → **Enable**. Privacy mode means the bot is told only about
+messages meant for it, which is both the correct setting and the one that
+makes a bot in a group harmless.
+
+**② Tell it who may look.** `DASHBOARD_USERS` is a comma-separated list of
+Telegram ids allowed to open the map. [@userinfobot](https://t.me/userinfobot)
+will tell you yours.
+
+```sh
+# /etc/telegram-live-location.env
+BOT_TOKEN=123456:AA…
+DASHBOARD_USERS=509090598,108205212
+PUBLIC_URL=https://livegeo.<you>.workers.dev
+```
+
+`PUBLIC_URL` is where the dashboard answers, so the bot can send a link that
+works. Without it `/login` has nothing to point at and says so at startup.
+
+**③ Share.** Whoever should appear on the map opens the bot, presses start,
+then **Attach (📎) → Location → Share Live Location**. Telegram stops when the
+period they chose runs out. `/stop` removes them and deletes their path.
+
+### Signing in
+
+`DASHBOARD_TOKEN` is one string held by everyone who has ever been given it,
+and there is no taking it back from one person without taking it back from
+everybody. With `DASHBOARD_USERS` set you can drop it entirely:
+
+- **Through the bot** — send `/login`, get a link, open it. The link works
+  once and expires in five minutes. This needs no domain, which is why it is
+  the one that works here today.
+- **The Login Widget** — the familiar *Log in with Telegram* button. It only
+  works from a domain registered with BotFather (`/setdomain`), so it stays
+  hidden until `BOT_DOMAIN` is set to that domain.
+
+Both end in a cookie signed with a key derived from the bot token. There is no
+session table: the allowlist is checked on **every** request, so removing an id
+from `DASHBOARD_USERS` locks that person out immediately rather than whenever
+their cookie happens to expire. Rotating `BOT_TOKEN` invalidates every session
+at once.
+
+The service refuses to start with neither `DASHBOARD_TOKEN` nor
+`DASHBOARD_USERS` set. A map of where people are, with nothing deciding who may
+look at it, is not a state worth starting in.
+
+## Setting it up with an account
 
 **① Credentials.** Sign in at [my.telegram.org](https://my.telegram.org) →
 *API development tools* → note the **api_id** and **api_hash**. These identify

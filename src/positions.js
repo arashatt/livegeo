@@ -31,6 +31,54 @@ function idOf(value) {
   return String(value);
 }
 
+// The Bot API's version of the same thing, and the reason this file has two
+// parsers rather than one: MTProto and the Bot API describe a live location
+// with different words for the same event. What comes out is identical, which
+// is what lets everything downstream stay ignorant of which one is running.
+//
+//   { update_id, message | edited_message: { from, chat, date, location } }
+//
+// A live location is a message that the sender's phone keeps editing, so an
+// edit carries a position exactly as the first message does.
+export function fromUpdate(update, { at = Math.floor(Date.now() / 1000) } = {}) {
+  const edited = Boolean(update?.edited_message);
+  const message = update?.edited_message || update?.message;
+  const location = message?.location;
+  if (!location) return null;
+
+  const from = message.from;
+  // A message sent on behalf of a channel has no user behind it, and a bot
+  // talking to a bot is not a person to put on a map.
+  if (!from || from.is_bot || from.id === undefined || from.id === null) return null;
+
+  const latitude = num(location.latitude);
+  const longitude = num(location.longitude);
+  if (latitude === null || longitude === null) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+
+  // `live_period` is documented as present "for active live locations only",
+  // so an edit that has lost it is how sharing ends. A plain message without
+  // one is a single pin dropped on purpose, which is not the same thing and
+  // must not be read as a stop.
+  const period = num(location.live_period);
+  const stopped = edited && !period;
+
+  return {
+    id: String(from.id),
+    chat: message.chat?.id === undefined ? null : String(message.chat.id),
+    name: [from.first_name, from.last_name].filter(Boolean).join(' ').trim(),
+    latitude,
+    longitude,
+    accuracy: num(location.horizontal_accuracy),
+    heading: num(location.heading),
+    at,
+    // A deadline rather than a flag, for the same reason as above: if the edit
+    // that ends sharing never arrives, the map stops calling it live anyway.
+    liveUntil: !stopped && period && period > 0 ? at + period : null,
+    stopped,
+  };
+}
+
 export function senderOf(message) {
   return idOf(
     message?.senderId

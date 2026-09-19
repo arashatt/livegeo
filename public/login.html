@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Sign in</title>
+<style>
+  :root{ --ink:#14181d; --paper:#fff; --quiet:#6b7480; --hairline:#e3e6ea }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e8eaed; --paper:#14181d; --quiet:#9aa3ad; --hairline:#2a2f36 }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    color:var(--ink);background:var(--paper);
+    min-height:100svh;display:grid;place-items:center;padding:2rem 1rem;
+  }
+  main{max-width:26rem;width:100%}
+  h1{font-size:1.15rem;font-weight:600;letter-spacing:-.01em;margin-bottom:.4rem}
+  p{color:var(--quiet);margin-bottom:1.1rem}
+  .how{border:1px solid var(--hairline);border-radius:.6rem;padding:.9rem 1rem}
+  .how b{font-weight:600;color:var(--ink)}
+  code{font:.9em ui-monospace,SFMono-Regular,Menlo,monospace;
+       background:color-mix(in srgb,var(--ink) 8%,transparent);padding:.1em .35em;border-radius:.25em}
+  .or{margin:1.1rem 0 .9rem;color:var(--quiet);font-size:.85rem;text-align:center}
+  #widget:empty{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>This map is not public</h1>
+  <p>It shows where people are, so it asks who you are first.</p>
+
+  <div id="widget"></div>
+  <div class="or" id="or" hidden>or</div>
+
+  <div class="how">
+    Open <b id="bot">the bot</b> on Telegram and send <code>/login</code>.
+    It replies with a link that opens this page once.
+  </div>
+</main>
+<script>
+(function () {
+  // Filled in by the server, which is the only thing that knows which bot
+  // this is and whether a domain has been registered for the widget.
+  var bot = document.body.dataset.bot || '';
+  var domain = document.body.dataset.domain || '';
+  if (bot) document.getElementById('bot').textContent = '@' + bot;
+
+  // The Login Widget only works from the domain registered with BotFather, so
+  // it is not offered unless one has been.
+  if (!bot || !domain) return;
+  var s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', bot);
+  s.setAttribute('data-size', 'large');
+  s.setAttribute('data-userpic', 'false');
+  s.setAttribute('data-auth-url', location.origin + '/auth/widget');
+  s.setAttribute('data-request-access', 'write');
+  document.getElementById('widget').appendChild(s);
+  document.getElementById('or').hidden = false;
+})();
+</script>
+</body>
+</html>

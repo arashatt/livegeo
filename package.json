@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "A live map of locations people share with a Telegram account, over MTProto.",
+  "description": "A live map of locations people share with a Telegram bot, or with an account over MTProto.",
   "scripts": {
     "start": "node src/index.js",
     "login": "node bin/login.mjs",
