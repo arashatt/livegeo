@@ -1360,6 +1360,21 @@ head('the leak matrix: every route, as every kind of viewer');
 }
 
 
+head('paths with holes in them');
+{
+  const history = [{ at: 30, latitude: 3, longitude: 3, gap: true }, { at: 10, latitude: 1, longitude: 1 }];
+  const trail = [{ at: 30, latitude: 3, longitude: 3 }, { at: 40, latitude: 4, longitude: 4 }];
+  const merged = PathTime.merge(history, trail);
+  t('a gap known to either list survives the merge', merged.map((q) => `${q.at}${q.gap ? '*' : ''}`).join() === '10,30*,40');
+  t('a gap before the first fix is none', !PathTime.merge([{ at: 5, latitude: 1, longitude: 1, gap: true }])[0].gap);
+  t('the path splits into the stretches drawn', JSON.stringify(PathTime.runs(merged).map((r) => r.map((q) => q.at))) === '[[10],[30,40]]');
+  t('no stretches in nothing', PathTime.runs([]).length === 0);
+  const px = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0, gap: true }, { x: 30, y: 0 }];
+  const over = PathTime.nearestSegment(px, { x: 15, y: 0 });
+  t('hovering over a hidden stretch finds no segment across it', over.index === 0 && over.t === 1, over);
+  t('either side of it is still a path', PathTime.nearestSegment(px, { x: 25, y: 1 }).index === 2);
+}
+
 head('private places: where the circle is centred, and what is left of a path');
 {
   const spot = { latitude: 36.3, longitude: 59.6, radius: 500 };

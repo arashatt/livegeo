@@ -23,12 +23,17 @@
   // The closest point on the whole polyline to `p`, as a segment index and a
   // fraction along that segment. Screen pixels in, so "close" means close to
   // where the pointer is, at whatever zoom the map happens to be.
+  //
+  // A point marked `gap` starts again after a stretch that was hidden — a
+  // private place — so there is no segment into it: nothing was travelled in
+  // view there, and no time can honestly be read off it.
   function nearestSegment(points, p) {
     if (!points || points.length < 2 || !p) return null;
     var best = null;
     for (var i = 0; i < points.length - 1; i++) {
       var a = points[i];
       var b = points[i + 1];
+      if (b.gap) continue;
       var dx = b.x - a.x;
       var dy = b.y - a.y;
       var len2 = dx * dx + dy * dy;
@@ -93,22 +98,41 @@
   // Stored history and the live trail, as one path in time order. They
   // overlap — the trail's recent fixes are also in the history — so a fix
   // seen twice is kept once. History comes back newest first; order is not
-  // assumed from either side.
+  // assumed from either side. A gap marked on either copy of a fix is kept:
+  // one side may know about a hidden stretch before it that the other, shorter
+  // list does not reach back to.
   function merge(older, newer) {
     var seen = {};
     var out = [];
     [].concat(older || [], newer || []).forEach(function (q) {
       if (!q || q.latitude === null || q.latitude === undefined || seconds(q.at) === null) return;
       var key = q.at + ':' + Number(q.latitude).toFixed(6) + ':' + Number(q.longitude).toFixed(6);
-      if (seen[key]) return;
-      seen[key] = true;
-      out.push({ latitude: Number(q.latitude), longitude: Number(q.longitude), at: Number(q.at) });
+      if (seen[key]) { if (q.gap) seen[key].gap = true; return; }
+      var fix = { latitude: Number(q.latitude), longitude: Number(q.longitude), at: Number(q.at) };
+      if (q.gap) fix.gap = true;
+      seen[key] = fix;
+      out.push(fix);
     });
-    return out.sort(function (a, b) { return a.at - b.at; });
+    out.sort(function (a, b) { return a.at - b.at; });
+    // A gap before the first fix is not a gap in anything.
+    if (out.length && out[0].gap) delete out[0].gap;
+    return out;
+  }
+
+  // The path as the unbroken stretches it is drawn in, split wherever a
+  // hidden stretch was taken out.
+  function runs(points) {
+    var out = [];
+    (points || []).forEach(function (q, i) {
+      if (i === 0 || q.gap) out.push([]);
+      out[out.length - 1].push(q);
+    });
+    return out;
   }
 
   var api = {
     merge: merge,
+    runs: runs,
     nearestSegment: nearestSegment,
     timeAt: timeAt,
     metres: metres,

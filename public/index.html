@@ -117,6 +117,53 @@
                         border:1px solid var(--hairline);border-radius:.35rem;background:var(--paper);color:var(--ink)}
   #circle .fine{color:var(--quiet);font-size:.78rem;margin-top:.5rem}
   #circle .code{font:600 1.6rem/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;margin:.4rem 0}
+  /* Somebody inside a private place. What arrived is the place, not a point,
+     and it is drawn as what it is: a soft patch of blur they are somewhere
+     in, breathing slowly so it reads as somebody there rather than a stain on
+     the map. There is nothing exact under it — the server never sent where in
+     the circle they are — so the blur is a way of saying so, not a secret. */
+  .veil{position:absolute;pointer-events:none}
+  .veil .fog{position:absolute;inset:0;border-radius:50%;
+    -webkit-backdrop-filter:blur(8px) saturate(.7);backdrop-filter:blur(8px) saturate(.7);
+    -webkit-mask-image:radial-gradient(closest-side,#000 55%,transparent);
+    mask-image:radial-gradient(closest-side,#000 55%,transparent);
+    animation:breathe 5s ease-in-out infinite;transition:opacity .18s ease}
+  .veil.in .fog{animation:veil-in .9s ease-out,breathe 5s ease-in-out .9s infinite}
+  .veil.out .fog{animation:veil-out .6s ease-in forwards}
+  .veil.dim .fog{opacity:.3}
+  /* Zoomed so far in that the blur is several screens across: the whole view
+     is inside it, and blurring all of it would hide nothing (there is nothing
+     exact under it) while being the most expensive thing on the page to
+     draw. It keeps its tint and lets the map be read. */
+  .veil.huge .fog{-webkit-backdrop-filter:none;backdrop-filter:none;animation:none}
+  /* Your own places, as you see them: the same blur, lighter and still, with
+     its edge marked, so you know where your circle stops seeing you. */
+  .veil.mine{border:1.5px dashed rgba(122,111,240,.75);border-radius:50%;box-sizing:border-box}
+  .veil.mine .fog{animation:none;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+  @keyframes breathe{0%,100%{transform:scale(.97);opacity:.82}50%{transform:scale(1.03);opacity:1}}
+  @keyframes veil-in{from{transform:scale(.55);opacity:0}}
+  @keyframes veil-out{to{transform:scale(1.18);opacity:0}}
+  /* The name on a blur, since there is no dot to hover. */
+  .veil-chip{background:none;border:none}
+  .veil-chip span{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;cursor:pointer;
+    font-size:.78rem;font-weight:600;color:var(--ink);background:var(--paper);border:1px solid var(--hairline);
+    border-radius:999px;padding:.12rem .55rem;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+  .veil-chip.lit span{border-color:var(--ink)}
+  .veil-chip.dim span{opacity:.4}
+  /* A dot dissolving into the blur, or condensing out of it. */
+  .puff{width:16px;height:16px;border-radius:50%}
+  .puff.dissolve{animation:dissolve .7s ease-out forwards}
+  .puff.condense{animation:condense .5s ease-in forwards}
+  @keyframes dissolve{to{transform:scale(4);filter:blur(8px);opacity:0}}
+  @keyframes condense{from{transform:scale(4);filter:blur(8px);opacity:0}to{transform:none;filter:none;opacity:1}}
+  /* Where a path goes out of view, or comes back into it. */
+  .fade-end{width:22px;height:22px;border-radius:50%;filter:blur(2px);opacity:.65}
+  @media (prefers-reduced-motion:reduce){ .veil .fog{animation:none!important} }
+  /* A day of your own path, to take away as GPX. */
+  .card .gpx{display:flex;align-items:center;gap:.35rem;margin-top:.45rem;flex-wrap:wrap}
+  .card .gpx input{font:inherit;font-size:.78rem;padding:.12rem .3rem;border:1px solid var(--hairline);
+    border-radius:6px;background:var(--paper);color:var(--ink)}
+  header .hint{font-size:.8rem;color:var(--quiet)}
   header .spacer{flex:1}
   header a.ghost{text-decoration:none;color:inherit}
 </style>
@@ -125,6 +172,7 @@
 <header>
   <h1>Live locations</h1>
   <span class="count" id="count"></span>
+  <span class="hint" id="hint" hidden></span>
   <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
   <button class="ghost" id="newfence" type="button" hidden>New fence</button>
   <button class="ghost" id="circlebtn" type="button" hidden>Circle</button>
@@ -161,6 +209,72 @@
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   }).addTo(map);
 
+  // ------------------------------------------------------------- the blur
+  //
+  // A patch of ground drawn as a <div>. Leaflet already knows how to place and
+  // scale an image over a patch of ground, zoom animation included, so this is
+  // an image overlay with a div where the image would be. It gets its own pane
+  // between the paths and the markers: a path that runs into it is blurred
+  // with the map, and names and dots stay sharp above it.
+  var Veil = L.ImageOverlay.extend({
+    _initImage: function () {
+      var el = this._image = L.DomUtil.create('div', 'veil leaflet-image-layer');
+      if (this._zoomAnimated) L.DomUtil.addClass(el, 'leaflet-zoom-animated');
+      if (this.options.className) this.options.className.split(' ').forEach(function (c) { if (c) L.DomUtil.addClass(el, c); });
+      el.innerHTML = '<div class="fog"></div>';
+      el.onselectstart = L.Util.falseFn;
+      el.onmousemove = L.Util.falseFn;
+    },
+  });
+  map.createPane('veils');
+  map.getPane('veils').style.zIndex = 450;
+  map.getPane('veils').style.pointerEvents = 'none';
+
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function rgba(hex, a) {
+    var n = parseInt(String(hex).replace('#', ''), 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+
+  function tintVeil(veil, colour) {
+    var fog = veil.getElement() && veil.getElement().querySelector('.fog');
+    if (fog) fog.style.background = 'radial-gradient(closest-side,' + rgba(colour, .28) + ',' + rgba(colour, .14) + ' 60%,transparent)';
+  }
+
+  // A dot dissolving into a blur, or condensing out of one. Removed by a
+  // timer rather than on animationend, so nothing is left behind if the
+  // animation never runs; with reduced motion there is no puff at all.
+  function puff(latlng, colour, kind) {
+    if (reduced) return;
+    var m = L.marker(latlng, {
+      icon: L.divIcon({ className: '', html: '<div class="puff ' + kind + '" style="background:' + colour + '"></div>',
+        iconSize: [16, 16], iconAnchor: [8, 8] }),
+      interactive: false, keyboard: false,
+    }).addTo(map);
+    setTimeout(function () { map.removeLayer(m); }, kind === 'dissolve' ? 750 : 550);
+  }
+
+  function sizeVeils() {
+    var screen = map.getSize();
+    var limit = 3 * Math.max(screen.x, screen.y);
+    map.eachLayer(function (layer) {
+      if (!(layer instanceof Veil) || !layer.getElement()) return;
+      var b = layer.getBounds();
+      var across = map.latLngToContainerPoint(b.getNorthEast()).x - map.latLngToContainerPoint(b.getSouthWest()).x;
+      layer.getElement().classList.toggle('huge', across > limit);
+    });
+  }
+  map.on('zoomend resize', sizeVeils);
+
+  function fadeOut(veil) {
+    var el = veil.getElement();
+    if (reduced || !el) { map.removeLayer(veil); return; }
+    el.classList.remove('in');
+    el.classList.add('out');
+    setTimeout(function () { if (map.hasLayer(veil)) map.removeLayer(veil); }, 650);
+  }
+
   // Leaflet measures the container when the map is built, and this one is
   // sized by a CSS grid that may not have settled yet. Measured too early it
   // renders tiles for a viewport that no longer exists — a narrow strip of
@@ -185,6 +299,7 @@
       // Only a person signed in as themselves has a session to end; the
       // shared token is ended by not using it.
       document.getElementById('signout').hidden = !d.id;
+      if (d.circles) loadZones();
     })
     .catch(function () {});
 
@@ -208,9 +323,14 @@
       + '<h2>You can see</h2>'
       + (rows(c.iCanSee, 'Stop', '/api/circle/owner/') || '<p class="none">Nobody has invited you yet.</p>')
       + '<p class="fine">Seeing is one way: somebody seeing you does not let you see them.</p>'
+      + '<h2>Private places</h2><div id="zonelist"><p class="none">…</p></div>'
+      + '<button class="ghost" id="mkzone">Hide a place</button>'
+      + '<p class="fine">Inside a private place your circle sees a soft blur, never the point, and paths you share leave it out. '
+      + 'The blur is deliberately not centred on the spot you pick, so its middle does not point at your door. Admins still see everything.</p>'
       + '<h2>Watches</h2><div id="devices"><p class="none">…</p></div>'
       + '<button class="ghost" id="mkcode">Pair a watch</button><div id="codebox"></div>';
     loadDevices();
+    fillZones();
   }
 
   function loadDevices() {
@@ -272,6 +392,22 @@
         })
         .catch(function () {})
         .then(function () { e.target.disabled = false; });
+      return;
+    }
+    var unzone = e.target.closest && e.target.closest('[data-unzone]');
+    if (unzone) {
+      fetch('/api/zones/' + encodeURIComponent(unzone.getAttribute('data-unzone')), { method: 'DELETE' }).then(loadZones);
+      return;
+    }
+    var showzone = e.target.closest && e.target.closest('[data-showzone]');
+    if (showzone) {
+      var z = myZones.filter(function (x) { return String(x.id) === showzone.getAttribute('data-showzone'); })[0];
+      if (z) { panel.hidden = true; map.fitBounds(L.latLng(z.latitude, z.longitude).toBounds(z.radius * 2.6)); }
+      return;
+    }
+    if (e.target.id === 'mkzone') {
+      panel.hidden = true;
+      arm('zone');
       return;
     }
     var unpair = e.target.closest && e.target.closest('[data-unpair]');
@@ -362,6 +498,7 @@
 
   // Where someone is, in words if PostGIS could say and in numbers if not.
   function whereabouts(p) {
+    if (p.hidden) return 'somewhere private';
     if (p.latitude === null) return '—';
     var known = places.get(placeKey(p.latitude, p.longitude));
     return known || (p.latitude.toFixed(5) + ', ' + p.longitude.toFixed(5));
@@ -384,7 +521,64 @@
       ((p.trail || []).length > 1 && me && (me.admin || me.id === String(p.id))
         ? '<button class="ghost share" data-id="' + esc(p.id) + '">Share this path</button>'
         : '') +
+      // A day of your own path as a GPX file, for Strava, Garmin or your own
+      // records. Yours or an admin's, as the server insists too.
+      (me && (me.admin || me.id === String(p.id))
+        ? '<div class="gpx"><span class="chandle">A day as GPX</span>'
+          + '<input type="date" value="' + today() + '" max="' + today() + '" />'
+          + '<button class="ghost gpxbtn" data-id="' + esc(p.id) + '">Download</button></div>'
+        : '') +
       '</div></div>';
+  }
+
+  function today() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // The chosen day, from midnight to midnight where the reader is, fetched and
+  // then saved — so a day with nothing recorded says so on the button rather
+  // than handing the browser a download that fails.
+  function downloadDay(id, button) {
+    var input = button.parentNode.querySelector('input[type=date]');
+    var ymd = (input && input.value || '').split('-').map(Number);
+    if (ymd.length !== 3 || !ymd[0]) return;
+    var from = new Date(ymd[0], ymd[1] - 1, ymd[2]);
+    var to = new Date(ymd[0], ymd[1] - 1, ymd[2] + 1);
+    var url = '/api/gpx/' + encodeURIComponent(id) + '?from=' + Math.floor(from / 1000) + '&to=' + Math.floor(to / 1000)
+      + '&tz=' + from.getTimezoneOffset();
+    button.disabled = true;
+    button.textContent = '…';
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().catch(function () { return {}; }).then(function (d) { throw new Error((d && d.error) || String(r.status)); });
+        }
+        var name = fileNameOf(r.headers.get('content-disposition')) || ('path-' + input.value + '.gpx');
+        return r.blob().then(function (b) { save(b, name); button.textContent = 'Download'; });
+      })
+      .catch(function (e) {
+        var why = e && e.message;
+        button.textContent = why === 'nothing recorded then' ? 'nothing that day' : (why === 'no database' ? 'needs PostGIS' : 'could not export');
+      })
+      .then(function () { button.disabled = false; });
+  }
+
+  function fileNameOf(disposition) {
+    var utf = /filename\*=UTF-8''([^;]+)/i.exec(disposition || '');
+    if (utf) { try { return decodeURIComponent(utf[1]); } catch (e) { /* fall through to the plain one */ } }
+    var plain = /filename="([^"]+)"/i.exec(disposition || '');
+    return plain ? plain[1] : '';
+  }
+
+  function save(blob, name) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
   }
 
   // Opening the card is what pulls the photo — hovering should stay cheap.
@@ -449,6 +643,11 @@
         e.marker.setRadius(focus ? 9 : 7);
       }
       if (e.halo) e.halo.setStyle({ opacity: dim ? .05 : .3, fillOpacity: dim ? .01 : .06 });
+      var veilEl = e.veil && e.veil.getElement();
+      if (veilEl) veilEl.classList.toggle('dim', dim);
+      var chipEl = e.chip && e.chip.getElement();
+      if (chipEl) { chipEl.classList.toggle('dim', dim); chipEl.classList.toggle('lit', focus); }
+      if (e.fades) e.fades.eachLayer(function (m) { m.setOpacity(dim ? .15 : 1); });
       if (e.path) {
         e.path.setStyle({
           opacity: focus ? 1 : (dim ? .08 : .45),
@@ -519,7 +718,11 @@
     ids.forEach(function (id) {
       var e = people.get(id);
       if (!e || !e.path || !e.pts || e.pts.length < 2) return;
-      var px = e.pts.map(function (q) { return map.latLngToContainerPoint([q.latitude, q.longitude]); });
+      var px = e.pts.map(function (q) {
+        var pt = map.latLngToContainerPoint([q.latitude, q.longitude]);
+        if (q.gap) pt.gap = true;
+        return pt;
+      });
       var hit = PathTime.nearestSegment(px, pt);
       if (hit && hit.distance <= REACH && (!best || hit.distance < best.hit.distance)) {
         best = { id: id, e: e, hit: hit, px: px };
@@ -606,67 +809,138 @@
   // Delegated: the card's markup is replaced when the identity lookup lands,
   // so a handler bound to the button would not survive it.
   document.addEventListener('click', function (e) {
+    var g = e.target.closest && e.target.closest('button.gpxbtn');
+    if (g) { e.preventDefault(); downloadDay(g.getAttribute('data-id'), g); return; }
     var b = e.target.closest && e.target.closest('button.share');
     if (!b) return;
     e.preventDefault();
     share(b.getAttribute('data-id'), b);
   });
 
+  // Hover, click and card for whatever stands for somebody on the map: their
+  // dot, or the name on their blur. Wired per layer, because going into a
+  // private place swaps one for the other.
+  function wire(layer, entry) {
+    var id = entry.data.id;
+    layer.on('mouseover', function () {
+      hovered = id;
+      shine();
+      // Hovering resolves the id to a handle; the label is rewritten once the
+      // answer lands, so the first hover shows the number only briefly.
+      identify(id).then(function () { relabel(entry); });
+    });
+    layer.on('mouseout', function () { hovered = null; shine(); });
+    layer.on('click', function (e) {
+      // Without this the map's own click handler fires too and immediately
+      // unpins what was just pinned.
+      L.DomEvent.stopPropagation(e);
+      pin(id);
+      openCard(entry.data, layer);
+    });
+  }
+
+  function chipIcon(p) {
+    return L.divIcon({ className: 'veil-chip', html: '<span>' + esc(label(p)) + '</span>', iconSize: [0, 0] });
+  }
+
+  // In place rather than by replacing the icon: a new element under the
+  // pointer would count as a new hover, which would relabel it again.
+  function relabel(entry) {
+    if (entry.marker) entry.marker.setTooltipContent(label(entry.data));
+    var span = entry.chip && entry.chip.getElement() && entry.chip.getElement().querySelector('span');
+    if (span) span.textContent = label(entry.data);
+  }
+
   function draw(p) {
     if (p.latitude === null || p.longitude === null) return;
     var here = [p.latitude, p.longitude];
     var entry = people.get(p.id) || {};
     entry.data = p;
+    people.set(p.id, entry);
 
     var colour = live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33'
                          : '#8a929b';
-    if (!entry.marker) {
-      entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
-    }
-    entry.marker.setLatLng(here).setStyle({ color: colour });
 
-    if (!entry.wired) {
-      entry.wired = true;
-      entry.marker.bindTooltip(label(p), { permanent: false });
-      // Hovering resolves the id to a handle; the tooltip is rewritten once
-      // the answer lands, so the first hover shows the number only briefly.
-      entry.marker.on('mouseover', function () {
-        hovered = p.id;
-        shine();
-        identify(p.id).then(function () { entry.marker.setTooltipContent(label(entry.data)); });
-      });
-      entry.marker.on('mouseout', function () { hovered = null; shine(); });
-      entry.marker.on('click', function (e) {
-        // Without this the map's own click handler fires too and immediately
-        // unpins what was just pinned.
-        L.DomEvent.stopPropagation(e);
-        pin(p.id);
-        openCard(entry.data, entry.marker);
-      });
+    if (p.hidden) {
+      // Inside a private place: what arrived is the place, not a point. The
+      // dot, if there was one, dissolves into the blur that now stands for
+      // them, and their name sits on it for hovering and clicking.
+      if (entry.marker) {
+        puff(entry.marker.getLatLng(), colour, 'dissolve');
+        map.removeLayer(entry.marker);
+        entry.marker = null;
+      }
+      if (entry.halo) { map.removeLayer(entry.halo); entry.halo = null; }
+      var area = L.latLng(here).toBounds(Math.max(50, p.accuracy || 0) * 2);
+      if (!entry.veil) entry.veil = new Veil('', area, { pane: 'veils', className: 'in' }).addTo(map);
+      else entry.veil.setBounds(area);
+      tintVeil(entry.veil, colour);
+      sizeVeils();
+      if (!entry.chip) {
+        entry.chip = L.marker(here, { icon: chipIcon(p), keyboard: false }).addTo(map);
+        wire(entry.chip, entry);
+      } else {
+        entry.chip.setLatLng(here);
+        relabel(entry);
+      }
     } else {
-      entry.marker.setTooltipContent(label(p));
-    }
-
-    if (p.accuracy) {
-      if (!entry.halo) entry.halo = L.circle(here, { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
-      entry.halo.setLatLng(here).setRadius(p.accuracy).setStyle({ color: colour });
+      // In the open. Coming out of a private place, the blur swells away and
+      // the dot condenses where they now are.
+      if (entry.veil) {
+        fadeOut(entry.veil);
+        entry.veil = null;
+        puff(L.latLng(here), colour, 'condense');
+      }
+      if (entry.chip) { map.removeLayer(entry.chip); entry.chip = null; }
+      if (!entry.marker) {
+        entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
+        entry.marker.bindTooltip(label(p), { permanent: false });
+        wire(entry.marker, entry);
+      }
+      entry.marker.setLatLng(here).setStyle({ color: colour });
+      relabel(entry);
+      if (p.accuracy) {
+        if (!entry.halo) entry.halo = L.circle(here, { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
+        entry.halo.setLatLng(here).setRadius(p.accuracy).setStyle({ color: colour });
+      }
     }
 
     // Every fix keeps its time beside it; the hover asks for it by index.
+    // Where a stretch was hidden the path breaks, drawn as separate runs, and
+    // each end fades out instead of stopping dead.
     entry.pts = PathTime.merge(entry.history, p.trail);
-    var line = entry.pts.map(function (t) { return [t.latitude, t.longitude]; });
-    if (line.length > 1) {
-      if (!entry.path) entry.path = L.polyline(line, { weight: 2, opacity: .45, dashArray: '4 4', color: colour }).addTo(map);
-      else entry.path.setLatLngs(line).setStyle({ color: colour });
-      if (entry.glow) entry.glow.setLatLngs(line);
+    var runs = PathTime.runs(entry.pts);
+    var lines = runs.filter(function (r) { return r.length > 1; })
+      .map(function (r) { return r.map(function (t) { return [t.latitude, t.longitude]; }); });
+    if (lines.length) {
+      if (!entry.path) entry.path = L.polyline(lines, { weight: 2, opacity: .45, dashArray: '4 4', color: colour }).addTo(map);
+      else entry.path.setLatLngs(lines).setStyle({ color: colour });
+      if (entry.glow) entry.glow.setLatLngs(lines);
     }
-
-    people.set(p.id, entry);
+    fadeEnds(entry, runs, colour, p.hidden);
 
     // Fit once, to everyone. After that the map stays where it was put: a
     // view that jumps to whoever moved last is unusable the moment two people
     // are sharing, so recentring is a button rather than a surprise.
     if (!fitted) { fit(); fitted = true; }
+  }
+
+  // A soft spot where a path goes out of view into a private place, and
+  // where it comes back out.
+  function fadeEnds(entry, runs, colour, hidden) {
+    if (!entry.fades) entry.fades = L.layerGroup().addTo(map);
+    entry.fades.clearLayers();
+    var at = function (q) {
+      L.marker([q.latitude, q.longitude], {
+        icon: L.divIcon({ className: '', iconSize: [22, 22], iconAnchor: [11, 11],
+          html: '<div class="fade-end" style="background:radial-gradient(closest-side,' + colour + ',transparent)"></div>' }),
+        interactive: false, keyboard: false,
+      }).addTo(entry.fades);
+    };
+    runs.forEach(function (run, k) {
+      if (k > 0) at(run[0]);
+      if (k < runs.length - 1 || hidden) at(run[run.length - 1]);
+    });
   }
 
   function fit() {
@@ -707,7 +981,7 @@
         '<span class="meta">' + esc(whereabouts(p)) + '</span>';
 
       // Kicks off the lookup; the next render picks up the answer.
-      if (p.latitude !== null) placeOf(p.latitude, p.longitude);
+      if (p.latitude !== null && !p.hidden) placeOf(p.latitude, p.longitude);
       // Rows resolve lazily too, so a list of numbers fills in with handles.
       identify(p.id).then(function (who) {
         if (who && (who.username || who.name)) {
@@ -726,11 +1000,15 @@
         // Fit the whole path when lighting one, rather than zooming to the
         // last point — the point of lighting it is to see where it went.
         if (lit === p.id && entry && entry.path && (entry.pts || []).length > 1) {
-          map.fitBounds(entry.path.getBounds().pad(0.25));
+          var span = L.latLngBounds(entry.path.getBounds().getSouthWest(), entry.path.getBounds().getNorthEast());
+          if (entry.veil) span.extend(entry.veil.getBounds());
+          map.fitBounds(span.pad(0.25));
+        } else if (entry && entry.veil) {
+          map.fitBounds(entry.veil.getBounds().pad(0.3));
         } else {
           map.setView([p.latitude, p.longitude], 16);
         }
-        if (entry && entry.marker) openCard(p, entry.marker);
+        if (entry && (entry.marker || entry.chip)) openCard(p, entry.marker || entry.chip);
       };
       list.appendChild(el);
     });
@@ -750,6 +1028,7 @@
   // what is on screen is what the boundary test uses. ST_Buffer makes a
   // thirty-two sided ring, which at any useful zoom is a circle.
   var fenceLayer = L.layerGroup().addTo(map);
+  // What a click on the map is about to make: false, 'fence' or 'zone'.
   var arming = false;
 
   function drawFences(list) {
@@ -798,17 +1077,23 @@
       .catch(function () {});
   }
 
-  function arm(on) {
-    arming = on;
-    document.body.classList.toggle('fencing', on);
-    document.getElementById('newfence').textContent = on ? 'Click the map…' : 'New fence';
+  function arm(kind) {
+    arming = kind || false;
+    document.body.classList.toggle('fencing', Boolean(arming));
+    document.getElementById('newfence').textContent = arming === 'fence' ? 'Click the map…' : 'New fence';
+    var hint = document.getElementById('hint');
+    hint.hidden = arming !== 'zone';
+    hint.textContent = arming === 'zone' ? 'Click the place to hide — Esc to stop' : '';
   }
 
-  document.getElementById('newfence').onclick = function () { arm(!arming); };
+  document.getElementById('newfence').onclick = function () { arm(arming === 'fence' ? false : 'fence'); };
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && arming) arm(false); });
 
   map.on('click', function (e) {
     if (!arming) return;
+    var kind = arming;
     arm(false);
+    if (kind === 'zone') { hidePlace(e.latlng); return; }
     var name = window.prompt('What is this place called?');
     if (!name) return;
     var radius = Number(window.prompt('How far across, in metres?', '150'));
@@ -824,11 +1109,78 @@
       .catch(function () { window.alert('Could not save that fence.'); });
   });
 
+  // ------------------------------------------------------ private places
+  //
+  // Your own, and only yours: the server never says where anybody else's
+  // are. Drawn for you as the same blur your circle sees, lighter and still,
+  // with its edge marked, so you know where they stop seeing you.
+  var myZones = [];
+  var zoneLayer = L.layerGroup().addTo(map);
+
+  function loadZones() {
+    return fetch('/api/zones', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        myZones = (d && d.zones) || [];
+        fillZones();
+        drawOwnZones();
+      })
+      .catch(function () {});
+  }
+
+  function fillZones() {
+    var box = document.getElementById('zonelist');
+    if (!box) return;
+    box.innerHTML = myZones.length
+      ? myZones.map(function (z) {
+          var size = z.radius >= 1000 ? (z.radius / 1000).toFixed(1).replace(/\.0$/, '') + ' km' : Math.round(z.radius) + ' m';
+          return '<div class="row"><span>' + esc(z.name || 'A private place') + ' · ' + esc(size) + '</span>'
+            + '<span><button class="ghost" data-showzone="' + esc(z.id) + '">Show</button> '
+            + '<button class="ghost" data-unzone="' + esc(z.id) + '">Remove</button></span></div>';
+        }).join('')
+      : '<p class="none">None yet.</p>';
+  }
+
+  function drawOwnZones() {
+    zoneLayer.clearLayers();
+    myZones.forEach(function (z) {
+      var area = L.latLng(z.latitude, z.longitude).toBounds(z.radius * 2);
+      var v = new Veil('', area, { pane: 'veils', className: 'mine' });
+      zoneLayer.addLayer(v);
+      tintVeil(v, '#7a6ff0');
+      sizeVeils();
+      // On the rim rather than in the middle, which is where you are.
+      L.tooltip({ permanent: true, direction: 'top', className: 'fence-label' })
+        .setLatLng([area.getNorth(), z.longitude])
+        .setContent('Private · ' + esc(z.name || ''))
+        .addTo(zoneLayer);
+    });
+  }
+
+  function hidePlace(latlng) {
+    var name = window.prompt('What is this place? Only you will see the name.', 'Home');
+    if (name === null) return;
+    var radius = Number(window.prompt('How far around it should be hidden, in metres? (200 to 5000)', '500'));
+    if (!radius || radius < 200 || radius > 5000) {
+      window.alert('A private place needs a radius between 200 m and 5 km.');
+      return;
+    }
+    fetch('/api/zones?name=' + encodeURIComponent(name) + '&lat=' + latlng.lat + '&lon=' + latlng.lng + '&radius=' + radius,
+      { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.error) window.alert(d.error); return loadZones(); })
+      .catch(function () { window.alert('Could not save that place.'); });
+  }
+
   function drop(id) {
     var entry = people.get(id);
     if (!entry) return false;
-    ['marker', 'halo', 'path'].forEach(function (k) { if (entry[k]) map.removeLayer(entry[k]); });
+    ['marker', 'halo', 'path', 'glow', 'veil', 'chip', 'fades'].forEach(function (k) { if (entry[k]) map.removeLayer(entry[k]); });
     people.delete(id);
+    // What was fetched of their history goes too. A person sent again after
+    // being forgotten — because they hid a place, say — is asked for afresh,
+    // and gets only what they may be shown now.
+    delete historyAsked[id];
     return true;
   }
 
@@ -887,6 +1239,8 @@
     if (name === 'hello') { d.people.forEach(apply); render(); }
     else if (name === 'position') apply(d);
     else if (name === 'forget') { if (drop(d.id)) render(); }
+    // Your own private places changed, here or in another tab.
+    else if (name === 'zones') loadZones();
     // Either a fence was added or removed, or somebody crossed one. Both mean
     // the drawn set may be stale, and redrawing is one small request.
     else if (name === 'fence') loadFences();
