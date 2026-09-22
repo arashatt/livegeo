@@ -45,3 +45,33 @@ jobs:
           name: livegeo-wearos-debug
           path: watch/wearos/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  watchos:
+    name: Apple Watch (watchOS)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: watch/apple
+    steps:
+      - uses: actions/checkout@v4
+
+      # The logic is a Swift package using Foundation only, so its tests run
+      # on the Mac itself, with no simulator.
+      - name: Test the core
+        run: swift test --package-path Core
+
+      # The Xcode project is generated from project.yml, never committed.
+      - name: Generate the project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build the app
+        env:
+          LIVEGEO_SERVER: ${{ vars.LIVEGEO_SERVER }}
+        run: |
+          xcodebuild -project Livegeo.xcodeproj -scheme Livegeo \
+            -destination 'generic/platform=watchOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            ${LIVEGEO_SERVER:+LIVEGEO_SERVER=$LIVEGEO_SERVER} \
+            build

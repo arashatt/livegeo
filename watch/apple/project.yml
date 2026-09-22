@@ -1,0 +1,51 @@
+# The Apple Watch app, as an XcodeGen spec. The .xcodeproj is generated from
+# this rather than committed: a hand-edited project file cannot be reviewed or
+# merged, and this can. `xcodegen generate` makes it; CI does exactly that.
+name: Livegeo
+options:
+  bundleIdPrefix: org.livegeo
+  deploymentTarget:
+    watchOS: "10.0"
+
+packages:
+  LivegeoCore:
+    path: Core
+
+settings:
+  base:
+    # The server this build belongs to — one app per deployment, since typing
+    # a URL on a watch is not something to ask of anyone. Override with
+    # `xcodebuild LIVEGEO_SERVER=https://…`, as CI does from a repository
+    # variable.
+    LIVEGEO_SERVER: https://livegeo.example.workers.dev
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+
+targets:
+  Livegeo:
+    # A single-target, watch-only app: it needs no iPhone app beside it.
+    type: application
+    platform: watchOS
+    sources: [App]
+    # A shared scheme, so `xcodebuild -scheme Livegeo` has one to build.
+    scheme: {}
+    dependencies:
+      - package: LivegeoCore
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: livegeo
+        WKApplication: true
+        WKWatchOnly: true
+        LivegeoServer: $(LIVEGEO_SERVER)
+        NSLocationWhenInUseUsageDescription: >-
+          While you choose to share, livegeo sends where you are to your own
+          livegeo server, so the people you have invited can see it.
+        # Background location, so sharing keeps going with the screen off.
+        # It only runs during a session you start, for as long as you chose.
+        WKBackgroundModes: [location]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.livegeo.watch
+        INFOPLIST_KEY_CFBundleDisplayName: livegeo
