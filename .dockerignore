@@ -10,3 +10,4 @@ README.md
 Dockerfile
 .dockerignore
 compose.yml
+watch

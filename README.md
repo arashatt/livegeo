@@ -599,6 +599,44 @@ neither.
 Reading uses the same token: `GET /api/me`, `GET /api/positions`,
 `POST /api/stream`, `GET /api/history/:id`, `GET /api/fences`, and tiles.
 
+### Galaxy Watch
+
+`watch/wearos` — Kotlin and Compose for Wear OS, standalone: it needs no phone.
+Galaxy Watch 4 and later; the older Tizen watches are out of scope.
+
+It shares for an hour, four hours, or until you stop, from a foreground
+service with a Stop button in its notification, and shows your circle with how
+far away and how long ago each person was seen. Tap someone for a small map,
+drawn from this server's own `/tiles` — no Google Maps key, and no looks sent
+to Google.
+
+Battery decides how it behaves: a fix a minute, sent only if it has moved
+beyond its own accuracy or has been quiet for five minutes, which keeps
+somebody standing still showing as live. Everything goes through an outbox on
+disk first, so a lift or a tunnel loses nothing.
+
+**Getting it onto a watch.** It is built by the *Watch apps* workflow, because
+building it needs the Android SDK. Set a repository variable
+`LIVEGEO_SERVER` to your deployment's public URL — one app per deployment,
+since typing a URL on a watch is not something to ask of anyone — and run the
+workflow. Download the `livegeo-wearos-debug` artifact, then with the watch's
+*Developer options → ADB debugging* and *Debug over Wi-Fi* on:
+
+```sh
+adb connect <watch-ip>:<port>
+adb install app-debug.apk
+```
+
+Open it, send `/pair` to the bot, type the code. A build made without
+`LIVEGEO_SERVER` says so on its pairing screen instead of letting pairing fail.
+The Play Store route needs a developer account and a stated reason for using
+location, which is yours to give.
+
+The logic — client, outbox, sessions, cadence, tile maths — is plain Kotlin in
+`watch/wearos/core` with its own tests, which CI runs. One of them runs the
+client against a real server:
+`LIVEGEO_TEST_SERVER=http://… LIVEGEO_TEST_CODE=123456 ./gradlew :core:test`.
+
 ## Telling you when somebody arrives
 
 A fence is a named circle. When somebody crosses into one or out of it, the bot
