@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS devices (
 
 -- Places somebody hides from their circle. The centre is not the spot they
 -- picked: it was moved at random by up to half the radius when the place was
--- made, and the spot itself was never stored (see privacy.js for why).
+-- made, and the spot itself was never stored (see zones.js for why).
 CREATE TABLE IF NOT EXISTS zones (
   id         bigserial PRIMARY KEY,
   owner      text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -121,17 +121,6 @@ CREATE TABLE IF NOT EXISTS zones (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS zones_owner_idx ON zones (owner);
-
--- Stretches of time somebody chose not to be followed through (Passive mode).
--- Kept after they end, because the path walked during one stays hidden from
--- the circle for good, not just while it lasts.
-CREATE TABLE IF NOT EXISTS passive (
-  id        bigserial PRIMARY KEY,
-  person    text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  starts_at timestamptz NOT NULL,
-  ends_at   timestamptz NOT NULL
-);
-CREATE INDEX IF NOT EXISTS passive_person_idx ON passive (person);
 
 -- Where a shared path resumes after a hidden stretch, as indexes into it. A
 -- LineString has no way to say "and then a jump", so the jumps sit beside it,

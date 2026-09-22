@@ -1,21 +1,16 @@
-// privacy.js — what somebody's circle is not told.
+// zones.js — private places: where somebody's circle is not told they are.
 //
-// Two ways not to be followed, and one mechanism behind both:
-//
-//   private places  somewhere that hides you whenever you are in it
-//   Passive mode    a stretch of time that hides you wherever you are
-//
-// Hiding means the point is never sent. A blur drawn over exact coordinates
-// hides nothing from anybody who opens the network tab, so what leaves the
-// server for a viewer who may not see exactly is the blur itself — a centre
-// and a radius — and the page draws what it was given. The exact position
-// goes only to the person themselves and to admins (canActFor in circles.js),
-// which is the same line that already decides who may erase or publish a path.
+// A private place hides its owner whenever they are inside it. Hiding means
+// the point is never sent. A blur drawn over exact coordinates hides nothing
+// from anybody who opens the network tab, so what leaves the server for a
+// viewer who may not see exactly is the blur itself — a centre and a radius —
+// and the page draws what it was given. The exact position goes only to the
+// person themselves and to admins (canActFor in circles.js), which is the same
+// line that already decides who may erase or publish a path.
 //
 // Pure functions first, so the rules are tested without a database; the store
-// at the bottom keeps places and windows in memory and writes them through,
-// the same arrangement circles.js has, because every position is checked
-// against it.
+// at the bottom keeps places in memory and writes them through, the same
+// arrangement circles.js has, because every position is checked against it.
 
 import { randomBytes } from 'node:crypto';
 import { metresBetween } from './positions.js';
@@ -23,12 +18,6 @@ import { metresBetween } from './positions.js';
 export const ZONE_MIN = 200;
 export const ZONE_MAX = 5000;
 export const ZONES_EACH = 10;
-// How big the Passive blur is, and how long before switching it on is hidden
-// too. Turning it on as you arrive somewhere should not leave the last few
-// minutes of path pointing at the door you just walked through.
-export const PASSIVE_RADIUS = 5000;
-export const PASSIVE_LEAD = 15 * 60;
-export const PASSIVE_MAX_MINUTES = 24 * 60;
 
 // A uniform number in [0, 1) that nobody can predict. Math.random would do
 // for the geometry, but the whole point of the offset below is that it cannot
@@ -76,28 +65,14 @@ export function zoneAt(zones, latitude, longitude) {
   return null;
 }
 
-// The Passive window running at `now`, or null.
-export function activeWindow(windows, now) {
-  for (const w of windows || []) if (now >= w.start && now < w.end) return w;
-  return null;
-}
-
-// Whether a fix taken at `at` falls in a Passive window — or in the quarter
-// hour before one began.
-export function inWindow(windows, at) {
-  if (at === null || at === undefined || !Number.isFinite(Number(at))) return false;
-  const t = Number(at);
-  return (windows || []).some((w) => t >= w.start - PASSIVE_LEAD && t <= w.end);
-}
-
 // A path as a viewer who may not see exactly is shown it: fixes inside a
-// private place or a Passive window are gone, and the first fix after a hidden
-// stretch says so with `gap`, so nothing draws a line across what was hidden
-// or reads a time off it.
+// private place are gone, and the first fix after a hidden stretch says so
+// with `gap`, so nothing draws a line across what was hidden or reads a time
+// off it.
 //
 // Chronological out, whatever order came in (history arrives newest first).
 // A gap already marked stays marked, so veiling twice changes nothing.
-export function veilPoints(points, { zones = [], windows = [] } = {}) {
+export function veilPoints(points, zones = []) {
   const list = (points || []).filter(Boolean);
   // Number(null) is 0, a perfectly good time, so null is checked for first.
   const timed = list.every((q) => q.at !== null && q.at !== undefined && Number.isFinite(Number(q.at)));
@@ -105,7 +80,7 @@ export function veilPoints(points, { zones = [], windows = [] } = {}) {
   const out = [];
   let skipped = false;
   for (const q of ordered) {
-    if (inWindow(windows, q.at) || zoneAt(zones, q.latitude, q.longitude)) { skipped = true; continue; }
+    if (zoneAt(zones, q.latitude, q.longitude)) { skipped = true; continue; }
     const rest = withoutGap(q);
     // A gap before the first fix shown is not a gap in anything.
     out.push(out.length && (q.gap || skipped) ? { ...rest, gap: true } : rest);
@@ -119,13 +94,13 @@ function withoutGap(q) {
   return rest;
 }
 
-// Somebody, as a viewer who may not see exactly is shown them. `passive` is
-// the blur currently standing in for them while Passive mode is on.
-export function veilPerson(p, { zones = [], windows = [], passive = null } = {}) {
-  const trail = veilPoints(p.trail || [], { zones, windows });
+// Somebody, as a viewer who may not see exactly is shown them: inside a
+// private place, the place's centre and radius stand in for where they are.
+export function veilPerson(p, zones = []) {
+  const trail = veilPoints(p.trail || [], zones);
   const out = { ...p, trail };
   if (p.latitude === null || p.latitude === undefined) return out;
-  const cover = passive || zoneAt(zones, p.latitude, p.longitude);
+  const cover = zoneAt(zones, p.latitude, p.longitude);
   if (!cover) return out;
   return {
     ...out,
@@ -134,7 +109,6 @@ export function veilPerson(p, { zones = [], windows = [], passive = null } = {})
     accuracy: cover.radius,
     heading: null,
     hidden: true,
-    ...(passive ? { passive: true } : {}),
   };
 }
 
@@ -187,29 +161,9 @@ export function withBreaks(points, breaks) {
 
 // ---------------------------------------------------------------- the store
 
-export function makePrivacy({ geo = null, log = console, random = secureRandom,
-                              now = () => Math.floor(Date.now() / 1000) } = {}) {
+export function makeZones({ geo = null, random = secureRandom } = {}) {
   const zones = new Map();     // owner -> [{ id, owner, name, latitude, longitude, radius }]
-  const windows = new Map();   // person -> [{ id, start, end }]
-  // The blur standing in for somebody in Passive mode. Chosen when it starts
-  // and again only when they leave it, so standing still does not make it
-  // wander and give away the middle.
-  const discs = new Map();     // person -> { latitude, longitude, radius }
-
   const zonesOf = (id) => zones.get(String(id)) || [];
-  const windowsOf = (id) => windows.get(String(id)) || [];
-
-  function discFor(person, latitude, longitude) {
-    const key = String(person);
-    const held = discs.get(key);
-    if (held && latitude !== null && latitude !== undefined
-        && metresBetween({ latitude, longitude }, held) <= held.radius) return held;
-    if (latitude === null || latitude === undefined) return held || null;
-    const centre = offsetCentre({ latitude, longitude, radius: PASSIVE_RADIUS }, random);
-    const disc = { ...centre, radius: PASSIVE_RADIUS };
-    discs.set(key, disc);
-    return disc;
-  }
 
   return {
     get enabled() { return Boolean(geo && geo.enabled && geo.enabled()); },
@@ -217,35 +171,28 @@ export function makePrivacy({ geo = null, log = console, random = secureRandom,
     async load() {
       if (!this.enabled) return false;
       zones.clear();
-      windows.clear();
       for (const z of await geo.listZones()) {
         const key = String(z.owner);
         if (!zones.has(key)) zones.set(key, []);
         zones.get(key).push(z);
       }
-      for (const w of await geo.listPassive()) {
-        const key = String(w.person);
-        if (!windows.has(key)) windows.set(key, []);
-        windows.get(key).push({ id: w.id, start: w.start, end: w.end });
-      }
       return true;
     },
 
     // What the owner sees of their own places. Never anybody else's.
-    zonesOf: (id) => zonesOf(id).map(({ id: zid, name, latitude, longitude, radius }) =>
+    of: (id) => zonesOf(id).map(({ id: zid, name, latitude, longitude, radius }) =>
       ({ id: zid, name, latitude, longitude, radius })),
 
-    async addZone({ owner, name = '', latitude, longitude, radius }) {
+    async create({ owner, name = '', latitude, longitude, radius }) {
       const centre = offsetCentre({ latitude, longitude, radius }, random);
       const id = await geo.createZone({ owner: String(owner), name, ...centre, radius });
-      const zone = { id, owner: String(owner), name, ...centre, radius };
       const key = String(owner);
-      zones.set(key, [...zonesOf(key), zone]);
+      zones.set(key, [...zonesOf(key), { id, owner: key, name, ...centre, radius }]);
       return { id, name, ...centre, radius };
     },
 
     // Only the owner's own place; anybody else's reads as no such place.
-    async removeZone(owner, id) {
+    async remove(owner, id) {
       const key = String(owner);
       const mine = zonesOf(key);
       if (!mine.some((z) => z.id === Number(id))) return false;
@@ -254,64 +201,17 @@ export function makePrivacy({ geo = null, log = console, random = secureRandom,
       return true;
     },
 
-    passiveOf: (id) => activeWindow(windowsOf(id), now()),
-
-    async startPassive(person, minutes) {
-      const key = String(person);
-      const t = now();
-      const length = Math.max(15, Math.min(PASSIVE_MAX_MINUTES, Math.round(Number(minutes) || 60))) * 60;
-      const running = activeWindow(windowsOf(key), t);
-      // Asking again while it is on extends it rather than stacking windows.
-      if (running) {
-        running.end = Math.max(running.end, t + length);
-        await geo.setPassiveEnd(running.id, running.end);
-        return running;
-      }
-      const w = { start: t, end: t + length };
-      w.id = await geo.createPassive({ person: key, ...w });
-      windows.set(key, [...windowsOf(key), w]);
-      discs.delete(key);
-      return w;
-    },
-
-    // Ends it now. The window stays: what was walked during it stays hidden.
-    async endPassive(person) {
-      const key = String(person);
-      const running = activeWindow(windowsOf(key), now());
-      if (!running) return false;
-      running.end = now();
-      await geo.setPassiveEnd(running.id, running.end);
-      discs.delete(key);
-      return true;
-    },
-
-    active: () => [...windows.entries()].flatMap(([person, list]) =>
-      list.filter((w) => w.end > now()).map((w) => ({ person, end: w.end }))),
-
-    forget(id) {
-      const key = String(id);
-      zones.delete(key);
-      windows.delete(key);
-      discs.delete(key);
-    },
+    forget(id) { zones.delete(String(id)); },
 
     // Whether a position is hidden from anybody who may not see exactly: the
     // fence alerts ask, so a small fence cannot find what the blur hides.
-    hiddenAt(person, latitude, longitude, at = now()) {
-      return Boolean(zoneAt(zonesOf(person), latitude, longitude)) || Boolean(activeWindow(windowsOf(person), at));
-    },
+    at: (person, latitude, longitude) => zoneAt(zonesOf(person), latitude, longitude),
 
     veil(p) {
-      const key = String(p.id);
-      const z = zonesOf(key);
-      const w = windowsOf(key);
-      if (!z.length && !w.length) return p;
-      const passive = activeWindow(w, now()) ? discFor(key, p.latitude, p.longitude) : null;
-      return veilPerson(p, { zones: z, windows: w, passive });
+      const z = zonesOf(p.id);
+      return z.length ? veilPerson(p, z) : p;
     },
 
-    veilPoints(person, points) {
-      return veilPoints(points, { zones: zonesOf(person), windows: windowsOf(person) });
-    },
+    veilPoints: (person, points) => veilPoints(points, zonesOf(person)),
   };
 }

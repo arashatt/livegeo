@@ -42,31 +42,9 @@ const HELP = [
   '/invite — a link that lets one person see you',
   '/circle — who can see you, and whom you can see',
   '/pair — a code to connect a watch',
-  '/passive — your circle sees a blur instead of you for an hour (/passive 3h, /passive off)',
   '/stop — stop being shown, and delete the path held about you',
   '/start — this message',
 ].join('\n');
-
-// `/passive`, `/passive 3h`, `/passive 30m`, `/passive 2` (hours), or
-// `/passive off`. Returns { minutes } or { off: true }, or null for anything
-// else, so the reply can say what it does understand.
-export function passiveArgs(args) {
-  const a = String(args || '').trim().toLowerCase();
-  if (!a) return { minutes: 60 };
-  if (/^(off|stop|end|no)$/.test(a)) return { off: true };
-  const m = /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?)?$/.exec(a);
-  if (!m) return null;
-  const n = Number(m[1]);
-  const minutes = Math.round(m[2] && m[2].startsWith('m') ? n : n * 60);
-  return minutes > 0 ? { minutes } : null;
-}
-
-// "1 h", "45 min", "2 h 30 min" — how long something lasts, as a person says it.
-export function lasting(seconds) {
-  const m = Math.max(1, Math.round(seconds / 60));
-  if (m < 60) return `${m} min`;
-  return m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`;
-}
 
 // ------------------------------------------------------------- circles
 //
@@ -193,9 +171,6 @@ export async function connect(config, {
   // Circles, when there is a database to keep them in: { seen, invite,
   // redeem, circleOf, revoke }. Absent, the circle commands say so.
   circle = null,
-  // Passive mode: { start(id, minutes) -> window, end(id) -> bool }, or null
-  // without a database.
-  passive = null,
   directory = null,
   log = console,
   fetch: f = fetch,
@@ -306,26 +281,6 @@ export async function connect(config, {
         await say(command.chat, code
           ? `Enter ${code.slice(0, 3)} ${code.slice(3)} in the livegeo app on your watch. It works once, for five minutes.`
           : 'Pairing a watch needs the database this service is running without.');
-        return;
-      }
-      if (command.name === '/passive') {
-        if (!passive) { await say(command.chat, 'Passive mode needs the database this service is running without.'); return; }
-        const want = passiveArgs(command.args);
-        const id = String(command.from.id);
-        if (!want) { await say(command.chat, 'Try /passive, /passive 3h, /passive 30m or /passive off.'); return; }
-        if (want.off) {
-          const ended = await passive.end(id);
-          await say(command.chat, ended
-            ? 'Passive is off. Your circle sees you again from now; the time it was on stays hidden from them.'
-            : 'Passive was not on.');
-          return;
-        }
-        const w = await passive.start(id, want.minutes);
-        await say(command.chat, [
-          `Passive for ${lasting(w.end - Math.floor(Date.now() / 1000))}.`,
-          'Your circle sees a blur about 10 km across instead of where you are, and never gets this stretch of path — nor the quarter hour before it.',
-          'Whoever runs this map still sees you. /passive off ends it early.',
-        ].join('\n'));
         return;
       }
       if (command.name === '/circle') {
