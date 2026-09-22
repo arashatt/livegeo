@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { makeLinks } from './login.js';
 import { makeWatcher, announce } from './fences.js';
 import { makeCircles } from './circles.js';
+import { makeDevices, makeCodes } from './devices.js';
 
 const config = load();
 const positions = new Positions({
@@ -41,6 +42,12 @@ if (await circles.load().catch((e) => { console.error('circles:', e.message); re
   console.log('circles: off without DATABASE_URL — only DASHBOARD_USERS can sign in');
 }
 
+// Watches. Paired with a code from /pair or the map, known by a token after.
+const devices = makeDevices({ geo });
+const codes = makeCodes();
+const paired = await devices.load().catch((e) => { console.error('devices:', e.message); return 0; });
+if (paired) console.log(`devices: ${paired} paired`);
+
 // Known once the bot connects; invites are deep links into it.
 let inviteLink = null;
 async function makeInvite(owner) {
@@ -60,8 +67,9 @@ let notify = null;
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
 const { publish, publishFence, forget, setBot, grant, revoke } = serve(positions, config, {
-  directory, geo, links, circles, makeInvite,
+  directory, geo, links, circles, makeInvite, devices, codes,
   onFenceDeleted: (id) => fences.dropFence(id),
+  onIngest: (fixes) => ingest(fixes),
 });
 
 // A restart used to blank the map until everyone happened to move again. What
@@ -96,6 +104,24 @@ const onPosition = (position) => {
   // the update on the floor.
   geo.record(changed).catch((e) => console.error('geo:', e && e.message ? e.message : e));
 };
+
+// What a watch reported, in time order, through the same door as Telegram.
+//
+// Except for the past. A watch that was out of signal uploads its buffer
+// later, possibly after newer positions from Telegram have already arrived.
+// Those older fixes are history — recorded, so the path is complete — but
+// they are not replayed onto the map, which would jump backwards, or through
+// the fences, which would announce an arrival hours after it happened.
+async function ingest(fixes) {
+  for (const fix of [...fixes].sort((a, b) => a.at - b.at)) {
+    const current = positions.get(fix.id);
+    if (current && current.at > fix.at) {
+      await geo.record(fix).catch((e) => console.error('geo:', e && e.message ? e.message : e));
+      continue;
+    }
+    onPosition(fix);
+  }
+}
 
 // Whether this position crossed anything worth telling somebody about. Runs
 // beside the record rather than before it, for the same reason: an open map
@@ -166,6 +192,8 @@ const circle = circles.enabled ? {
     return { id: owner, ...(circles.user(owner) || {}) };
   },
   circleOf: (id) => circles.circleOf(id),
+  // A code to type into a watch, for somebody who can sign in.
+  pair: (id) => (devices.enabled && circles.viewerFor(id) ? codes.issue(id) : null),
   // Through the server, so open maps are told as well as the database.
   revoke: (owner, viewer) => revoke(owner, viewer),
 } : null;

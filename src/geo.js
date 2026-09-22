@@ -410,6 +410,33 @@ export function makeGeo({ url, log = console } = {}) {
       return rows[0] && rows[0].live ? String(rows[0].owner) : null;
     },
 
+    // ------------------------------------------------------------- devices
+
+    async listDevices() {
+      if (!pool) return [];
+      const { rows } = await pool.query('SELECT id, owner, name, platform, token_hash FROM devices');
+      return rows.map((r) => ({ ...r, id: Number(r.id), owner: String(r.owner) }));
+    },
+
+    async createDevice({ owner, name, platform, tokenHash }) {
+      const { rows } = await pool.query(
+        `INSERT INTO devices (owner, name, platform, token_hash) VALUES ($1, $2, $3, $4) RETURNING id`,
+        [String(owner), name, platform, tokenHash],
+      );
+      return Number(rows[0].id);
+    },
+
+    async deleteDevice(id) {
+      if (!pool) return 0;
+      const res = await pool.query('DELETE FROM devices WHERE id = $1', [Number(id)]);
+      return res.rowCount;
+    },
+
+    async touchDevice(id) {
+      if (!pool) return;
+      await pool.query('UPDATE devices SET last_seen_at = now() WHERE id = $1', [Number(id)]);
+    },
+
     async historyOf(person, { limit = 500, since = null } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(

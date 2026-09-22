@@ -19,6 +19,8 @@ import { connect as connectBot, commandIn } from '../src/bot.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
+import { makeDevices, makeCodes, makeLimiter, hashToken } from '../src/devices.js';
+import { fromDevice, readFixes } from '../src/ingest.js';
 import { readFileSync } from 'node:fs';
 import '../public/lib/path-time.js';
 const { PathTime } = globalThis;
@@ -1107,10 +1109,19 @@ head('the leak matrix: every route, as every kind of viewer');
     revokeShare: async (token) => { db.shares = db.shares.filter((x) => x.token !== token); return 1; },
     readShare: async () => null,
     placeOf: async () => '',
+    devices: [], nextDevice: 1,
+    listDevices: async () => geo.devices,
+    createDevice: async ({ owner, name, platform, tokenHash }) => { const id = geo.nextDevice++; geo.devices.push({ id, owner, name, platform, token_hash: tokenHash }); return id; },
+    deleteDevice: async (id) => { geo.devices = geo.devices.filter((d) => d.id !== id); return 1; },
+    touchDevice: async () => {},
   };
   const botToken = '123:leakmatrix';
   const circles = makeCircles({ geo, admins: ['1'] });
   await circles.load();
+  const devices = makeDevices({ geo, log: { info() {}, error() {} } });
+  await devices.load();
+  const codes = makeCodes({ perAddress: 3, globalFailures: 6 });
+  const ingested = [];
 
   const store = new Positions({ minMove: 1 });
   const now = Math.floor(Date.now() / 1000);
@@ -1121,7 +1132,10 @@ head('the leak matrix: every route, as every kind of viewer');
   }
   const { server, publish } = serve(store, {
     dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60,
-  }, { geo, circles, links: makeLinks(), log: { info() {}, error() {} } });
+  }, {
+    geo, circles, devices, codes, links: makeLinks(), log: { info() {}, error() {} },
+    onIngest: async (fixes, device) => { ingested.push(...fixes.map((f) => ({ ...f, device: device.id }))); },
+  });
   await new Promise((r) => server.once('listening', r));
   const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -1149,6 +1163,9 @@ head('the leak matrix: every route, as every kind of viewer');
     selfOnly: ['/api/share/', '/api/forget/'],
     owned: ['/api/fences', '/api/fences/'],
     ownCircle: ['/api/circle', '/api/circle/', '/api/circle/invite', '/api/circle/viewer/', '/api/circle/owner/'],
+    pairing: ['/api/devices/pair'],
+    ownDevices: ['/api/devices/code', '/api/devices', '/api/devices/'],
+    deviceOnly: ['/api/ingest'],
   };
   const known = new Set(Object.values(classified).flat());
   const unclassified = routes.filter((r) => !known.has(r));
@@ -1208,6 +1225,68 @@ head('the leak matrix: every route, as every kind of viewer');
   t('without the shared token in a cookie', !/tll_token=/.test(page.headers.get('set-cookie') || ''),
     page.headers.get('set-cookie'));
 
+  // --- a watch: paired by its owner, then its owner for reading only
+  const code = (await (await hit('grace', '/api/devices/code', 'POST')).json()).code;
+  t('Grace gets a six-digit pairing code', /^\d{6}$/.test(code), code);
+  t('the shared token cannot ask for one — it is nobody', (await hit('token', '/api/devices/code', 'POST')).status === 404);
+  const pair = (body) => fetch(`${base}/api/devices/pair`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  t('a wrong code pairs nothing', (await pair({ code: '000000' === code ? '000001' : '000000' })).status === 404);
+  const paired = await (await pair({ code, name: 'Grace’s watch', platform: 'wearos' })).json();
+  t('the right code pairs a watch, and names its owner', Boolean(paired.token) && paired.owner.id === '3', paired);
+  t('only a hash of the token is stored', geo.devices[0].token_hash === hashToken(paired.token)
+    && !JSON.stringify(geo.devices).includes(paired.token));
+  t('a code works once', (await pair({ code })).status === 404);
+
+  const watch = (path, method = 'GET', body) => fetch(base + path, {
+    method,
+    headers: { authorization: `Bearer ${paired.token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const watchSees = (await (await watch('/api/positions')).json()).people.map((p) => p.id).join();
+  t('the watch sees what Grace sees, no more', watchSees === '3', watchSees);
+  t('a made-up bearer token is nobody',
+    (await fetch(`${base}/api/positions`, { headers: { authorization: 'Bearer not-a-device' } })).status === 401);
+
+  for (const [what, path, method] of [
+    ['erase its owner', '/api/forget/3', 'POST'],
+    ['publish its owner’s path', '/api/share/3', 'POST'],
+    ['read the circle', '/api/circle', 'GET'],
+    ['make an invite', '/api/circle/invite', 'POST'],
+    ['create a fence', '/api/fences?name=x&lat=1&lon=1&radius=100', 'POST'],
+    ['mint pairing codes', '/api/devices/code', 'POST'],
+    ['list or remove devices', '/api/devices', 'GET'],
+  ]) {
+    t(`a watch cannot ${what}`, (await watch(path, method)).status === 404, path);
+  }
+
+  const report = await (await watch('/api/ingest', 'POST', {
+    fixes: [
+      { lat: 36.31, lon: 59.58, accuracy: 8 },
+      { lat: 99, lon: 0 },
+      { lat: 36.311, lon: 59.581, at: Math.floor(Date.now() / 1000) + 3600 },
+    ],
+  })).json();
+  t('a watch reports, and a good fix is taken', report.accepted === 1, report);
+  t('with each refusal said, by index',
+    report.rejected.map((r) => `${r.index}:${r.error}`).join() === '1:position out of range,2:from the future', report.rejected);
+  t('as its owner, and nobody else', ingested.length === 1 && ingested[0].id === '3', ingested);
+  t('a browser cannot post as a watch', (await hit('grace', '/api/ingest', 'POST')).status === 404);
+
+  // Guessing: a few per address, then refused; a burst from everywhere burns
+  // every live code, including one nobody was guessing at.
+  const spare = (await (await hit('ada', '/api/devices/code', 'POST')).json()).code;
+  const wrong = (n) => String((Number(spare) + n) % 1_000_000).padStart(6, '0');
+  for (let i = 1; i <= 3; i++) await pair({ code: wrong(i) });
+  t('a fourth wrong guess from one address is refused outright', (await pair({ code: wrong(4) })).status === 429);
+  for (let i = 5; i <= 8; i++) await pair({ code: wrong(i) });
+  t('and a sweep burns the live codes, so even the right one fails', (await pair({ code: spare })).status !== 200);
+
+  const removed = await hit('grace', `/api/devices/${paired.id}`, 'DELETE');
+  t('Grace can remove her watch', removed.status === 200);
+  t('and its token stops working at once', (await watch('/api/positions')).status === 401);
+
   // --- the stream, which is where a leak would be quietest
   const open = async (who) => {
     const res = await fetch(`${base}/api/stream`, { method: 'POST', headers: as[who] });
@@ -1258,6 +1337,45 @@ head('the leak matrix: every route, as every kind of viewer');
 
   Object.values(streams).forEach((st) => st.close());
   server.close();
+}
+
+
+head('what a watch may report');
+{
+  const now = 1_800_000_000;
+  const ok = (fix) => fromDevice(fix, { owner: '42', name: 'Ada', now });
+  const good = ok({ lat: 36.3, lon: 59.6, accuracy: 7 });
+  t('a plain fix is a position', good.position && good.position.id === '42' && good.position.at === now, good);
+  t('live for a while by default', good.position.liveUntil === now + 900);
+  t('milliseconds are understood as the mistake they usually are',
+    ok({ lat: 1, lon: 1, at: (now - 10) * 1000 }).position.at === now - 10);
+  t('an hour from now is refused', ok({ lat: 1, lon: 1, at: now + 3600 }).error === 'from the future');
+  t('a minute of clock drift is not', Boolean(ok({ lat: 1, lon: 1, at: now + 30 }).position));
+  t('yesterday-and-then-some is too old', ok({ lat: 1, lon: 1, at: now - 90_000 }).error === 'too old');
+  t('0,0 is a GPS without a fix', ok({ lat: 0, lon: 0 }).error === 'no fix yet');
+  t('an absurd accuracy is refused', ok({ lat: 1, lon: 1, accuracy: 99999 }).error === 'accuracy out of range');
+  t('a session end is capped at a day', ok({ lat: 1, lon: 1, until: now + 10 * 86400 }).position.liveUntil === now + 86400);
+  t('a stop keeps the place and ends live',
+    ok({ lat: 1, lon: 1, stopped: true }).position.liveUntil === null && ok({ lat: 1, lon: 1, stopped: true }).position.stopped === true);
+  t('one fix, a list, or {fixes} are all understood',
+    readFixes({ lat: 1 }).length === 1 && readFixes([{}, {}]).length === 2 && readFixes({ fixes: [{}] }).length === 1);
+}
+
+head('pairing codes');
+{
+  let clock = 0;
+  const codes = makeCodes({ life: 1000, perAddress: 2, globalFailures: 100, now: () => clock });
+  const c = codes.issue('7');
+  t('six digits', /^\d{6}$/.test(c), c);
+  t('asking again replaces the old one', (() => { const d = codes.issue('7'); return codes.size === 1 && d !== undefined; })());
+  const d = codes.issue('7');
+  clock = 1001;
+  t('and a code expires', codes.redeem(d, 'a') === null);
+  const limiter = makeLimiter({ limit: 2, windowMs: 100, now: () => clock });
+  t('a limiter lets the first few through', !limiter.over('x') && !limiter.over('x'));
+  t('then refuses', limiter.over('x'));
+  clock += 101;
+  t('and forgives after the window', !limiter.over('x'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

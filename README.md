@@ -516,6 +516,56 @@ their behalf — which is why it expires on its own and why revoking is one
 click. Requires PostGIS; without `DATABASE_URL` the button reports that rather
 than appearing to work.
 
+## Watches
+
+A watch with its own GPS and signal can report where it is directly — no
+phone, no Telegram — and show the circle of whoever it belongs to. The apps
+are in `watch/`; this is the part of the service they talk to.
+
+**Pairing.** Send `/pair` to the bot, or press **Pair a watch** in the Circle
+panel, and type the six-digit code into the watch. It works once, for five
+minutes. The watch gets a long token and keeps it; only its SHA-256 is stored,
+so reading the database tells you which watches exist, not how to be one.
+Remove a watch from the Circle panel and its token stops working on its next
+request. `/stop` removes every watch along with everything else.
+
+Six digits can be guessed, so guessing is what is limited: a few wrong codes
+per address, and if wrong codes arrive in a burst from everywhere, every live
+code is burned and has to be asked for again.
+
+**What a watch may do.** A watch is its owner for *reading* — the same people,
+history and fences its owner may see — and for reporting where it is. It
+cannot erase anybody, publish a path, change who sees whom, make fences or
+pair other watches. A token on a wrist can be lost with the wrist.
+
+**What it sends.** One fix, a list, or `{ "fixes": [...] }`, up to 500:
+
+```http
+POST /api/ingest
+Authorization: Bearer <device token>
+
+{ "fixes": [ { "lat": 36.2970, "lon": 59.6060, "accuracy": 6,
+               "heading": 90, "at": 1790000000, "until": 1790003600 } ] }
+```
+
+`at` is seconds (milliseconds are recognised), defaulting to now; anything more
+than a minute in the future or a day in the past is refused. `until` is when
+the watch's sharing session ends — capped at a day — and without it a watch
+counts as live for fifteen minutes after its last fix. A final fix with
+`"stopped": true` ends it. The answer says what was taken and why anything was
+not: `{ "accepted": 1, "rejected": [ { "index": 1, "error": "too old" } ] }`.
+
+A watch's fixes are its owner's position, so a watch and that person's
+Telegram sharing merge into one marker, and the noise filter, history and
+fences all apply. Fixes older than what the map already shows — a buffer
+uploaded after a stretch without signal — go into the history, so the path is
+complete, but are not replayed onto the map or through the fences: a marker
+jumping backwards, or an arrival announced hours late, would be worse than
+neither.
+
+Reading uses the same token: `GET /api/me`, `GET /api/positions`,
+`POST /api/stream`, `GET /api/history/:id`, `GET /api/fences`, and tiles.
+
 ## Telling you when somebody arrives
 
 A fence is a named circle. When somebody crosses into one or out of it, the bot

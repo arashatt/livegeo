@@ -95,3 +95,16 @@ CREATE TABLE IF NOT EXISTS invites (
 -- Whose fence this is. NULL for fences made before there were owners, which
 -- only admins see.
 ALTER TABLE fences ADD COLUMN IF NOT EXISTS owner text REFERENCES users(id) ON DELETE CASCADE;
+
+-- A watch, paired once with a code and known afterwards by its token. Only
+-- the token's SHA-256 is kept: reading this table tells you which devices
+-- exist, not how to be one.
+CREATE TABLE IF NOT EXISTS devices (
+  id           bigserial PRIMARY KEY,
+  owner        text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         text NOT NULL DEFAULT '',
+  platform     text NOT NULL DEFAULT '',
+  token_hash   text NOT NULL UNIQUE,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz
+);

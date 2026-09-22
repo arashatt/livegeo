@@ -11,6 +11,8 @@ import { parseTilePath, makeTiles } from './tiles.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget } from './login.js';
 import { makeCircles, canActFor } from './circles.js';
+import { makeDevices, makeCodes } from './devices.js';
+import { readFixes, fromDevice, MAX_BATCH } from './ingest.js';
 import { randomBytes } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
@@ -36,6 +38,30 @@ function escapeAttr(value) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// What a paired watch may read, besides tiles. Everything else is not found.
+const DEVICE_READS = new Set(['/api/me', '/api/positions', '/api/place', '/api/fences']);
+const DEVICE_READ_PREFIXES = ['/api/history/', '/api/person/', '/api/photo/'];
+
+// The body of a request as JSON, or an error saying why not. Capped, because
+// a body is whatever the other end chose to send.
+export function readJson(req, { limit = 64 * 1024 } = {}) {
+  return new Promise((resolve) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { resolve({ error: 'too large', status: 413 }); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (size > limit) return;
+      try { resolve({ body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {} }); }
+      catch { resolve({ error: 'not JSON', status: 400 }); }
+    });
+    req.on('error', () => resolve({ error: 'unreadable', status: 400 }));
+  });
+}
+
 export function staticFile(pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return null; }
@@ -57,6 +83,12 @@ export function serve(positions, config, {
   // Told when a fence is deleted, so whatever is watching them can drop the
   // state it holds about it.
   onFenceDeleted = null,
+  // Paired watches, and the codes that pair them. Absent, pairing is off.
+  devices = makeDevices(),
+  codes = makeCodes(),
+  // Given the positions a watch reported and the device, feeds them into the
+  // same pipeline as Telegram's. Returns nothing worth waiting on.
+  onIngest = null,
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -121,6 +153,7 @@ export function serve(positions, config, {
       return null;
     }) : 0;
     circles.forget(id);
+    devices.forget(id);
     for (const res of told) { try { send(res, 'forget', { id }); } catch { watchers.delete(res); } }
     return erased;
   }
@@ -183,6 +216,14 @@ export function serve(positions, config, {
   // from DASHBOARD_USERS, or /stop, takes effect on their next request rather
   // than whenever their cookie happens to expire.
   const viewerOf = (req, url) => {
+    // A watch presents its token as a bearer credential. It is its owner, for
+    // reading — see DEVICE_ROUTES for how much less than its owner it may do.
+    const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '')?.[1];
+    if (bearer) {
+      const device = devices.lookup(bearer);
+      const owner = device ? circles.viewerFor(device.owner) : null;
+      return owner ? { ...owner, via: 'device', device } : null;
+    }
     // The `config.dashboardToken &&` is load-bearing: sameToken('', '') is
     // true, so without it an unset token would admit everybody rather than
     // nobody.
@@ -264,6 +305,25 @@ export function serve(positions, config, {
 
     // Signing in necessarily happens before there is anything to sign in
     // with, so these sit ahead of the gate rather than behind it.
+    // A watch pairing itself. Before the gate, because the code *is* how it
+    // gets in; limited, because six digits can be guessed.
+    if (url.pathname === '/api/devices/pair' && req.method === 'POST') {
+      if (!devices.enabled) return json(404, { error: 'not found' });
+      const { body, error, status } = await readJson(req, { limit: 4096 });
+      if (error) return json(status, { error });
+      // Behind the edge the peer is Cloudflare; its header is only believed
+      // when the edge proved itself with the key.
+      const address = (config.edgeKey && req.headers['cf-connecting-ip']) || req.socket.remoteAddress || 'unknown';
+      const got = codes.redeem(body.code, address);
+      if (got?.limited) return json(429, { error: 'too many wrong codes — ask for a new one and try again later' });
+      if (!got) return json(404, { error: 'that code is wrong or has expired' });
+      const person = circles.viewerFor(got.owner);
+      if (!person) return json(404, { error: 'that code is wrong or has expired' });
+      const made = await devices.pair({ owner: got.owner, name: body.name, platform: body.platform });
+      log.info('devices: a watch was paired');
+      return json(200, { token: made.token, id: made.id, owner: { id: got.owner, name: circles.user(got.owner)?.name || '' } });
+    }
+
     // Signing out needs no sign-in to reach, and clears only this browser.
     if (url.pathname === '/auth/logout') {
       res.writeHead(302, {
@@ -368,7 +428,56 @@ export function serve(positions, config, {
       return;
     }
 
+    // A watch is its owner for reading and for reporting where it is, and for
+    // nothing else. A token on a wrist can be lost with the wrist; it must
+    // not be able to erase anybody, publish a path, or change a circle.
+    if (viewer.via === 'device') {
+      const allowed = url.pathname === '/api/ingest'
+        || (req.method === 'GET' && (DEVICE_READS.has(url.pathname)
+          || DEVICE_READ_PREFIXES.some((pre) => url.pathname.startsWith(pre))
+          || parseTilePath(url.pathname)))
+        || (url.pathname === '/api/stream' && req.method === 'POST');
+      if (!allowed) return notFound();
+    }
+
     const visible = () => positions.list().filter((p) => circles.canSee(viewer, p.id));
+
+    // Where a watch says it is. Only a watch may say it, and only as itself.
+    if (url.pathname === '/api/ingest' && req.method === 'POST') {
+      if (viewer.via !== 'device') return notFound();
+      const { body, error, status } = await readJson(req);
+      if (error) return json(status, { error });
+      const fixes = readFixes(body);
+      if (fixes.length > MAX_BATCH) return json(413, { error: `at most ${MAX_BATCH} fixes at a time` });
+      const now = Math.floor(Date.now() / 1000);
+      const name = circles.user(viewer.device.owner)?.name || '';
+      const accepted = [];
+      const rejected = [];
+      fixes.forEach((fix, index) => {
+        const r = fromDevice(fix, { owner: viewer.device.owner, name, now });
+        if (r.position) accepted.push(r.position); else rejected.push({ index, error: r.error });
+      });
+      devices.touch(viewer.device);
+      if (accepted.length && onIngest) await onIngest(accepted, viewer.device);
+      return json(200, { accepted: accepted.length, rejected });
+    }
+
+    // ------------------------------------------------------------ devices
+    if (url.pathname === '/api/devices/code' && req.method === 'POST') {
+      if (!devices.enabled || !viewer.id || viewer.via === 'device') return notFound();
+      return json(200, { code: codes.issue(viewer.id), expiresIn: 300 });
+    }
+    if (url.pathname === '/api/devices' && req.method === 'GET') {
+      if (!devices.enabled || !viewer.id) return notFound();
+      return json(200, { devices: devices.list(viewer.id) });
+    }
+    if (url.pathname.startsWith('/api/devices/') && req.method === 'DELETE') {
+      const id = url.pathname.slice('/api/devices/'.length);
+      const owner = devices.enabled ? devices.ownerOf(id) : undefined;
+      if (owner === undefined || !(viewer.admin || owner === viewer.id)) return notFound();
+      await devices.remove(id);
+      return json(200, { devices: devices.list(viewer.id) });
+    }
 
     // Who this is, for the page: whether to offer a circle, a share button.
     if (url.pathname === '/api/me') {

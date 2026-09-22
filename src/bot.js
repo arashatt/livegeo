@@ -41,6 +41,7 @@ const HELP = [
   '/login — a link to the map',
   '/invite — a link that lets one person see you',
   '/circle — who can see you, and whom you can see',
+  '/pair — a code to connect a watch',
   '/stop — stop being shown, and delete the path held about you',
   '/start — this message',
 ].join('\n');
@@ -273,6 +274,13 @@ export async function connect(config, {
           '',
           'They can see you until you take it back with /circle.',
         ].join('\n'));
+        return;
+      }
+      if (command.name === '/pair') {
+        const code = circle?.pair ? circle.pair(String(command.from.id)) : null;
+        await say(command.chat, code
+          ? `Enter ${code.slice(0, 3)} ${code.slice(3)} in the livegeo app on your watch. It works once, for five minutes.`
+          : 'Pairing a watch needs the database this service is running without.');
         return;
       }
       if (command.name === '/circle') {

@@ -39,6 +39,10 @@ jobs:
             await import('./src/mtproto.js');
             await import('./src/bot.js');
             await import('./src/login.js');
+            await import('./src/circles.js');
+            await import('./src/devices.js');
+            await import('./src/ingest.js');
+            await import('./src/fences.js');
             console.log('all modules load');
           "
 

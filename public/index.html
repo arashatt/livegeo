@@ -116,6 +116,7 @@
   #circle .invite input{flex:1;min-width:0;font:inherit;font-size:.8rem;padding:.3rem .45rem;
                         border:1px solid var(--hairline);border-radius:.35rem;background:var(--paper);color:var(--ink)}
   #circle .fine{color:var(--quiet);font-size:.78rem;margin-top:.5rem}
+  #circle .code{font:600 1.6rem/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;margin:.4rem 0}
   header .spacer{flex:1}
   header a.ghost{text-decoration:none;color:inherit}
 </style>
@@ -206,7 +207,25 @@
       + '<div id="invitebox"></div>'
       + '<h2>You can see</h2>'
       + (rows(c.iCanSee, 'Stop', '/api/circle/owner/') || '<p class="none">Nobody has invited you yet.</p>')
-      + '<p class="fine">Seeing is one way: somebody seeing you does not let you see them.</p>';
+      + '<p class="fine">Seeing is one way: somebody seeing you does not let you see them.</p>'
+      + '<h2>Watches</h2><div id="devices"><p class="none">…</p></div>'
+      + '<button class="ghost" id="mkcode">Pair a watch</button><div id="codebox"></div>';
+    loadDevices();
+  }
+
+  function loadDevices() {
+    fetch('/api/devices', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var box = document.getElementById('devices');
+        if (!box) return;
+        box.innerHTML = d && d.devices.length
+          ? d.devices.map(function (w) {
+              return '<div class="row"><span>' + esc(w.name || w.platform || 'A watch') + '</span>'
+                + '<button class="ghost" data-unpair="' + esc(w.id) + '">Remove</button></div>';
+            }).join('')
+          : '<p class="none">None paired.</p>';
+      });
   }
 
   function openCircle() {
@@ -253,6 +272,23 @@
         })
         .catch(function () {})
         .then(function () { e.target.disabled = false; });
+      return;
+    }
+    var unpair = e.target.closest && e.target.closest('[data-unpair]');
+    if (unpair) {
+      fetch('/api/devices/' + encodeURIComponent(unpair.getAttribute('data-unpair')), { method: 'DELETE' })
+        .then(loadDevices);
+      return;
+    }
+    if (e.target.id === 'mkcode') {
+      fetch('/api/devices/code', { method: 'POST' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          document.getElementById('codebox').innerHTML = d
+            ? '<div class="code">' + esc(d.code.slice(0, 3) + ' ' + d.code.slice(3)) + '</div>'
+              + '<p class="fine">Type this into the livegeo app on your watch. It works once, for five minutes. The watch will see what you see, and report where it is as you.</p>'
+            : '<p class="none">Pairing needs the database.</p>';
+        });
       return;
     }
     if (e.target.id === 'copyinvite') {
