@@ -637,6 +637,39 @@ The logic — client, outbox, sessions, cadence, tile maths — is plain Kotlin 
 client against a real server:
 `LIVEGEO_TEST_SERVER=http://… LIVEGEO_TEST_CODE=123456 ./gradlew :core:test`.
 
+### Apple Watch
+
+`watch/apple` — a standalone watchOS 10 app in SwiftUI: no iPhone app beside
+it. The same things as the Galaxy Watch: share for an hour, four hours or
+until you stop; your circle with distance and how long ago; tap someone for a
+map (MapKit). Sharing keeps going with your wrist lowered, for as long as the
+session you chose. The token is kept in the Keychain, since to the server it
+*is* the watch.
+
+**Getting it onto a watch** needs a Mac with Xcode and an Apple ID:
+
+```sh
+brew install xcodegen
+cd watch/apple
+xcodegen generate                 # makes Livegeo.xcodeproj from project.yml
+open Livegeo.xcodeproj
+```
+
+In Xcode set your team under *Signing & Capabilities*, set `LIVEGEO_SERVER`
+under *Build Settings* to your deployment's URL, pick your watch as the
+destination and run. A free Apple ID installs for seven days at a time;
+TestFlight or the App Store needs the paid developer programme.
+
+The *Watch apps* workflow proves it builds on every change, on a Mac runner,
+unsigned. The logic is a Swift package in `watch/apple/Core` whose tests run
+there too, holding it to the same rules as the Galaxy Watch's Kotlin core —
+and, with `LIVEGEO_TEST_SERVER` and `LIVEGEO_TEST_CODE` set, against a real
+server.
+
+**Neither watch app has been run on a real watch yet.** Both compile, and
+their logic is tested; how they behave on a wrist — battery, background
+delivery, the permission prompts — is the part only hardware can show.
+
 ## Telling you when somebody arrives
 
 A fence is a named circle. When somebody crosses into one or out of it, the bot

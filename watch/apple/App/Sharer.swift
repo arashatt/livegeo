@@ -68,7 +68,7 @@ final class Sharer: ObservableObject {
             } catch {
                 // The stream ended — location turned off, or permission taken
                 // back. Sharing cannot continue without it.
-                await self?.stop()
+                self?.stop()
             }
         }
         ending?.cancel()
@@ -76,7 +76,7 @@ final class Sharer: ObservableObject {
             ending = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(left) * 1_000_000_000)
                 guard !Task.isCancelled else { return }
-                await self?.stop()
+                self?.stop()
             }
         }
     }
