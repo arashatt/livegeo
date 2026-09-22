@@ -6,6 +6,9 @@
 //   app   the Android and Wear OS layer around it: screens, the location
 //         service, permissions. Needs the SDK, so it is only included where
 //         one is installed — which CI always has.
+//
+// The plugins are declared at the root so they share a classloader, which
+// means configuring even :core alone needs Google's Maven repository.
 pluginManagement {
     repositories {
         google {

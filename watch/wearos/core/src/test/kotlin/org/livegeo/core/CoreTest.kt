@@ -90,7 +90,7 @@ class OutboxTest {
         val box = Outbox()
         (1L..3L).forEach { box.add(fix(1000 + it)) }
         val sent = mutableListOf<Fix>()
-        assertTrue(box.drain(now = 1010) { Result.failure(Failure.Offline(Exception("tunnel"))) }.isFailure)
+        assertTrue(box.drain(now = 1010) { Result.failure<Unit>(Failure.Offline(Exception("tunnel"))) }.isFailure)
         assertEquals(3, box.size, "a failed send keeps everything")
         assertEquals(3, box.drain(now = 1010) { sent += it; Result.success(Unit) }.getOrThrow())
         assertEquals(listOf(1001L, 1002L, 1003L), sent.map { it.at }, "oldest first, with the times they were taken")
@@ -101,7 +101,7 @@ class OutboxTest {
         val box = Outbox(batch = 2)
         (1L..5L).forEach { box.add(fix(it)) }
         var calls = 0
-        val r = box.drain(now = 10) { calls += 1; if (calls == 2) Result.failure(Exception("dropped")) else Result.success(Unit) }
+        val r = box.drain(now = 10) { calls += 1; if (calls == 2) Result.failure<Unit>(Exception("dropped")) else Result.success(Unit) }
         assertTrue(r.isFailure)
         assertEquals(3, box.size, "the first batch went; the second and third wait")
     }
