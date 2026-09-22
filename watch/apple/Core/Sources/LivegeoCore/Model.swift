@@ -59,8 +59,12 @@ public struct Person: Equatable, Identifiable, Sendable, Decodable {
     public var accuracy: Double?
     public var at: Int64
     public var live: Bool
+    /// Inside one of their private places: `lat`/`lon` are the place's centre
+    /// and `accuracy` its radius, never where they are in it. The server never
+    /// sends that, so there is nothing more exact to show.
+    public var hidden: Bool
 
-    enum CodingKeys: String, CodingKey { case id, name, latitude, longitude, accuracy, at, live }
+    enum CodingKeys: String, CodingKey { case id, name, latitude, longitude, accuracy, at, live, hidden }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -73,10 +77,12 @@ public struct Person: Equatable, Identifiable, Sendable, Decodable {
         accuracy = try c.decodeIfPresent(Double.self, forKey: .accuracy)
         at = try c.decodeIfPresent(Int64.self, forKey: .at) ?? 0
         live = try c.decodeIfPresent(Bool.self, forKey: .live) ?? false
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
     }
 
-    public init(id: String, name: String, lat: Double?, lon: Double?, accuracy: Double?, at: Int64, live: Bool) {
+    public init(id: String, name: String, lat: Double?, lon: Double?, accuracy: Double?, at: Int64, live: Bool, hidden: Bool = false) {
         self.id = id; self.name = name; self.lat = lat; self.lon = lon; self.accuracy = accuracy; self.at = at; self.live = live
+        self.hidden = hidden
     }
 }
 

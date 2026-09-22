@@ -30,6 +30,15 @@ final class WireTests: XCTestCase {
         XCTAssertTrue(people[0].live)
         XCTAssertNil(people[1].lat)
         XCTAssertNil(people[1].accuracy)
+        XCTAssertFalse(people[0].hidden, "anybody not said to be hidden is where they are")
+    }
+
+    func testSomebodyInsideAPrivatePlaceSaysSo() throws {
+        struct Body: Decodable { let people: [Person] }
+        let json = #"{"people":[{"id":"3","name":"Grace","latitude":36.3,"longitude":59.6,"accuracy":500,"at":100,"live":true,"hidden":true}]}"#
+        let grace = try JSONDecoder().decode(Body.self, from: Data(json.utf8)).people[0]
+        XCTAssertTrue(grace.hidden)
+        XCTAssertEqual(grace.accuracy, 500, "the radius of the place, not of a fix")
     }
 }
 

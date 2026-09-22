@@ -49,6 +49,7 @@ import org.livegeo.core.Duration
 import org.livegeo.core.Failure
 import org.livegeo.core.Geo
 import org.livegeo.core.Person
+import org.livegeo.core.Tiles
 import org.livegeo.core.Words
 
 class MainActivity : ComponentActivity() {
@@ -237,7 +238,11 @@ fun HomeScreen(onOpen: (Person) -> Unit, onUnpaired: () -> Unit) {
             item { Text("Nobody else yet. /invite in the bot adds people.", textAlign = TextAlign.Center) }
         }
         items(others) { p ->
-            val away = if (me?.lat != null && me.lon != null && p.lat != null && p.lon != null) {
+            // Somebody inside a private place is not at a point, so there is no
+            // distance to give; saying where they are not would be a guess.
+            val away = if (p.hidden) {
+                "somewhere private · "
+            } else if (me?.lat != null && me.lon != null && p.lat != null && p.lon != null) {
                 Words.distance(Geo.metres(me.lat!!, me.lon!!, p.lat!!, p.lon!!)) + " · "
             } else ""
             Chip(
@@ -265,10 +270,15 @@ private fun ShareChip(label: String, onClick: () -> Unit) = Chip(
 fun PersonScreen(person: Person) {
     Box(Modifier.fillMaxSize()) {
         if (person.lat != null && person.lon != null) {
-            TileMap(person.lat!!, person.lon!!)
+            // Inside a private place: the area they are somewhere in, zoomed
+            // out until it fits, rather than a pin on its middle.
+            val area = if (person.hidden) person.accuracy else null
+            val zoom = if (area != null) Tiles.zoomToFit(person.lat!!, area, pixels = 150.0) else 15
+            TileMap(person.lat!!, person.lon!!, zoom = zoom, area = area)
         }
         Text(
-            person.name.ifBlank { person.id } + "\n" + Words.ago(Livegeo.now() - person.at),
+            person.name.ifBlank { person.id } + "\n" + (if (person.hidden) "somewhere private · " else "") +
+                Words.ago(Livegeo.now() - person.at),
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
             textAlign = TextAlign.Center,
         )

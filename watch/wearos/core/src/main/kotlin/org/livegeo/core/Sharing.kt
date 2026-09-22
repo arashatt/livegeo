@@ -101,6 +101,21 @@ object Tiles {
         return Spot(x, y, (xf - x) * size, (yf - y) * size)
     }
 
+    /** Ground metres per tile pixel at [lat] and [zoom]: how big a circle of metres is on screen. */
+    fun metresPerPixel(lat: Double, zoom: Int, size: Int = 256): Double =
+        40_075_016.686 * cos(lat * PI / 180) / (size * 2.0.pow(zoom))
+
+    /**
+     * The closest zoom, from [closest] outwards, at which a circle of [radius]
+     * metres drawn at [scale] is at most [pixels] from its centre to its edge
+     * — so a private place fits on the screen that shows it.
+     */
+    fun zoomToFit(lat: Double, radius: Double, pixels: Double, scale: Double = 1.5, closest: Int = 16, furthest: Int = 3): Int {
+        var zoom = closest
+        while (zoom > furthest && radius / metresPerPixel(lat, zoom) * scale > pixels) zoom--
+        return zoom
+    }
+
     /** The latitude at the top edge of tile row [y] — used by the tests to check [spot]. */
     fun latitudeOfRow(y: Int, zoom: Int): Double {
         val n = PI - 2.0 * PI * y / 2.0.pow(zoom)

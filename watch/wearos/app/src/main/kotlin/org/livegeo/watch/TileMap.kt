@@ -31,7 +31,7 @@ import java.net.URL
  * the server already has the tiles, cached, behind the same token.
  */
 @Composable
-fun TileMap(lat: Double, lon: Double, zoom: Int = 15) {
+fun TileMap(lat: Double, lon: Double, zoom: Int = 15, area: Double? = null) {
     val context = LocalContext.current
     val spot = remember(lat, lon, zoom) { Tiles.spot(lat, lon, zoom) }
     var tiles by remember { mutableStateOf<Map<Pair<Int, Int>, ImageBitmap>>(emptyMap()) }
@@ -77,8 +77,16 @@ fun TileMap(lat: Double, lon: Double, zoom: Int = 15) {
                 dstSize = IntSize(tile, tile),
             )
         }
-        // The person: the same green dot as on the dashboard.
-        drawCircle(Color.White, radius = 9.dp.toPx(), center = Offset(cx, cy))
-        drawCircle(Color(0xFF0A7D33), radius = 9.dp.toPx(), center = Offset(cx, cy), style = Stroke(3.dp.toPx()))
+        if (area != null) {
+            // Somewhere inside a private place: the place, drawn as the soft
+            // area the dashboard shows, and no dot, because there is no point.
+            val r = (area / Tiles.metresPerPixel(lat, zoom) * scale).toFloat()
+            drawCircle(Color(0x400A7D33), radius = r, center = Offset(cx, cy))
+            drawCircle(Color(0xA00A7D33), radius = r, center = Offset(cx, cy), style = Stroke(2.dp.toPx()))
+        } else {
+            // The person: the same green dot as on the dashboard.
+            drawCircle(Color.White, radius = 9.dp.toPx(), center = Offset(cx, cy))
+            drawCircle(Color(0xFF0A7D33), radius = 9.dp.toPx(), center = Offset(cx, cy), style = Stroke(3.dp.toPx()))
+        }
     }
 }

@@ -60,6 +60,7 @@ object Wire {
                 accuracy = if (p.isNull("accuracy") || !p.has("accuracy")) null else p.optDouble("accuracy"),
                 at = p.optLong("at", 0),
                 live = p.optBoolean("live", false),
+                hidden = p.optBoolean("hidden", false),
             )
         }
     }

@@ -26,6 +26,12 @@ data class Person(
     val accuracy: Double?,
     val at: Long,
     val live: Boolean,
+    /**
+     * Inside one of their private places: [lat]/[lon] are the place's centre
+     * and [accuracy] its radius, never where they are in it. The server never
+     * sends that, so there is nothing more exact to show.
+     */
+    val hidden: Boolean = false,
 )
 
 data class Paired(val token: String, val deviceId: Long, val ownerId: String, val ownerName: String)

@@ -37,6 +37,16 @@ class WireTest {
         assertNull(people[1].accuracy)
     }
 
+    @Test fun `somebody inside a private place says so`() {
+        val people = Wire.people(
+            """{"people":[{"id":"3","name":"Grace","latitude":36.3,"longitude":59.6,"accuracy":500,"at":100,"live":true,"hidden":true},
+                           {"id":"2","name":"Ada","latitude":36.4,"longitude":59.6,"at":100,"live":true}]}""",
+        )
+        assertTrue(people[0].hidden)
+        assertEquals(500.0, people[0].accuracy)
+        assertFalse(people[1].hidden, "anybody else is where they are")
+    }
+
     @Test fun `a pairing answer gives the token and whose watch it is`() {
         val p = Wire.paired("""{"token":"t0k","id":3,"owner":{"id":"42","name":"Ada"}}""")
         assertEquals(Paired("t0k", 3, "42", "Ada"), p)
@@ -174,6 +184,15 @@ class SharingTest {
     @Test fun `metres agree with the server's formula`() {
         // One degree of latitude, about 111.2 km — the same check the server's tests make.
         assertEquals(111_195.0, Geo.metres(36.0, 59.0, 37.0, 59.0), 50.0)
+    }
+
+    @Test fun `a private place is drawn the size it is, and fits the screen`() {
+        // At the equator a zoom-0 tile pixel is 156.5 km; at 60° half that.
+        assertEquals(156_543.03, Tiles.metresPerPixel(0.0, 0), 0.01)
+        assertEquals(78_271.5, Tiles.metresPerPixel(60.0, 0), 0.1)
+        // In Mashhad, 400 m fits within 150 px at zoom 14 and 5 km at zoom 11.
+        assertEquals(14, Tiles.zoomToFit(36.3, 400.0, pixels = 150.0))
+        assertEquals(11, Tiles.zoomToFit(36.3, 5000.0, pixels = 150.0))
     }
 
     @Test fun `a point lands in the right tile, at the right place in it`() {

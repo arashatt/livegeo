@@ -197,7 +197,11 @@ struct HomeView: View {
 
     private func detail(_ p: Person, me: Person?) -> String {
         var parts: [String] = []
-        if let a = me?.lat, let b = me?.lon, let c = p.lat, let d = p.lon {
+        // Somebody inside a private place is not at a point, so there is no
+        // distance to give; saying where they are not would be a guess.
+        if p.hidden {
+            parts.append("somewhere private")
+        } else if let a = me?.lat, let b = me?.lon, let c = p.lat, let d = p.lon {
             parts.append(Words.distance(Geo.metres(a, b, c, d)))
         }
         parts.append(Words.ago(now - p.at))
@@ -214,10 +218,20 @@ struct PersonView: View {
     var body: some View {
         if let lat = person.lat, let lon = person.lon {
             let here = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-            Map(initialPosition: .region(MKCoordinateRegion(center: here, latitudinalMeters: 800, longitudinalMeters: 800))) {
-                Marker(person.name.isEmpty ? person.id : person.name, coordinate: here)
+            // Inside a private place: the area they are somewhere in, with room
+            // around it, rather than a pin on its middle.
+            let radius = person.hidden ? (person.accuracy ?? 500) : 0
+            let span = max(800, radius * 2.8)
+            Map(initialPosition: .region(MKCoordinateRegion(center: here, latitudinalMeters: span, longitudinalMeters: span))) {
+                if person.hidden {
+                    MapCircle(center: here, radius: radius)
+                        .foregroundStyle(.green.opacity(0.25))
+                        .stroke(.green.opacity(0.6), lineWidth: 2)
+                } else {
+                    Marker(person.name.isEmpty ? person.id : person.name, coordinate: here)
+                }
             }
-            .navigationTitle(Words.ago(Clock.now() - person.at))
+            .navigationTitle(person.hidden ? "Somewhere private" : Words.ago(Clock.now() - person.at))
         } else {
             Text("No position yet")
         }
