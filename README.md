@@ -327,6 +327,10 @@ the `≈` goes away.
 Shared paths keep their times too. A share made before times were recorded
 still opens, and says "time not recorded" rather than inventing one.
 
+Where a stretch was hidden — somebody inside a [private place](#private-places)
+— the path has a gap, and hovering over the gap gives no time: nothing was
+travelled in view there to read one from.
+
 ## How live locations actually work
 
 A live location is **one message that its sender keeps editing**. So:
@@ -528,9 +532,10 @@ section is most of what a renderer needs anyway.
 
 ## Handing a path to somebody
 
-Clicking a person opens their card; if they have gone anywhere, it offers a
-link. Anyone with that link sees that one path on a map, without the dashboard
-token.
+Clicking yourself opens your card; if you have gone anywhere, it offers a link.
+Anyone with that link sees that one path on a map, without the dashboard token.
+It is your own path or nobody's — an admin can share anybody's — because being
+able to see somebody is not their consent to have where they went published.
 
 It is a **frozen copy**, not a window. The link shows what had been travelled
 at the moment of sharing and does not keep following the person afterwards,
@@ -538,16 +543,81 @@ which is the difference between sharing a walk and handing over a tracker. It
 expires after `SHARE_TTL` — a week by default — and the card can revoke it
 before that.
 
+It never shows where the path really starts or ends. A path usually starts or
+ends at somebody's door, so a random 200–500 m comes off each end of every
+share, and anything inside one of your [private places](#private-places) is
+taken out — when the link is made and again every time it is opened, so hiding
+a place later covers links you have already sent. The page says the ends are
+left out, draws each end fading away rather than stopping at a point that
+would look like the truth, and offers the path as a GPX file.
+
 The link admits exactly three things: the viewer page, the one path behind it,
 and the map tiles that page draws on. It is not a way into the dashboard, the
 positions, or anybody else's path, and there are tests that say so.
 
-Worth being deliberate about, because this is the one feature here that hands
-somebody else's movements to a third party. The person walking agreed to share
-a live location in a chat. A link is a further step, and it is yours to take on
-their behalf — which is why it expires on its own and why revoking is one
-click. Requires PostGIS; without `DATABASE_URL` the button reports that rather
-than appearing to work.
+Requires PostGIS; without `DATABASE_URL` the button reports that rather than
+appearing to work.
+
+## Private places
+
+The people who can see you do not need to know where you live. A private place
+is a circle you draw — **Circle → Private places → Hide a place**, then click
+the spot — and while you are inside it, your circle sees a soft, slowly
+breathing blur with your name on it instead of you: the place, not the point.
+
+That is literal. The server does not send your position and leave the page to
+blur it; to anybody who may see you but is not you or an admin, it sends the
+place's centre and radius instead. There is nothing exact to find in what their
+page received. The same goes for the list, the stream, your history, a watch
+paired to somebody in your circle, and share links. Your path breaks where it
+goes into the place and starts again where it comes out, fading at each end,
+and hovering never reads a time across the gap.
+
+You see yourself exactly, and so do admins (`DASHBOARD_USERS` and the shared
+token): they run the database, and hiding you from them on the map would be
+theatre.
+
+**The circle is not centred on your door.** The known way to beat privacy
+zones is to fit a circle to where somebody's paths stop; a few trips give away
+its centre, which is their front door. So the server keeps a centre moved at
+random by up to half the radius from the spot you clicked, and throws the spot
+away. Fitting the circle finds only the moved centre, and your door could be
+anywhere within half the radius of it, all of it equally likely. Everything
+within half the radius of the spot you clicked is hidden whichever way the
+offset fell — which is why your own place is drawn a little off-centre.
+
+**Arrival alerts respect it.** A fence crossing that happens inside your private
+place is told only to you and admins. Otherwise somebody could drop a 25 m
+fence on a guessed doorstep and learn exactly what the blur is hiding.
+
+What it cannot do:
+
+- It hides *where*, not *whether*: your circle sees you go into the blur and
+  come out of it.
+- The street you always walk home along still points into the blur. A bigger
+  radius buys more doubt.
+- What was already sent stays sent. Maps open when you make a place are told to
+  forget you and draw you again, but yesterday's screenshot is not recalled.
+
+A place's radius is anything from 200 m to 5 km, and you can have ten. Like
+everything else, they go with you on `/stop`.
+
+## Taking a path with you (GPX)
+
+Your own card has **A day as GPX**: pick a day and Download gives your path for
+it as a GPX 1.1 file — the format Strava, Garmin Connect, Komoot and OsmAnd import.
+The day runs midnight to midnight where you are, and the file is named for it.
+It is your own path, or an admin's export: your circle sees your path on the
+map, but a file made to be kept is for the person who walked it.
+
+A pause of more than ten minutes starts a new segment, so the morning's walk
+and the evening's drive are not joined by a straight line that an importer
+would count as distance. The file has the fixes the service recorded, so it is
+exactly as detailed as the history — see «Why the path is not every reading».
+
+Over HTTP: `GET /api/gpx/<your id>?from=<epoch>&to=<epoch>`, a week at most. A
+share link offers its path the same way, at `/api/shared/<token>?format=gpx`.
+Requires PostGIS.
 
 ## Watches
 
@@ -598,6 +668,10 @@ neither.
 
 Reading uses the same token: `GET /api/me`, `GET /api/positions`,
 `POST /api/stream`, `GET /api/history/:id`, `GET /api/fences`, and tiles.
+
+A watch sees what its owner sees, private places included: somebody inside one
+is listed as *somewhere private*, with no distance, and their map shows the
+area, not a pin.
 
 ### Galaxy Watch
 
@@ -906,6 +980,8 @@ are, which is enough for a uptime check.
 | `src/mtproto.js` | the only file that talks to Telegram; connection and event wiring |
 | `src/positions.js` | turning an update into a position, and holding them; pure, fully tested |
 | `src/server.js` | the dashboard, its JSON, and the SSE stream |
+| `src/zones.js` | private places: what a circle is shown instead of where somebody is; pure, fully tested |
+| `src/gpx.js` | a path as a GPX file; pure, fully tested |
 | `src/config.js` | environment, checked once at startup |
 | `public/index.html` | the map: Leaflet, OpenStreetMap tiles, one EventSource |
 | `bin/login.mjs` | the one interactive step |
