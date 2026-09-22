@@ -1722,6 +1722,118 @@ head('private places and Passive, on the wire');
   server.close();
 }
 
+head('stars: who has you open, told to you and nobody else');
+{
+  const db = {
+    users: [{ id: '1', name: 'Admin', username: '' }, { id: '2', name: 'Ada', username: '' },
+      { id: '3', name: 'Grace', username: '' }, { id: '4', name: 'Hopper', username: '' }],
+    grants: [{ owner: '3', viewer: '2' }, { owner: '3', viewer: '4' }],   // Grace lets Ada and Hopper see her
+    devices: [], next: 1,
+  };
+  const geo = {
+    enabled: () => true,
+    listUsers: async () => db.users,
+    listGrants: async () => db.grants,
+    upsertUser: async () => true,
+    addGrant: async () => true,
+    removeGrant: async (o, v) => { db.grants = db.grants.filter((g) => !(g.owner === o && g.viewer === v)); return 1; },
+    historyOf: async () => [],
+    listFences: async () => [],
+    listDevices: async () => db.devices,
+    createDevice: async ({ owner, name, platform, tokenHash }) => { const id = db.next++; db.devices.push({ id, owner, name, platform, token_hash: tokenHash }); return id; },
+    deleteDevice: async () => 1,
+    touchDevice: async () => {},
+  };
+  const botToken = '123:stars';
+  const circles = makeCircles({ geo, admins: ['1'] });
+  await circles.load();
+  const devices = makeDevices({ geo, log: { info() {}, error() {} } });
+  await devices.load();
+  const store = new Positions({ minMove: 1 });
+  const now = Math.floor(Date.now() / 1000);
+  store.update({ id: '3', name: 'Grace', latitude: 36.3, longitude: 59.6, accuracy: 5, at: now, liveUntil: now + 600 });
+  const { server, revoke } = serve(store, {
+    dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1',
+  }, { geo, circles, devices, codes: makeCodes(), links: makeLinks(), log: { info() {}, error() {} } });
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = {
+    token: { cookie: 'tll_token=tok' },
+    ...Object.fromEntries(['1', '2', '3', '4'].map((id) =>
+      [id, { cookie: `tll_session=${encodeURIComponent(mint(id, { botToken }))}` }])),
+  };
+  const open = async (who) => {
+    const res = await fetch(`${base}/api/stream`, { method: 'POST', headers: as[who] });
+    const seen = [];
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    (async () => {
+      for (;;) {
+        const step = await reader.read().catch(() => ({ done: true }));
+        if (step.done) return;
+        buf += dec.decode(step.value, { stream: true });
+        const parts = buf.split('\n\n'); buf = parts.pop();
+        for (const c of parts) seen.push({ ev: /event: (\w+)/.exec(c)?.[1], data: JSON.parse(/data: (.*)/.exec(c)?.[1] || '{}') });
+      }
+    })();
+    return { seen, close: () => reader.cancel().catch(() => {}) };
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 150));
+  const latest = (s) => s.seen.filter((e) => e.ev === 'stars').pop()?.data
+    ?? s.seen.find((e) => e.ev === 'hello')?.data.stars;
+
+  const grace = await open('3');
+  await settle();
+  t('Grace opens her map with nobody looking', latest(grace).count === 0, latest(grace));
+  const ada = await open('2');
+  await settle();
+  t('Ada opening hers is one star on Grace’s', latest(grace).count === 1 && latest(grace).who.join() === 'Ada', latest(grace));
+  const adaAgain = await open('2');
+  await settle();
+  t('a second tab of Ada’s is still one star', latest(grace).count === 1);
+  t('and was not announced again', grace.seen.filter((e) => e.ev === 'stars').length === 1);
+  const admin = await open('1');
+  const token = await open('token');
+  await settle();
+  t('admins count, by name, and the shared key as what it is',
+    latest(grace).count === 3 && latest(grace).who.includes('Admin') && latest(grace).who.includes('someone with the admin key'),
+    latest(grace));
+  t('Grace looking at her own map is not a star', !latest(grace).who.includes('Grace'));
+  t('Ada is never told who is looking at Grace',
+    ada.seen.filter((e) => e.ev === 'stars').every((e) => !e.data.who.includes('Ada')) && latest(ada).who.join() !== latest(grace).who.join());
+  t('Ada’s own stars are hers: Grace cannot see Ada, so she is not among them', !latest(ada).who.includes('Grace'), latest(ada));
+
+  const me = await (await fetch(`${base}/api/me`, { headers: as['3'] })).json();
+  t('/api/me carries the count', me.stars.count === 3);
+  const list = await (await fetch(`${base}/api/positions`, { headers: as['3'] })).json();
+  t('and so does the list of positions', list.stars.count === 3);
+
+  // A watch, which asks rather than listens.
+  const code = (await (await fetch(`${base}/api/devices/code`, { method: 'POST', headers: as['4'] })).json()).code;
+  const paired = await (await fetch(`${base}/api/devices/pair`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, name: 'Watch', platform: 'wearos' }),
+  })).json();
+  await fetch(`${base}/api/positions`, { headers: { authorization: `Bearer ${paired.token}` } });
+  await settle();
+  t('Hopper’s watch asking is a star, and says it is a watch', latest(grace).who.includes('Hopper’s watch'), latest(grace));
+  const onWrist = await (await fetch(`${base}/api/positions`, { headers: { authorization: `Bearer ${paired.token}` } })).json();
+  t('the watch gets its owner’s own stars with the list', onWrist.stars && typeof onWrist.stars.count === 'number');
+
+  ada.close(); adaAgain.close();
+  await settle();
+  t('closing Ada’s tabs takes her star away', !latest(grace).who.includes('Ada'), latest(grace));
+  const adaBack = await open('2');
+  await settle();
+  t('and opening one puts it back', latest(grace).who.includes('Ada'));
+  await revoke('3', '2');
+  await settle();
+  t('Grace taking Ada’s access away takes the star with it at once', !latest(grace).who.includes('Ada'), latest(grace));
+
+  [grace, adaBack, admin, token].forEach((s) => s.close());
+  server.close();
+}
+
 head('what a watch may report');
 {
   const now = 1_800_000_000;

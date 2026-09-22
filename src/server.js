@@ -163,6 +163,7 @@ export function serve(positions, config, {
     devices.forget(id);
     privacy.forget(id);
     for (const res of told) { try { send(res, 'forget', { id }); } catch { watchers.delete(res); } }
+    recount();
     return erased;
   }
 
@@ -222,6 +223,71 @@ export function serve(positions, config, {
     }
   }
 
+  // ------------------------------------------------------------ stars
+  //
+  // How many people have you open right now, and who. The map shows it as
+  // stars, the way a game shows how much attention you have drawn — except
+  // that here it is the watched person who is told, which is the point: being
+  // looked at should not be invisible to the one being looked at.
+  //
+  // Counted from what the server already knows exactly: every open stream and
+  // whose positions it may carry, plus any watch that has asked for positions
+  // in the last minute. One person with three tabs and a watch is one star.
+  const polls = new Map();       // device key -> { viewer, until }
+  const lastStars = new Map();   // person -> what their maps were last told
+  const POLL_WINDOW = 60_000;
+
+  function starsOf(person) {
+    const key = String(person);
+    const who = new Map();   // watcher -> { name, page }
+    const add = (viewer, page) => {
+      if (!circles.canSee(viewer, key)) return;
+      // Yourself, from another tab or on your own wrist, is not watching you.
+      if (viewer.id === key) return;
+      const k = viewer.id ? `id:${viewer.id}` : 'token';
+      const had = who.get(k);
+      if (had) { had.page ||= page; return; }
+      const u = viewer.id ? circles.user(viewer.id) : null;
+      who.set(k, { name: viewer.id ? (u?.name || (u?.username ? `@${u.username}` : 'someone')) : null, page });
+    };
+    for (const viewer of watchers.values()) add(viewer, true);
+    const t = Date.now();
+    for (const { viewer, until } of polls.values()) if (until > t) add(viewer, false);
+    const names = [...who.values()].map((w) => (w.name === null
+      ? 'someone with the admin key'
+      : (w.page ? w.name : `${w.name}’s watch`)));
+    return { count: names.length, who: names };
+  }
+
+  // Tells each person with a map open whenever their count changes, and
+  // nobody else: who is looking at Grace is Grace's business.
+  function recount() {
+    const open = new Set([...watchers.values()].map((v) => v.id).filter(Boolean));
+    for (const person of lastStars.keys()) if (!open.has(person)) lastStars.delete(person);
+    for (const person of open) {
+      const stars = starsOf(person);
+      const said = JSON.stringify(stars);
+      if (lastStars.get(person) === said) continue;
+      lastStars.set(person, said);
+      for (const [res, v] of watchers) {
+        if (v.id === person) { try { send(res, 'stars', stars); } catch { watchers.delete(res); } }
+      }
+    }
+  }
+
+  const notePoll = (viewer) => {
+    const key = `device:${viewer.device.id}`;
+    const fresh = !(polls.get(key)?.until > Date.now());
+    polls.set(key, { viewer, until: Date.now() + POLL_WINDOW });
+    if (fresh) recount();
+  };
+  const sweep = setInterval(() => {
+    let lapsed = false;
+    for (const [key, p] of polls) if (p.until <= Date.now()) { polls.delete(key); lapsed = true; }
+    if (lapsed) recount();
+  }, 15_000);
+  sweep.unref?.();
+
   // Passive mode ends by itself, and open maps have to hear that it has, or
   // the blur would stay until the person next moved. One timer per window,
   // re-armed after a restart for any window still running.
@@ -257,6 +323,7 @@ export function serve(positions, config, {
   // viewer's map at once; granting puts them on it.
   async function revoke(owner, viewer) {
     await circles.revoke(owner, viewer);
+    recount();
     for (const [res, v] of watchers) {
       if (v.id === String(viewer) && !circles.canSee(v, owner)) {
         try { send(res, 'forget', { id: String(owner) }); } catch { watchers.delete(res); }
@@ -266,6 +333,7 @@ export function serve(positions, config, {
 
   async function grant(owner, viewer) {
     const done = await circles.grant(owner, viewer);
+    if (done) recount();
     const p = done ? positions.get(owner) : null;
     if (p) {
       const payload = { ...p, live: isLive(p) };
@@ -690,11 +758,16 @@ export function serve(positions, config, {
         circles: circles.enabled && Boolean(viewer.id),
         // When your own Passive mode ends, so the page can count it down.
         passive: viewer.id ? privacy.passiveOf(viewer.id)?.end ?? null : null,
+        // Who has you open right now.
+        stars: viewer.id ? starsOf(viewer.id) : null,
       });
     }
 
     if (url.pathname === '/api/positions') {
-      return json(200, { people: visible() });
+      // A watch asks this every half minute while its screen is on, which is
+      // as good as a stream for knowing it is looking.
+      if (viewer.via === 'device') notePoll(viewer);
+      return json(200, { people: visible(), ...(viewer.id ? { stars: starsOf(viewer.id) } : {}) });
     }
 
     if (url.pathname === '/api/stream') {
@@ -710,13 +783,16 @@ export function serve(positions, config, {
       // HTTP/2, but a gateway is required to strip it on the way, so this is
       // tidying rather than a fix for anything.
       watchers.set(res, viewer);
-      send(res, 'hello', { people: visible() });
+      send(res, 'hello', { people: visible(), ...(viewer.id ? { stars: starsOf(viewer.id) } : {}) });
+      if (viewer.id) lastStars.set(viewer.id, JSON.stringify(starsOf(viewer.id)));
+      // Opening a map is looking at everybody on it, and they are told.
+      recount();
       // A named event rather than a bare `: comment`, which costs a few bytes
       // and buys the page the ability to tell a quiet stream from a stalled
       // one: EventSource never surfaces comments to JavaScript, so a stream
       // that silently stopped delivering looked exactly like nobody moving.
       const beat = setInterval(() => { try { send(res, 'beat', {}); } catch { /* gone */ } }, 25000);
-      req.on('close', () => { clearInterval(beat); watchers.delete(res); });
+      req.on('close', () => { clearInterval(beat); watchers.delete(res); recount(); });
       return;
     }
 
