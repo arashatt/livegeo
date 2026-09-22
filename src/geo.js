@@ -216,6 +216,12 @@ export function makeGeo({ url, log = console } = {}) {
       };
     },
 
+    async shareOwner(token) {
+      if (!pool) return null;
+      const { rows } = await pool.query('SELECT person FROM shares WHERE token = $1', [String(token)]);
+      return rows[0] ? String(rows[0].person) : null;
+    },
+
     async revokeShare(token) {
       if (!pool) return 0;
       const res = await pool.query('DELETE FROM shares WHERE token = $1', [String(token)]);
@@ -227,17 +233,24 @@ export function makeGeo({ url, log = console } = {}) {
     // The tables have been in schema.sql since PostGIS arrived and nothing
     // used them until now.
 
-    async listFences() {
+    // Everybody's fences when `owner` is undefined (an admin, or the watcher
+    // that needs all of them); otherwise only that person's. A fence is a
+    // named place in somebody's life — "home" — and is theirs, not the map's.
+    async listFences({ owner } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(
-        `SELECT id, name, ST_AsGeoJSON(area::geometry) AS geojson,
+        `SELECT id, name, owner, ST_AsGeoJSON(area::geometry) AS geojson,
                 ST_Y(ST_Centroid(area::geometry)) AS latitude,
                 ST_X(ST_Centroid(area::geometry)) AS longitude
-           FROM fences ORDER BY name`,
+           FROM fences
+          WHERE $1::text IS NULL OR owner = $1
+          ORDER BY name`,
+        [owner === undefined ? null : String(owner)],
       );
       return rows.map((r) => ({
         id: Number(r.id),
         name: r.name,
+        owner: r.owner ?? null,
         latitude: Number(r.latitude),
         longitude: Number(r.longitude),
         // GeoJSON is longitude first; the map wants latitude first.
@@ -248,15 +261,28 @@ export function makeGeo({ url, log = console } = {}) {
     // A circle, expressed as the polygon the column already expects.
     // ST_Buffer on geography takes metres, so the radius means what it says
     // without anybody choosing a projection.
-    async createFence({ name, latitude, longitude, radius }) {
+    async createFence({ name, latitude, longitude, radius, owner = null }) {
       if (!pool) return null;
       const { rows } = await pool.query(
-        `INSERT INTO fences (name, area)
-         VALUES ($1, ST_Buffer(ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)::geography)
+        `INSERT INTO fences (name, area, owner)
+         VALUES ($1, ST_Buffer(ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)::geography, $5)
          RETURNING id`,
-        [String(name), Number(longitude), Number(latitude), Number(radius)],
+        [String(name), Number(longitude), Number(latitude), Number(radius), owner === null ? null : String(owner)],
       );
       return Number(rows[0].id);
+    },
+
+    async fenceOwner(id) {
+      if (!pool) return undefined;
+      const { rows } = await pool.query('SELECT owner FROM fences WHERE id = $1', [Number(id)]);
+      // undefined: no such fence. null: an ownerless, admin-only one.
+      return rows[0] ? rows[0].owner ?? null : undefined;
+    },
+
+    async countFences(owner) {
+      if (!pool) return 0;
+      const { rows } = await pool.query('SELECT count(*) AS n FROM fences WHERE owner = $1', [String(owner)]);
+      return Number(rows[0].n);
     },
 
     async deleteFence(id) {
@@ -283,7 +309,7 @@ export function makeGeo({ url, log = console } = {}) {
       if (!pool || !Number.isFinite(lat) || !Number.isFinite(lon)) return [];
       const point = `SRID=4326;POINT(${lon} ${lat})`;
       const { rows } = await pool.query(
-        `SELECT id, name,
+        `SELECT id, name, owner,
                 ST_Intersects(area, $1::geography) AS inside,
                 ST_Distance($1::geography, ST_ExteriorRing(area::geometry)::geography) AS margin
            FROM fences`,
@@ -292,6 +318,7 @@ export function makeGeo({ url, log = console } = {}) {
       return rows.map((r) => ({
         fence: Number(r.id),
         name: r.name,
+        owner: r.owner ?? null,
         inside: r.inside === true,
         margin: Number(r.margin),
       }));
@@ -323,6 +350,66 @@ export function makeGeo({ url, log = console } = {}) {
       }));
     },
 
+    // ------------------------------------------------------------- circles
+
+    async upsertUser({ id, name = '', username = '' }) {
+      if (!pool) return false;
+      await pool.query(
+        `INSERT INTO users (id, name, username) VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, username = EXCLUDED.username`,
+        [String(id), String(name).slice(0, 200), String(username).slice(0, 64)],
+      );
+      return true;
+    },
+
+    async listUsers() {
+      if (!pool) return [];
+      const { rows } = await pool.query('SELECT id, name, username FROM users');
+      return rows.map((r) => ({ id: String(r.id), name: r.name, username: r.username }));
+    },
+
+    async listGrants() {
+      if (!pool) return [];
+      const { rows } = await pool.query('SELECT owner, viewer FROM grants');
+      return rows.map((r) => ({ owner: String(r.owner), viewer: String(r.viewer) }));
+    },
+
+    async addGrant(owner, viewer) {
+      if (!pool) return false;
+      await pool.query(
+        'INSERT INTO grants (owner, viewer) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [String(owner), String(viewer)],
+      );
+      return true;
+    },
+
+    async removeGrant(owner, viewer) {
+      if (!pool) return 0;
+      const res = await pool.query('DELETE FROM grants WHERE owner = $1 AND viewer = $2', [String(owner), String(viewer)]);
+      return res.rowCount;
+    },
+
+    async createInvite({ token, owner, ttlSeconds }) {
+      if (!pool) return false;
+      await pool.query(
+        `INSERT INTO invites (token, owner, expires_at)
+         VALUES ($1, $2, now() + make_interval(secs => $3))`,
+        [String(token), String(owner), Number(ttlSeconds)],
+      );
+      return true;
+    },
+
+    // Single use: the row is gone whether or not the invite had expired, and
+    // only a live one returns its owner.
+    async redeemInvite(token) {
+      if (!pool) return null;
+      const { rows } = await pool.query(
+        'DELETE FROM invites WHERE token = $1 RETURNING owner, expires_at > now() AS live',
+        [String(token)],
+      );
+      return rows[0] && rows[0].live ? String(rows[0].owner) : null;
+    },
+
     async historyOf(person, { limit = 500, since = null } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(
@@ -349,9 +436,12 @@ export function makeGeo({ url, log = console } = {}) {
       const { rows } = await pool.query(
         `WITH gone AS (DELETE FROM positions WHERE person = $1 RETURNING 1),
               ev   AS (DELETE FROM fence_events WHERE person = $1 RETURNING 1),
-              sh   AS (DELETE FROM shares WHERE person = $1 RETURNING 1)
+              sh   AS (DELETE FROM shares WHERE person = $1 RETURNING 1),
+              -- Grants, invites and their fences go with the user row, on
+              -- the foreign keys' cascade.
+              us   AS (DELETE FROM users WHERE id = $1 RETURNING 1)
          SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM ev)
-              + (SELECT count(*) FROM sh) AS n`,
+              + (SELECT count(*) FROM sh) + (SELECT count(*) FROM us) AS n`,
         [String(person)],
       );
       return Number(rows[0]?.n ?? 0);

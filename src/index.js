@@ -12,8 +12,10 @@ import { connect as connectAccount } from './mtproto.js';
 import { connect as connectBot } from './bot.js';
 import { makeDirectory } from './directory.js';
 import { makeGeo } from './geo.js';
-import { makeLinks, makeViewers } from './login.js';
+import { randomBytes } from 'node:crypto';
+import { makeLinks } from './login.js';
 import { makeWatcher, announce } from './fences.js';
+import { makeCircles } from './circles.js';
 
 const config = load();
 const positions = new Positions({
@@ -28,7 +30,25 @@ await geo.connect();
 // One-time sign-in links, held in memory: they live for minutes and a restart
 // losing them costs somebody one more /login.
 const links = makeLinks();
-const viewers = makeViewers(config.viewers);
+
+// Who may see whom. DASHBOARD_USERS are admins and see everyone; everybody
+// else sees themselves and whoever invited them. Needs the database — without
+// it this is the admins-only service it always was, and says so.
+const circles = makeCircles({ geo, admins: config.viewers });
+if (await circles.load().catch((e) => { console.error('circles:', e.message); return false; })) {
+  console.log('circles: on — everyone the bot meets can sign in and see their circle');
+} else {
+  console.log('circles: off without DATABASE_URL — only DASHBOARD_USERS can sign in');
+}
+
+// Known once the bot connects; invites are deep links into it.
+let inviteLink = null;
+async function makeInvite(owner) {
+  if (!inviteLink || !circles.enabled) return null;
+  const token = randomBytes(24).toString('base64url');
+  await geo.createInvite({ token, owner, ttlSeconds: 86400 });
+  return inviteLink(token);
+}
 // Set once Telegram is connected. Declared up here because the connector
 // starts listening before it returns, so a position can reach checkFences()
 // while `telegram` is still in its temporal dead zone — which would be a
@@ -39,8 +59,8 @@ let notify = null;
 // the state survives for as long as the process does.
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
-const { publish, publishFence, forget, setBot } = serve(positions, config, {
-  directory, geo, links,
+const { publish, publishFence, forget, setBot, grant, revoke } = serve(positions, config, {
+  directory, geo, links, circles, makeInvite,
   onFenceDeleted: (id) => fences.dropFence(id),
 });
 
@@ -91,20 +111,27 @@ async function checkFences(person) {
     at: person.at,
     readings,
   });
+  const ownerOf = new Map(readings.map((r) => [r.fence, r.owner]));
 
   for (const event of events) {
+    const owner = ownerOf.get(event.fence) ?? null;
     // Written down first: the record is what a restart reads to know where
     // everybody was, so losing it costs more than a missed message.
     await geo.recordFenceEvent({ person: person.id, ...event })
       .catch((e) => console.error('fence:', e && e.message ? e.message : e));
-    publishFence({ ...event, person: person.id, name: event.name });
+    publishFence({ ...event, person: person.id, name: event.name, owner });
 
     const said = announce({ who: person.name, name: event.name, entered: event.entered });
     console.log(`fence: somebody ${event.entered ? 'arrived at' : 'left'} a place`);
-    // Everyone trusted to see where people are is told. The account ingest
-    // has no way to send a message, so there it is recorded and drawn but
-    // not pushed.
-    if (notify) for (const viewer of config.viewers) await notify(viewer, said);
+    // A fence belongs to somebody, and only they are told — and only about
+    // people they may see. A fence from before there were owners belongs to
+    // the admins, as every fence used to. The account ingest has no way to
+    // send a message, so there crossings are recorded and drawn, not pushed.
+    if (!notify) continue;
+    const recipients = owner === null
+      ? config.viewers
+      : [owner].filter((id) => circles.canSee(circles.viewerFor(id), person.id));
+    for (const to of recipients) await notify(to, said);
   }
 }
 
@@ -114,16 +141,39 @@ async function checkFences(person) {
 // could still set off an alert about a place they had been.
 const onForget = async (id) => { fences.forget(id); return forget(id); };
 
-// A link is only ever made for somebody already on the list, so an unlisted
-// person is told no by the bot rather than handed a link that fails.
+// A link is only ever made for somebody who can sign in, so anyone else is
+// told no by the bot rather than handed a link that fails.
 const onLogin = (id) => {
-  if (!config.publicUrl || !viewers.has(id)) return null;
+  if (!config.publicUrl || !circles.viewerFor(id)) return null;
   return `${config.publicUrl}/auth/${links.issue(id)}`;
 };
 
+// What the bot needs to run a circle. Absent without a database, and the bot
+// then says circles are unavailable rather than pretending.
+const circle = circles.enabled ? {
+  seen: (who) => circles.seen(who),
+  invite: async (owner) => {
+    const token = randomBytes(24).toString('base64url');
+    await geo.createInvite({ token, owner, ttlSeconds: 86400 });
+    return token;
+  },
+  // Returns who made the invite, or null if it was used or expired. Your own
+  // invite returns you, so the bot can say so rather than grant nothing.
+  redeem: async (token, viewer) => {
+    const owner = await geo.redeemInvite(token);
+    if (!owner) return null;
+    if (owner !== viewer) await grant(owner, viewer);
+    return { id: owner, ...(circles.user(owner) || {}) };
+  },
+  circleOf: (id) => circles.circleOf(id),
+  // Through the server, so open maps are told as well as the database.
+  revoke: (owner, viewer) => revoke(owner, viewer),
+} : null;
+
 const telegram = config.ingest === 'bot'
-  ? await connectBot(config, { directory, onPosition, onForget, onLogin })
+  ? await connectBot(config, { directory, onPosition, onForget, onLogin, circle })
   : await connectAccount(config, { directory, onPosition });
+inviteLink = telegram.inviteLink || null;
 
 // Both connectors expose the thing the directory needs to resolve a name.
 directory.attach(telegram.client);

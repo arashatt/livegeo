@@ -62,3 +62,36 @@ CREATE INDEX IF NOT EXISTS shares_expires_idx ON shares (expires_at);
 -- When each vertex of a shared path was passed, in epoch seconds, index for
 -- index with the line. Added after shares existed; older rows have none.
 ALTER TABLE shares ADD COLUMN IF NOT EXISTS times bigint[];
+
+-- People, and who may see whom. Everyone the bot has met is a user; a grant
+-- lets `viewer` see `owner`, one way only. Deleting a user takes their grants,
+-- invites and fences with them, which is what makes /stop complete.
+CREATE TABLE IF NOT EXISTS users (
+  id         text PRIMARY KEY,
+  name       text NOT NULL DEFAULT '',
+  username   text NOT NULL DEFAULT '',
+  -- Telegram's OpenID sign-in issues a subject id scoped to the site, which
+  -- does not match the id the bot sees. Linked once, when both are known.
+  oidc_sub   text UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS grants (
+  owner      text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewer     text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner, viewer),
+  CHECK (owner <> viewer)
+);
+CREATE INDEX IF NOT EXISTS grants_viewer_idx ON grants (viewer);
+
+-- A one-time link that lets whoever opens it see the person who made it.
+CREATE TABLE IF NOT EXISTS invites (
+  token      text PRIMARY KEY,
+  owner      text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at timestamptz NOT NULL
+);
+
+-- Whose fence this is. NULL for fences made before there were owners, which
+-- only admins see.
+ALTER TABLE fences ADD COLUMN IF NOT EXISTS owner text REFERENCES users(id) ON DELETE CASCADE;

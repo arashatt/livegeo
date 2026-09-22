@@ -85,24 +85,60 @@ works. Without it `/login` has nothing to point at and says so at startup.
 then **Attach (📎) → Location → Share Live Location**. Telegram stops when the
 period they chose runs out. `/stop` removes them and deletes their path.
 
-### Signing in
+### Signing in, and who sees whom
 
-`DASHBOARD_TOKEN` is one string held by everyone who has ever been given it,
-and there is no taking it back from one person without taking it back from
-everybody. With `DASHBOARD_USERS` set you can drop it entirely:
+**Everyone the bot has met can sign in**, and sees a circle rather than the
+whole map: themselves, plus whoever has chosen to let them. Like Find My, and
+one way only — Ada letting Grace see her does not let Ada see Grace.
 
-- **Through the bot** — send `/login`, get a link, open it. The link works
-  once and expires in five minutes. This needs no domain, which is why it is
-  the one that works here today.
+- `/invite` — the bot replies with a link for one person. Whoever taps it
+  opens the bot, and can see you from then on. It works once, for a day, and
+  you are told who used it: an invite that leaked does not add anyone quietly.
+- `/circle` — who can see you and whom you can see, with a button to end
+  either. The **Circle** button on the map does the same.
+- `/login` — a link that signs you in to the map. It works once and expires in
+  five minutes.
+
+`DASHBOARD_USERS` are the **admins**: they see everyone, as before, and receive
+alerts for fences made before fences had owners. `DASHBOARD_TOKEN` still works
+and counts as an admin, so nothing set up earlier stops working.
+
+Circles need `DATABASE_URL` — grants have to outlive a restart. Without one the
+service is what it always was: admins and the token, nobody else, and it says
+so at startup.
+
+What a person can do is narrower than what they can see:
+
+| | yourself | someone you can see | anyone else |
+|---|---|---|---|
+| see on the map, history, name, photo | yes | yes | *not found* |
+| publish their path as a share link | yes | **no** | *not found* |
+| erase their history | yes | **no** | *not found* |
+
+Seeing somebody is not their consent to have their movements published, or
+erased. And somebody you may not see answers exactly like somebody who does
+not exist — the same status, the same body — so the answer cannot be used to
+find out who is here.
+
+Fences belong to whoever made them. Only the owner is alerted, and only about
+people the owner may see.
+
+Sessions are checked on **every** request, so `/stop`, removing an admin from
+`DASHBOARD_USERS`, or taking back a grant all take effect at once — including
+on a map somebody already has open, which drops the person immediately rather
+than at the next reload.
+
+The test suite includes a **leak matrix**: every route `server.js` matches, as
+an admin, as a person with a grant, and as one without, with the route list
+read from the source itself — a route added later without a decision about who
+may reach it fails the suite instead of shipping.
+
 - **The Login Widget** — the familiar *Log in with Telegram* button. It only
   works from a domain registered with BotFather (`/setdomain`), so it stays
   hidden until `BOT_DOMAIN` is set to that domain.
 
-Both end in a cookie signed with a key derived from the bot token. There is no
-session table: the allowlist is checked on **every** request, so removing an id
-from `DASHBOARD_USERS` locks that person out immediately rather than whenever
-their cookie happens to expire. Rotating `BOT_TOKEN` invalidates every session
-at once.
+Sessions are cookies signed with a key derived from the bot token, so rotating
+`BOT_TOKEN` ends every session at once.
 
 The service refuses to start with neither `DASHBOARD_TOKEN` nor
 `DASHBOARD_USERS` set. A map of where people are, with nothing deciding who may

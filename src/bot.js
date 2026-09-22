@@ -30,21 +30,73 @@ const WELCOME = [
   'Telegram stops on its own when that time runs out.',
   '',
   'While sharing, this records where you are and keeps the path you take.',
+  'Whoever runs this map can see you. Anyone else, only if you /invite them;',
+  '/circle shows who can.',
   'Send /stop to stop being shown and delete what is held about you.',
 ].join('\n');
 
 const HELP = [
   'Attach (📎) → Location → Share Live Location.',
   '',
+  '/login — a link to the map',
+  '/invite — a link that lets one person see you',
+  '/circle — who can see you, and whom you can see',
   '/stop — stop being shown, and delete the path held about you',
-  '/login — a link to the map, if you are allowed to see it',
   '/start — this message',
 ].join('\n');
 
-export function makeApi(token, { fetch: f = fetch } = {}) {
+// ------------------------------------------------------------- circles
+//
+// Pure pieces of the circle conversation, exported for the tests: what an
+// invite deep link carries, what a button press means, and what /circle
+// shows. The decisions themselves — who may see whom — live in circles.js.
+
+const INVITE_PREFIX = 'inv_';
+
+// `/start inv_abc` is what Telegram sends when somebody taps an invite deep
+// link. Returns the token, or null for a plain /start.
+export function invitePayload(command) {
+  if (!command || command.name !== '/start') return null;
+  const arg = (command.args || '').trim();
+  if (!arg.startsWith(INVITE_PREFIX)) return null;
+  const token = arg.slice(INVITE_PREFIX.length);
+  return /^[A-Za-z0-9_-]{8,64}$/.test(token) ? token : null;
+}
+
+export function inviteLink(botUsername, token) {
+  return `https://t.me/${botUsername}?start=${INVITE_PREFIX}${token}`;
+}
+
+// A button's callback data: `rm:<id>` takes back what you gave, `leave:<id>`
+// gives back what you were given. Anything else is ignored.
+export function circleAction(data) {
+  const m = /^(rm|leave):([0-9A-Za-z_-]{1,40})$/.exec(String(data || ''));
+  return m ? { kind: m[1], id: m[2] } : null;
+}
+
+const nameOf = (u) => (u && (u.name || (u.username ? '@' + u.username : ''))) || 'someone';
+
+// The /circle message: text plus one button per person, both directions.
+export function circleView({ canSeeMe = [], iCanSee = [] } = {}) {
+  const lines = [];
+  lines.push(canSeeMe.length
+    ? 'Can see you: ' + canSeeMe.map(nameOf).join(', ')
+    : 'Nobody can see you. /invite makes a link for one person.');
+  lines.push(iCanSee.length
+    ? 'You can see: ' + iCanSee.map(nameOf).join(', ')
+    : 'You cannot see anybody yet.');
+  const keyboard = [
+    ...canSeeMe.map((u) => [{ text: `Stop ${nameOf(u)} seeing me`, callback_data: `rm:${u.id}` }]),
+    ...iCanSee.map((u) => [{ text: `Stop seeing ${nameOf(u)}`, callback_data: `leave:${u.id}` }]),
+  ];
+  return { text: lines.join('\n'), reply_markup: keyboard.length ? { inline_keyboard: keyboard } : undefined };
+}
+
+export function makeApi(token, { fetch: f = fetch, base = API } = {}) {
+  const root = String(base || API).replace(/\/+$/, '');
   return {
     async call(method, body = null, { signal = undefined } = {}) {
-      const res = await f(`${API}/bot${token}/${method}`, {
+      const res = await f(`${root}/bot${token}/${method}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body || {}),
@@ -62,7 +114,7 @@ export function makeApi(token, { fetch: f = fetch } = {}) {
     // Files are fetched from a different prefix to the methods, and the path
     // comes from getFile rather than being constructible.
     async file(path) {
-      const res = await f(`${API}/file/bot${token}/${path}`);
+      const res = await f(`${root}/file/bot${token}/${path}`);
       if (!res.ok) return null;
       return Buffer.from(await res.arrayBuffer());
     },
@@ -103,8 +155,9 @@ export function commandIn(update) {
   const text = typeof message?.text === 'string' ? message.text.trim() : '';
   if (!text.startsWith('/')) return null;
   // `/stop@thebot` in a group is still /stop.
-  const word = text.split(/\s+/)[0].split('@')[0].toLowerCase();
-  return { name: word, chat: message.chat?.id, from: message.from };
+  const [first, ...rest] = text.split(/\s+/);
+  const word = first.split('@')[0].toLowerCase();
+  return { name: word, args: rest.join(' '), chat: message.chat?.id, from: message.from };
 }
 
 export async function connect(config, {
@@ -114,13 +167,16 @@ export async function connect(config, {
   // null if they are not somebody who may look. The bot does not know what
   // the list is or how a link is made; it only carries the answer.
   onLogin = null,
+  // Circles, when there is a database to keep them in: { seen, invite,
+  // redeem, circleOf, revoke }. Absent, the circle commands say so.
+  circle = null,
   directory = null,
   log = console,
   fetch: f = fetch,
   // Exposed so a test can run the loop without waiting on a real long poll.
   poll = 50,
 } = {}) {
-  const api = makeApi(config.botToken, { fetch: f });
+  const api = makeApi(config.botToken, { fetch: f, base: config.telegramApi });
 
   const me = await api.call('getMe');
   log.info(`bot: signed in as @${me.username}`);
@@ -140,11 +196,88 @@ export async function connect(config, {
     api.call('sendMessage', { chat_id: chat, text, disable_notification: true })
       .catch((e) => log.error('bot: cannot reply —', e.message));
 
+  const whoIs = (from) => ({
+    id: String(from.id),
+    name: [from.first_name, from.last_name].filter(Boolean).join(' '),
+    username: from.username || '',
+  });
+
+  async function showCircle(chat, id, edit = null) {
+    const view = circleView(circle.circleOf(id));
+    if (edit) {
+      await api.call('editMessageText', { chat_id: chat, message_id: edit, text: view.text, reply_markup: view.reply_markup })
+        .catch(() => say(chat, view.text));
+    } else {
+      await api.call('sendMessage', { chat_id: chat, text: view.text, reply_markup: view.reply_markup, disable_notification: true })
+        .catch((e) => log.error('bot: cannot reply —', e.message));
+    }
+  }
+
+  // A button under /circle. Only ever acts for the person who pressed it:
+  // `from` is Telegram's word for who that was, and a forwarded message's
+  // buttons pressed by somebody else act for them, not for its author.
+  async function pressed(query) {
+    const action = circleAction(query.data);
+    const me = String(query.from.id);
+    if (circle && action) {
+      if (action.kind === 'rm') await circle.revoke(me, action.id);
+      else await circle.revoke(action.id, me);
+    }
+    await api.call('answerCallbackQuery', { callback_query_id: query.id, text: action ? 'Done.' : '' }).catch(() => {});
+    if (circle && query.message) await showCircle(query.message.chat.id, me, query.message.message_id);
+  }
+
   async function handle(update) {
+    if (update.callback_query) {
+      if (circle && update.callback_query.from && !update.callback_query.from.is_bot) {
+        await circle.seen(whoIs(update.callback_query.from));
+      }
+      await pressed(update.callback_query);
+      return;
+    }
+
+    // Everybody the bot hears from is recorded, which is what lets them sign
+    // in and see themselves. Bots are not people.
+    const from = (update.message || update.edited_message)?.from;
+    if (circle && from && !from.is_bot) await circle.seen(whoIs(from));
+
     const command = commandIn(update);
     if (command) {
+      const token = invitePayload(command);
+      if (token) {
+        const joiner = whoIs(command.from);
+        const owner = circle ? await circle.redeem(token, joiner.id) : null;
+        if (!owner) {
+          await say(command.chat, 'That invite has been used or has expired. Ask for a new one.');
+        } else if (owner.id === joiner.id) {
+          await say(command.chat, 'That is your own invite — send it to the person who should see you.');
+        } else {
+          await say(command.chat, `You can now see ${nameOf(owner)}. /login opens the map.`);
+          // The person who made the link is told who used it: an invite that
+          // leaked should not add somebody silently.
+          await say(owner.id, `${nameOf(joiner)} can now see you. /circle to change that.`);
+        }
+        return;
+      }
       if (command.name === '/start' || command.name === '/help') {
         await say(command.chat, command.name === '/start' ? WELCOME : HELP);
+        return;
+      }
+      if (command.name === '/invite') {
+        if (!circle) { await say(command.chat, 'Sharing with other people needs the database this service is running without.'); return; }
+        const t = await circle.invite(String(command.from.id));
+        await say(command.chat, [
+          'Send this to one person you want to be able to see you. It works once, for a day:',
+          '',
+          inviteLink(me.username, t),
+          '',
+          'They can see you until you take it back with /circle.',
+        ].join('\n'));
+        return;
+      }
+      if (command.name === '/circle') {
+        if (!circle) { await say(command.chat, 'Circles need the database this service is running without.'); return; }
+        await showCircle(command.chat, String(command.from.id));
         return;
       }
       if (command.name === '/login') {
@@ -184,7 +317,7 @@ export async function connect(config, {
         inFlight = api.call('getUpdates', {
           offset,
           timeout: poll,
-          allowed_updates: ['message', 'edited_message'],
+          allowed_updates: ['message', 'edited_message', 'callback_query'],
         });
         const updates = await inFlight;
         for (const update of updates) {
@@ -227,6 +360,7 @@ export async function connect(config, {
         return false;
       }
     },
+    inviteLink: (token) => inviteLink(me.username, token),
     stop: async () => { running = false; await Promise.allSettled([done, inFlight]); },
   };
 }

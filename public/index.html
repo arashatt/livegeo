@@ -102,6 +102,22 @@
   .fencing #newfence{background:var(--ink);color:var(--paper);border-color:var(--ink)}
   .fence-label{font-size:.72rem;font-weight:600;color:var(--quiet);
                background:none;border:none;box-shadow:none;padding:0}
+  /* Who can see you. A panel over the map rather than a page: it is a thing
+     you check and close, not somewhere you go. */
+  #circle{position:fixed;top:3.4rem;right:1rem;z-index:1000;width:min(22rem,calc(100vw - 2rem));
+          background:var(--paper);border:1px solid var(--hairline);border-radius:.6rem;
+          box-shadow:0 8px 30px rgba(0,0,0,.12);padding:1rem;max-height:70svh;overflow:auto}
+  #circle h2{font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+             color:var(--quiet);margin:.9rem 0 .4rem}
+  #circle h2:first-child{margin-top:0}
+  #circle .row{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.3rem 0}
+  #circle .none{color:var(--quiet);font-size:.88rem}
+  #circle .invite{display:flex;gap:.4rem;margin-top:.5rem}
+  #circle .invite input{flex:1;min-width:0;font:inherit;font-size:.8rem;padding:.3rem .45rem;
+                        border:1px solid var(--hairline);border-radius:.35rem;background:var(--paper);color:var(--ink)}
+  #circle .fine{color:var(--quiet);font-size:.78rem;margin-top:.5rem}
+  header .spacer{flex:1}
+  header a.ghost{text-decoration:none;color:inherit}
 </style>
 </head>
 <body>
@@ -110,8 +126,12 @@
   <span class="count" id="count"></span>
   <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
   <button class="ghost" id="newfence" type="button" hidden>New fence</button>
+  <button class="ghost" id="circlebtn" type="button" hidden>Circle</button>
+  <span class="spacer"></span>
+  <a class="ghost" id="signout" href="/auth/logout" hidden>Sign out</a>
   <span class="conn" id="conn"><i></i><span>connecting…</span></span>
 </header>
+<div id="circle" hidden></div>
 <main>
   <div id="map"></div>
   <aside id="list"><p class="empty">Nobody is sharing a location yet.</p></aside>
@@ -151,6 +171,98 @@
   setTimeout(resize, 250);
 
   var people = new Map();   // id -> { data, marker, halo, path }
+
+  // Who is looking. Null until /api/me answers; the share button and the
+  // circle panel wait on it rather than guessing.
+  var me = null;
+  fetch('/api/me', { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      me = d;
+      if (!d) return;
+      document.getElementById('circlebtn').hidden = !d.circles;
+      // Only a person signed in as themselves has a session to end; the
+      // shared token is ended by not using it.
+      document.getElementById('signout').hidden = !d.id;
+    })
+    .catch(function () {});
+
+  // ------------------------------------------------------------- circle
+  var panel = document.getElementById('circle');
+  function nameOf(u) { return (u && (u.name || (u.username ? '@' + u.username : ''))) || 'someone'; }
+
+  function drawCircle(c) {
+    function rows(list, verb, path) {
+      if (!list.length) return '';
+      return list.map(function (u) {
+        return '<div class="row"><span>' + esc(nameOf(u)) + '</span>'
+          + '<button class="ghost" data-drop="' + esc(path + encodeURIComponent(u.id)) + '">' + verb + '</button></div>';
+      }).join('');
+    }
+    panel.innerHTML =
+      '<h2>Can see you</h2>'
+      + (rows(c.canSeeMe, 'Remove', '/api/circle/viewer/') || '<p class="none">Nobody yet.</p>')
+      + '<button class="ghost" id="mkinvite">Invite someone</button>'
+      + '<div id="invitebox"></div>'
+      + '<h2>You can see</h2>'
+      + (rows(c.iCanSee, 'Stop', '/api/circle/owner/') || '<p class="none">Nobody has invited you yet.</p>')
+      + '<p class="fine">Seeing is one way: somebody seeing you does not let you see them.</p>';
+  }
+
+  function openCircle() {
+    fetch('/api/circle', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (c) { if (c) { drawCircle(c); panel.hidden = false; } });
+  }
+
+  document.getElementById('circlebtn').onclick = function () {
+    if (!panel.hidden) { panel.hidden = true; return; }
+    openCircle();
+  };
+
+  // A popover, so anything outside it closes it. It sits over the list of
+  // people, and without this the list underneath could not be clicked until
+  // somebody found the button that opened it.
+  document.addEventListener('mousedown', function (e) {
+    if (panel.hidden) return;
+    if (panel.contains(e.target) || e.target.id === 'circlebtn') return;
+    panel.hidden = true;
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !panel.hidden) panel.hidden = true;
+  });
+
+  panel.addEventListener('click', function (e) {
+    var drop = e.target.closest && e.target.closest('[data-drop]');
+    if (drop) {
+      fetch(drop.getAttribute('data-drop'), { method: 'DELETE' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (c) { if (c) drawCircle(c); });
+      return;
+    }
+    if (e.target.id === 'mkinvite') {
+      e.target.disabled = true;
+      fetch('/api/circle/invite', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var box = document.getElementById('invitebox');
+          box.innerHTML = d && d.link
+            ? '<div class="invite"><input readonly value="' + esc(d.link) + '" /><button class="ghost" id="copyinvite">Copy</button></div>'
+              + '<p class="fine">Works once, for a day. Whoever opens it can see you until you remove them here or with /circle.</p>'
+            : '<p class="none">' + esc((d && d.error) || 'Could not make an invite.') + '</p>';
+        })
+        .catch(function () {})
+        .then(function () { e.target.disabled = false; });
+      return;
+    }
+    if (e.target.id === 'copyinvite') {
+      var input = panel.querySelector('.invite input');
+      input.select();
+      (navigator.clipboard ? navigator.clipboard.writeText(input.value) : Promise.reject())
+        .then(function () { e.target.textContent = 'Copied'; })
+        .catch(function () { document.execCommand && document.execCommand('copy'); });
+    }
+  });
   var fitted = false;
 
   function live(p) { return p.live || (p.liveUntil && p.liveUntil * 1000 > Date.now()); }
@@ -230,7 +342,10 @@
       (who && who.username ? '<div class="chandle">' + esc(who.username) + '</div>' : '') +
       '<div class="cid">' + esc(p.id) + '</div>' +
       '<div class="chandle">' + esc(whereabouts(p)) + '</div>' +
-      ((p.trail || []).length > 1
+      // Only on your own path, or for an admin. Seeing somebody is not their
+      // consent to have their movements published; the server refuses it
+      // too, and this only keeps the button from offering what will fail.
+      ((p.trail || []).length > 1 && me && (me.admin || me.id === String(p.id))
         ? '<button class="ghost share" data-id="' + esc(p.id) + '">Share this path</button>'
         : '') +
       '</div></div>';

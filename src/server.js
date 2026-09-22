@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { parseTilePath, makeTiles } from './tiles.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
-import { SESSION_COOKIE, mint, readSession, checkWidget, makeViewers } from './login.js';
+import { SESSION_COOKIE, mint, readSession, checkWidget } from './login.js';
+import { makeCircles, canActFor } from './circles.js';
 import { randomBytes } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
@@ -47,16 +48,25 @@ export function staticFile(pathname) {
 
 export function serve(positions, config, {
   log = console, directory = null, geo = null, links = null,
+  // Who may see whom. Without one, a circle-less stand-in: admins and the
+  // shared token, which is exactly what the service did before circles.
+  circles = makeCircles({ admins: config.viewers }),
+  // Mints a one-time invite for a person and returns a link to it, or null.
+  // Given by index.js because only the bot knows its own username.
+  makeInvite = null,
   // Told when a fence is deleted, so whatever is watching them can drop the
   // state it holds about it.
   onFenceDeleted = null,
 } = {}) {
-  const watchers = new Set();
-  const viewers = makeViewers(config.viewers);
-  // Sign-in is available only when there is a list of who may sign in. With
-  // no list there is nobody to let through, and a login page that can admit
-  // nobody is worse than no login page.
-  const signInOn = Boolean(config.botToken && viewers.size && links);
+  // Open streams, and who is at the other end of each. Every event is checked
+  // against the viewer before it is written, so a stream only ever carries
+  // people its viewer may see.
+  const watchers = new Map();   // res -> viewer
+  const hasAdmins = (config.viewers || []).length > 0;
+  // Sign-in is available when there is anybody it could admit: admins, or —
+  // with a database to keep circles in — everyone the bot has met. A login
+  // page that can admit nobody is worse than no login page.
+  const signInOn = () => Boolean(config.botToken && links && (hasAdmins || circles.enabled));
   // Known only after the bot connects, which happens after this is listening.
   let botName = '';
 
@@ -99,6 +109,9 @@ export function serve(positions, config, {
   // page, or /stop sent to the bot. One implementation, because these must not
   // be able to disagree about what forgetting means.
   async function forget(id) {
+    // Who could see them has to be worked out before the erasure, which takes
+    // the grants with it — afterwards nobody could, and nobody would be told.
+    const told = [...watchers].filter(([, viewer]) => circles.canSee(viewer, id)).map(([res]) => res);
     positions.forget(id);
     // Forgetting has to mean forgetting. History is kept indefinitely, so the
     // one action that removes a person must clear the record too, not just
@@ -107,12 +120,18 @@ export function serve(positions, config, {
       log.error('geo: erasure failed —', e && e.message ? e.message : e);
       return null;
     }) : 0;
-    broadcast('forget', { id });
+    circles.forget(id);
+    for (const res of told) { try { send(res, 'forget', { id }); } catch { watchers.delete(res); } }
     return erased;
   }
 
-  const broadcast = (event, data) => {
-    for (const res of watchers) {
+  // `about` is the person the event concerns, when there is one. An event
+  // about nobody in particular goes to everyone; an event about somebody goes
+  // only to the streams whose viewer may see them.
+  const broadcast = (event, data, { about = undefined, to = null } = {}) => {
+    for (const [res, viewer] of watchers) {
+      if (about !== undefined && !circles.canSee(viewer, about)) continue;
+      if (to && !to(viewer)) continue;
       try { send(res, event, data); } catch { watchers.delete(res); }
     }
   };
@@ -120,26 +139,65 @@ export function serve(positions, config, {
   // Called whenever a position changes; every open map hears about it at once,
   // which is the whole point of doing this over MTProto rather than polling.
   const publish = (person) => {
-    broadcast('position', { ...person, live: Boolean(person.liveUntil && person.liveUntil > Date.now() / 1000) });
+    broadcast('position',
+      { ...person, live: Boolean(person.liveUntil && person.liveUntil > Date.now() / 1000) },
+      { about: person.id });
   };
 
-  // A fence crossed, or the set of fences changed. Open maps redraw rather
-  // than waiting for somebody to reload.
-  const publishFence = (data) => broadcast('fence', data);
+  // Changing a circle changes what open maps may show, and they should not
+  // have to be reloaded to find out. Revoking takes the person off the other
+  // viewer's map at once; granting puts them on it.
+  async function revoke(owner, viewer) {
+    await circles.revoke(owner, viewer);
+    for (const [res, v] of watchers) {
+      if (v.id === String(viewer) && !circles.canSee(v, owner)) {
+        try { send(res, 'forget', { id: String(owner) }); } catch { watchers.delete(res); }
+      }
+    }
+  }
 
-  // Who this request is, if anyone. Returns a Telegram id or null.
-  const signedIn = (req) => {
-    if (!signInOn) return null;
+  async function grant(owner, viewer) {
+    const done = await circles.grant(owner, viewer);
+    const p = done ? positions.get(owner) : null;
+    if (p) {
+      const payload = { ...p, live: Boolean(p.liveUntil && p.liveUntil > Date.now() / 1000) };
+      for (const [res, v] of watchers) {
+        if (v.id === String(viewer)) { try { send(res, 'position', payload); } catch { watchers.delete(res); } }
+      }
+    }
+    return done;
+  }
+
+  // A fence crossed, or somebody's fences changed. Only the fence's owner and
+  // admins are told, and a crossing only if they may also see who crossed: a
+  // fence is a named place in somebody's life, and "Ada arrived at home" is
+  // two private facts, not one.
+  const publishFence = (data) => broadcast('fence', data, {
+    about: data.person === undefined ? undefined : data.person,
+    to: (viewer) => viewer.admin || (data.owner !== null && data.owner !== undefined && viewer.id === String(data.owner)),
+  });
+
+  // Who this request is: { id, admin, via }, or null.
+  //
+  // Checked on every request rather than once at sign-in, so removing somebody
+  // from DASHBOARD_USERS, or /stop, takes effect on their next request rather
+  // than whenever their cookie happens to expire.
+  const viewerOf = (req, url) => {
+    // The `config.dashboardToken &&` is load-bearing: sameToken('', '') is
+    // true, so without it an unset token would admit everybody rather than
+    // nobody.
+    if (config.dashboardToken && sameToken(tokenOf(req.headers.cookie, url), config.dashboardToken)) {
+      return { id: null, admin: true, via: 'token' };
+    }
+    if (!signInOn()) return null;
     const raw = String(req.headers.cookie || '')
       .split(';').map((c) => c.trim())
       .find((c) => c.startsWith(`${SESSION_COOKIE}=`));
     if (!raw) return null;
     const id = readSession(decodeURIComponent(raw.slice(SESSION_COOKIE.length + 1)),
       { botToken: config.botToken });
-    // Checked against the list on every request, not once at sign-in, so
-    // removing somebody from DASHBOARD_USERS takes effect immediately rather
-    // than whenever their cookie happens to expire.
-    return id && viewers.has(id) ? id : null;
+    const viewer = circles.viewerFor(id);
+    return viewer ? { ...viewer, via: 'session' } : null;
   };
 
   const setSession = (res, id, to = '/') => {
@@ -154,17 +212,24 @@ export function serve(positions, config, {
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    // The `config.dashboardToken &&` is load-bearing: sameToken('', '') is
-    // true, so without it an unset token would admit everybody rather than
-    // nobody.
-    const ok = Boolean(config.dashboardToken
-      && sameToken(tokenOf(req.headers.cookie, url), config.dashboardToken))
-      || Boolean(signedIn(req));
+    const viewer = viewerOf(req, url);
+    const ok = Boolean(viewer);
+
+    // Not "forbidden": that would confirm the person exists. Somebody you may
+    // not see answers exactly as somebody who was never there.
+    const notFound = () => {
+      res.writeHead(404, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end('{"error":"not found"}');
+    };
+    const json = (status, body) => {
+      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(body));
+    };
 
     // A browser gets a page explaining how to get in; anything else gets the
     // one line it can act on. Being turned away should not be a dead end.
     const deny = async () => {
-      const wantsPage = signInOn && /text\/html/.test(req.headers.accept || '');
+      const wantsPage = signInOn() && /text\/html/.test(req.headers.accept || '');
       const page = wantsPage ? await readFile(LOGIN_PAGE, 'utf8').catch(() => null) : null;
       if (page) {
         res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -173,7 +238,7 @@ export function serve(positions, config, {
         return;
       }
       res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(signInOn
+      res.end(signInOn()
         ? '401 — send /login to the bot for a link that opens this'
         : '401 — append ?token=… to the URL');
     };
@@ -199,7 +264,21 @@ export function serve(positions, config, {
 
     // Signing in necessarily happens before there is anything to sign in
     // with, so these sit ahead of the gate rather than behind it.
-    if (signInOn && url.pathname.startsWith('/auth/')) {
+    // Signing out needs no sign-in to reach, and clears only this browser.
+    if (url.pathname === '/auth/logout') {
+      res.writeHead(302, {
+        location: '/',
+        'cache-control': 'no-store',
+        'set-cookie': [
+          `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+          `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+        ],
+      });
+      res.end();
+      return;
+    }
+
+    if (signInOn() && url.pathname.startsWith('/auth/')) {
       const refuse = (why) => {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
         res.end(why);
@@ -213,7 +292,14 @@ export function serve(positions, config, {
         const fields = Object.fromEntries(url.searchParams.entries());
         const id = checkWidget(fields, { botToken: config.botToken });
         if (!id) return refuse('that sign-in did not verify');
-        if (!viewers.has(id)) return refuse('that account is not on the list of who may look');
+        // The widget's id is the real Telegram id, so somebody the bot has not
+        // met yet can be recorded here and see themselves from the start.
+        await circles.seen({
+          id,
+          name: [fields.first_name, fields.last_name].filter(Boolean).join(' '),
+          username: fields.username || '',
+        });
+        if (!circles.viewerFor(id)) return refuse('that account cannot sign in here');
         log.info('login: somebody signed in with the widget');
         return setSession(res, id);
       }
@@ -222,7 +308,7 @@ export function serve(positions, config, {
       // link sits in a chat history where somebody else may read it.
       const id = links.redeem(url.pathname.slice('/auth/'.length));
       if (!id) return refuse('that link has been used already, or has expired — send /login again');
-      if (!viewers.has(id)) return refuse('that account is not on the list of who may look');
+      if (!circles.viewerFor(id)) return refuse('that account cannot sign in here');
       log.info('login: somebody signed in through the bot');
       return setSession(res, id);
     }
@@ -268,21 +354,35 @@ export function serve(positions, config, {
     if (url.pathname === '/' || url.pathname === '/index.html') {
       const html = await readFile(PAGE, 'utf8').catch(() => null);
       if (!html) { res.writeHead(500); res.end('missing page'); return; }
-      res.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-        // Remembered so the token is not needed in every later request, and
-        // so it stops being visible in the address bar after the first load.
-        'set-cookie': `${COOKIE}=${encodeURIComponent(config.dashboardToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`,
-      });
+      const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' };
+      // Remembered so the token is not needed in every later request, and so
+      // it stops being visible in the address bar after the first load — but
+      // only for somebody who came in *with* the token. Handed to everyone who
+      // reached this page, it would give a person signed in as themselves the
+      // admin key on their very next request.
+      if (viewer.via === 'token') {
+        headers['set-cookie'] = `${COOKIE}=${encodeURIComponent(config.dashboardToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`;
+      }
+      res.writeHead(200, headers);
       res.end(html);
       return;
     }
 
+    const visible = () => positions.list().filter((p) => circles.canSee(viewer, p.id));
+
+    // Who this is, for the page: whether to offer a circle, a share button.
+    if (url.pathname === '/api/me') {
+      const me = viewer.id ? circles.user(viewer.id) : null;
+      return json(200, {
+        id: viewer.id,
+        admin: viewer.admin,
+        name: me?.name || '',
+        circles: circles.enabled && Boolean(viewer.id),
+      });
+    }
+
     if (url.pathname === '/api/positions') {
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ people: positions.list() }));
-      return;
+      return json(200, { people: visible() });
     }
 
     if (url.pathname === '/api/stream') {
@@ -297,8 +397,8 @@ export function serve(positions, config, {
       // sends it regardless, so setting it said nothing. It is forbidden in
       // HTTP/2, but a gateway is required to strip it on the way, so this is
       // tidying rather than a fix for anything.
-      watchers.add(res);
-      send(res, 'hello', { people: positions.list() });
+      watchers.set(res, viewer);
+      send(res, 'hello', { people: visible() });
       // A named event rather than a bare `: comment`, which costs a few bytes
       // and buys the page the ability to tell a quiet stream from a stalled
       // one: EventSource never surfaces comments to JavaScript, so a stream
@@ -338,6 +438,7 @@ export function serve(positions, config, {
     // recorded, so the page does not need to know whether PostGIS is there.
     if (url.pathname.startsWith('/api/history/')) {
       const id = decodeURIComponent(url.pathname.slice('/api/history/'.length));
+      if (!circles.canSee(viewer, id)) return notFound();
       // A window, because a path drawn across a week is a tangle nobody reads.
       const since = Number(url.searchParams.get('since'));
       const points = geo
@@ -351,6 +452,9 @@ export function serve(positions, config, {
     // Hand one person's path to somebody who does not have the dashboard.
     if (url.pathname.startsWith('/api/share/') && req.method === 'POST') {
       const id = decodeURIComponent(url.pathname.slice('/api/share/'.length));
+      // Your own path, or an admin's call. Being allowed to see somebody is
+      // not their consent to have their movements published to the world.
+      if (!canActFor(viewer, id)) return notFound();
       const person = positions.get(id);
       const points = (person?.trail || []).filter((t) => t.latitude !== null);
       if (!geo || !geo.enabled()) { res.writeHead(503, { 'content-type': 'application/json' }); res.end('{"error":"no database"}'); return; }
@@ -369,7 +473,9 @@ export function serve(positions, config, {
 
     if (url.pathname.startsWith('/api/share/') && req.method === 'DELETE') {
       const token = decodeURIComponent(url.pathname.slice('/api/share/'.length));
-      const gone = geo ? await geo.revokeShare(token) : 0;
+      const whose = geo ? await geo.shareOwner(token) : null;
+      if (!whose || !canActFor(viewer, whose)) return notFound();
+      const gone = await geo.revokeShare(token);
       shareCache.delete(token);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ revoked: gone }));
@@ -381,6 +487,7 @@ export function serve(positions, config, {
     // Telegram cannot say.
     if (url.pathname.startsWith('/api/person/')) {
       const id = decodeURIComponent(url.pathname.slice('/api/person/'.length));
+      if (!circles.canSee(viewer, id)) return notFound();
       const person = directory
         ? await directory.lookup(id)
         : { id, name: '', username: '', photo: false };
@@ -393,6 +500,7 @@ export function serve(positions, config, {
     // reason to pull every face just to draw dots on a map.
     if (url.pathname.startsWith('/api/photo/')) {
       const id = decodeURIComponent(url.pathname.slice('/api/photo/'.length));
+      if (!circles.canSee(viewer, id)) return notFound();
       const bytes = directory ? await directory.photo(id) : null;
       if (!bytes || !bytes.length) {
         res.writeHead(404, { 'content-type': 'text/plain' });
@@ -430,19 +538,28 @@ export function serve(positions, config, {
           res.end('{"error":"need a name, a point, and a radius between 25m and 50km"}');
           return;
         }
-        const id = await geo.createFence({ name, latitude, longitude, radius })
+        // A person's fences are theirs; the shared token's are nobody's, which
+        // only admins see. Capped, because every fence is tested against every
+        // position and nobody needs fifty.
+        const owner = viewer.id;
+        if (owner && !viewer.admin && (await geo.countFences(owner)) >= 50) {
+          res.writeHead(409, { 'content-type': 'application/json' });
+          res.end('{"error":"fifty fences is the limit"}');
+          return;
+        }
+        const id = await geo.createFence({ name, latitude, longitude, radius, owner })
           .catch((e) => { log.error('fence:', e && e.message ? e.message : e); return null; });
         if (id === null) {
           res.writeHead(500, { 'content-type': 'application/json' });
           res.end('{"error":"could not create"}');
           return;
         }
-        publishFence({ changed: true });
+        publishFence({ changed: true, owner });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, id }));
         return;
       }
-      const fences = await geo.listFences().catch(() => []);
+      const fences = await geo.listFences(viewer.admin ? {} : { owner: viewer.id }).catch(() => []);
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ fences }));
       return;
@@ -455,18 +572,53 @@ export function serve(positions, config, {
         res.end('{"error":"no such fence"}');
         return;
       }
+      const owner = await geo.fenceOwner(id).catch(() => undefined);
+      // Yours, or an admin's call; anybody else's reads as no such fence.
+      if (owner === undefined || !(viewer.admin || (owner !== null && owner === viewer.id))) return notFound();
       const gone = await geo.deleteFence(id).catch(() => 0);
       // The watcher holds state per person and fence; leaving it behind would
       // mean a recreated fence inherited somebody's old position.
       onFenceDeleted?.(id);
-      publishFence({ changed: true });
+      publishFence({ changed: true, owner });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, deleted: gone }));
       return;
     }
 
+    // ------------------------------------------------------------ circles
+    //
+    // Only for a person signed in as themselves: the shared token has nobody
+    // behind it to be seen, or to see.
+    if (url.pathname === '/api/circle' || url.pathname.startsWith('/api/circle/')) {
+      if (!circles.enabled || !viewer.id) return notFound();
+      const me = viewer.id;
+
+      if (url.pathname === '/api/circle' && req.method === 'GET') {
+        return json(200, circles.circleOf(me));
+      }
+      // A link that lets whoever opens it see you. Made here or with /invite.
+      if (url.pathname === '/api/circle/invite' && req.method === 'POST') {
+        const link = makeInvite ? await makeInvite(me) : null;
+        return link ? json(200, { link }) : json(503, { error: 'invites need the bot' });
+      }
+      // Taking back what you gave: somebody may no longer see you.
+      if (url.pathname.startsWith('/api/circle/viewer/') && req.method === 'DELETE') {
+        await revoke(me, decodeURIComponent(url.pathname.slice('/api/circle/viewer/'.length)));
+        return json(200, circles.circleOf(me));
+      }
+      // Giving back what you were given: you stop seeing somebody.
+      if (url.pathname.startsWith('/api/circle/owner/') && req.method === 'DELETE') {
+        await revoke(decodeURIComponent(url.pathname.slice('/api/circle/owner/'.length)), me);
+        return json(200, circles.circleOf(me));
+      }
+      return notFound();
+    }
+
     if (url.pathname.startsWith('/api/forget/') && req.method === 'POST') {
       const id = decodeURIComponent(url.pathname.slice('/api/forget/'.length));
+      // Erasing is the most final thing here, and until circles it was open
+      // to anyone who could load the page. Yourself, or an admin.
+      if (!canActFor(viewer, id)) return notFound();
       const erased = await forget(id);
       res.writeHead(erased === null ? 500 : 200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(erased === null ? { ok: false, error: 'history not erased' } : { ok: true, erased }));
@@ -482,7 +634,7 @@ export function serve(positions, config, {
   });
 
   return {
-    server, publish, publishFence, forget, watchers,
+    server, publish, publishFence, forget, watchers, grant, revoke,
     // Told once the bot has connected, so the login page can name it.
     setBot: (username) => { botName = username || ''; },
   };

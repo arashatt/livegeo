@@ -18,6 +18,8 @@ import { fromUpdate } from '../src/positions.js';
 import { connect as connectBot, commandIn } from '../src/bot.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
+import { canSee, canActFor, makeCircles } from '../src/circles.js';
+import { readFileSync } from 'node:fs';
 import '../public/lib/path-time.js';
 const { PathTime } = globalThis;
 import { createHash, createHmac } from 'node:crypto';
@@ -803,8 +805,8 @@ head('the bot loop, without Telegram');
   t('it identifies itself first', calls[0].method === 'getMe', calls[0] && calls[0].method);
   t('and clears any leftover webhook, which would break every poll',
     calls.some((c) => c.method === 'deleteWebhook'));
-  t('it asks only for the two update kinds it handles',
-    calls.find((c) => c.method === 'getUpdates').body.allowed_updates.join() === 'message,edited_message');
+  t('it asks only for the update kinds it handles',
+    calls.find((c) => c.method === 'getUpdates').body.allowed_updates.join() === 'message,edited_message,callback_query');
   t('a shared location reaches the store', got.length === 1 && got[0].id === '42', got.length);
   t('/stop forgets the sender', forgotten.join() === '42', forgotten);
   t('and says so', said.some((m) => /no longer shown/.test(m)), said);
@@ -822,7 +824,9 @@ head('who may look');
 
   const cookie = mint('42', { botToken });
   t('a minted session reads back', readSession(cookie, { botToken }) === '42');
-  t('a tampered one does not', readSession(cookie.replace(/.$/, 'x'), { botToken }) === null);
+  // Flipped, not overwritten — see the widget forgery below for why.
+  const tampered = cookie.slice(0, -1) + (cookie.endsWith('x') ? 'y' : 'x');
+  t('a tampered one does not', readSession(tampered, { botToken }) === null);
   t('nor one signed with a different bot token',
     readSession(cookie, { botToken: 'other' }) === null);
   t('nor an expired one',
@@ -839,8 +843,11 @@ head('who may look');
   const hash = createHmac('sha256', secret).update(check).digest('hex');
   t('a correctly signed widget reply verifies',
     checkWidget({ ...fields, hash }, { botToken }) === '42');
-  t('a forged one does not',
-    checkWidget({ ...fields, hash: hash.replace(/.$/, '0') }, { botToken }) === null);
+  // Flip the last character rather than overwrite it: overwriting with a
+  // fixed '0' forged nothing whenever the real hash already ended in 0, which
+  // made this fail one run in sixteen.
+  const forged = hash.slice(0, -1) + (hash.endsWith('0') ? '1' : '0');
+  t('a forged one does not', checkWidget({ ...fields, hash: forged }, { botToken }) === null);
   t('an altered field invalidates the signature',
     checkWidget({ ...fields, id: '43', hash }, { botToken }) === null);
   // A signature stays valid forever; the timestamp is what stops a replay.
@@ -1048,6 +1055,209 @@ head('history and the live trail as one path');
   t('with the overlap kept once', merged.length === 4, merged.length);
   t('and a fix with no position dropped',
     PathTime.merge([{ latitude: null, longitude: null, at: 5 }], []).length === 0);
+}
+
+
+// ------------------------------------------------------ who may see whom
+
+head('the one gate');
+{
+  const grants = new Map([['ada', new Set(['grace'])]]);   // Ada may see Grace
+  const ada = { id: 'ada', admin: false };
+  const grace = { id: 'grace', admin: false };
+  t('you see yourself', canSee(grace, 'grace', grants));
+  t('a grant lets you see its owner', canSee(ada, 'grace', grants));
+  t('and runs one way only', !canSee(grace, 'ada', grants));
+  t('an admin sees everyone', canSee({ id: null, admin: true }, 'ada', grants));
+  t('nobody signed in sees nothing', !canSee(null, 'ada', grants));
+  t('an id-less viewer who is not admin sees nothing', !canSee({ id: null, admin: false }, 'ada', grants));
+  // Numbers and strings are the same person; Telegram sends one, URLs the other.
+  t('an id is an id however it is typed', canSee({ id: 42, admin: false }, '42', grants));
+  t('seeing somebody is not acting for them', !canActFor(ada, 'grace'));
+  t('acting for yourself is', canActFor(grace, 'grace'));
+  t('and an admin may', canActFor({ id: null, admin: true }, 'grace'));
+}
+
+head('the leak matrix: every route, as every kind of viewer');
+{
+  // A stand-in for PostGIS holding just what these routes read, so this runs
+  // in CI where there is no database. The real queries are exercised against
+  // PostGIS separately; what this checks is the routing around them.
+  const db = {
+    users: [{ id: '1', name: 'Admin', username: '' }, { id: '2', name: 'Ada', username: '' }, { id: '3', name: 'Grace', username: '' }],
+    grants: [{ owner: '3', viewer: '2' }],   // Grace lets Ada see her
+    fences: [], shares: [], nextFence: 1, forgotten: [],
+  };
+  const geo = {
+    enabled: () => true,
+    listUsers: async () => db.users,
+    listGrants: async () => db.grants,
+    upsertUser: async () => true,
+    addGrant: async (o, v) => { db.grants.push({ owner: o, viewer: v }); },
+    removeGrant: async (o, v) => { db.grants = db.grants.filter((g) => !(g.owner === o && g.viewer === v)); return 1; },
+    historyOf: async (id) => [{ at: 1, latitude: 1, longitude: 1 }],
+    forget: async (id) => { db.forgotten.push(id); return 1; },
+    listFences: async ({ owner } = {}) => db.fences.filter((f) => owner === undefined || f.owner === owner),
+    createFence: async ({ name, owner }) => { const id = db.nextFence++; db.fences.push({ id, name, owner, ring: [] }); return id; },
+    fenceOwner: async (id) => { const f = db.fences.find((x) => x.id === id); return f ? f.owner : undefined; },
+    countFences: async (owner) => db.fences.filter((f) => f.owner === owner).length,
+    deleteFence: async (id) => { const n = db.fences.length; db.fences = db.fences.filter((f) => f.id !== id); return n - db.fences.length; },
+    createShare: async ({ token, person }) => { db.shares.push({ token, person }); return true; },
+    shareOwner: async (token) => db.shares.find((x) => x.token === token)?.person ?? null,
+    revokeShare: async (token) => { db.shares = db.shares.filter((x) => x.token !== token); return 1; },
+    readShare: async () => null,
+    placeOf: async () => '',
+  };
+  const botToken = '123:leakmatrix';
+  const circles = makeCircles({ geo, admins: ['1'] });
+  await circles.load();
+
+  const store = new Positions({ minMove: 1 });
+  const now = Math.floor(Date.now() / 1000);
+  for (const [id, name, lat] of [['2', 'Ada', 36.30], ['3', 'Grace', 36.31]]) {
+    for (let i = 0; i < 2; i++) {
+      store.update({ id, name, latitude: lat + i * 0.01, longitude: 59.6, accuracy: 5, at: now - 60 + i, liveUntil: now + 600 });
+    }
+  }
+  const { server, publish } = serve(store, {
+    dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60,
+  }, { geo, circles, links: makeLinks(), log: { info() {}, error() {} } });
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const as = {
+    token: { cookie: 'tll_token=tok' },
+    admin: { cookie: `tll_session=${encodeURIComponent(mint('1', { botToken }))}` },
+    ada: { cookie: `tll_session=${encodeURIComponent(mint('2', { botToken }))}` },
+    grace: { cookie: `tll_session=${encodeURIComponent(mint('3', { botToken }))}` },
+    stranger: { cookie: `tll_session=${encodeURIComponent(mint('999', { botToken }))}` },
+  };
+  const hit = (who, path, method = 'GET') => fetch(base + path, { method, headers: as[who], redirect: 'manual' });
+  const ids = async (who) => (await (await hit(who, '/api/positions')).json()).people.map((p) => p.id).sort().join();
+
+  // --- the route list comes from server.js itself. Every path it matches has
+  // to be classified here, so a route added later without a decision about
+  // who may reach it fails this test instead of shipping.
+  const source = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+  const routes = [...new Set([...source.matchAll(/pathname(?: ===|\.startsWith\()\s*'([^']+)'/g)].map((m) => m[1]))];
+  const classified = {
+    public: ['/healthz', '/vendor/', '/lib/', '/auth/logout', '/auth/', '/auth/widget'],
+    shareToken: ['/share/', '/api/shared/'],
+    signedIn: ['/', '/index.html', '/api/me', '/api/place'],
+    filtered: ['/api/positions', '/api/stream'],
+    canSee: ['/api/history/', '/api/person/', '/api/photo/'],
+    selfOnly: ['/api/share/', '/api/forget/'],
+    owned: ['/api/fences', '/api/fences/'],
+    ownCircle: ['/api/circle', '/api/circle/', '/api/circle/invite', '/api/circle/viewer/', '/api/circle/owner/'],
+  };
+  const known = new Set(Object.values(classified).flat());
+  const unclassified = routes.filter((r) => !known.has(r));
+  t('every route server.js matches has a decided audience', unclassified.length === 0, unclassified);
+  t('and the list really was read from the source', routes.length >= 20, routes.length);
+
+  // --- who can get in at all
+  t('a session for somebody the bot never met is refused', (await hit('stranger', '/api/positions')).status === 401);
+  t('the shared token still works, as an admin', (await ids('token')) === '2,3');
+
+  // --- the lists
+  t('an admin sees everyone', (await ids('admin')) === '2,3');
+  t('Ada sees herself and Grace, who granted it', (await ids('ada')) === '2,3');
+  t('Grace sees only herself', (await ids('grace')) === '3', await ids('grace'));
+
+  // --- one person at a time
+  for (const route of ['/api/history/', '/api/person/', '/api/photo/']) {
+    t(`${route} — Grace cannot reach Ada`, (await hit('grace', route + '2')).status === 404);
+    const unknown = await hit('grace', route + '999');
+    const hidden = await hit('grace', route + '2');
+    // The same status and the same body: a hidden person and a missing one
+    // must be indistinguishable, or the 404 confirms who exists.
+    t(`${route} — and hidden reads exactly like missing`,
+      unknown.status === hidden.status && (await unknown.text()) === (await hidden.text()));
+  }
+  t('Ada can read Grace’s history', (await hit('ada', '/api/history/3')).status === 200);
+
+  // --- acting for somebody
+  t('Ada, who can see Grace, cannot publish Grace’s path', (await hit('ada', '/api/share/3', 'POST')).status === 404);
+  const mine = await hit('grace', '/api/share/3', 'POST');
+  t('Grace can publish her own', mine.status === 200, mine.status);
+  const token = (await mine.json()).token;
+  t('Ada cannot take Grace’s share down', (await hit('ada', `/api/share/${token}`, 'DELETE')).status === 404);
+  t('Grace can', (await hit('grace', `/api/share/${token}`, 'DELETE')).status === 200);
+  t('Grace cannot erase Ada', (await hit('grace', '/api/forget/2', 'POST')).status === 404);
+  t('and nothing was erased', db.forgotten.length === 0, db.forgotten);
+
+  // --- fences are somebody's
+  const made = await (await hit('ada', '/api/fences?name=home&lat=36.3&lon=59.6&radius=100', 'POST')).json();
+  const graceFences = (await (await hit('grace', '/api/fences')).json()).fences;
+  t('Grace does not see Ada’s fence', graceFences.length === 0, graceFences);
+  t('Ada does', (await (await hit('ada', '/api/fences')).json()).fences.length === 1);
+  t('an admin does', (await (await hit('admin', '/api/fences')).json()).fences.length === 1);
+  t('Grace cannot delete it', (await hit('grace', `/api/fences/${made.id}`, 'DELETE')).status === 404);
+  t('Ada can', (await hit('ada', `/api/fences/${made.id}`, 'DELETE')).status === 200);
+
+  // --- circles
+  const graceCircle = await (await hit('grace', '/api/circle')).json();
+  t('Grace sees that Ada can see her', graceCircle.canSeeMe.map((u) => u.id).join() === '2');
+  t('the shared token has no circle to show', (await hit('token', '/api/circle')).status === 404);
+  const me = await (await hit('grace', '/api/me')).json();
+  t('Grace is told who she is, and that she is not an admin', me.id === '3' && me.admin === false);
+
+  // --- the admin key is not handed out
+  const page = await hit('grace', '/');
+  t('Grace gets the page', page.status === 200);
+  t('without the shared token in a cookie', !/tll_token=/.test(page.headers.get('set-cookie') || ''),
+    page.headers.get('set-cookie'));
+
+  // --- the stream, which is where a leak would be quietest
+  const open = async (who) => {
+    const res = await fetch(`${base}/api/stream`, { method: 'POST', headers: as[who] });
+    const seen = [];
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    (async () => {
+      for (;;) {
+        const step = await reader.read().catch(() => ({ done: true }));
+        if (step.done) return;
+        buf += dec.decode(step.value, { stream: true });
+        const parts = buf.split('\n\n'); buf = parts.pop();
+        for (const c of parts) {
+          const ev = /event: (\w+)/.exec(c)?.[1];
+          const data = JSON.parse(/data: (.*)/.exec(c)?.[1] || '{}');
+          seen.push({ ev, data });
+        }
+      }
+    })();
+    return { seen, close: () => reader.cancel().catch(() => {}) };
+  };
+  const streams = { admin: await open('admin'), ada: await open('ada'), grace: await open('grace') };
+  await new Promise((r) => setTimeout(r, 150));
+  const hello = (who) => streams[who].seen.find((e) => e.ev === 'hello')?.data.people.map((p) => p.id).sort().join();
+  t('Grace’s stream opens with only herself', hello('grace') === '3', hello('grace'));
+  t('Ada’s with both', hello('ada') === '2,3');
+
+  publish(store.update({ id: '2', name: 'Ada', latitude: 36.5, longitude: 59.6, accuracy: 5, at: now + 5, liveUntil: now + 600 }));
+  publish(store.update({ id: '3', name: 'Grace', latitude: 36.6, longitude: 59.6, accuracy: 5, at: now + 5, liveUntil: now + 600 }));
+  await new Promise((r) => setTimeout(r, 150));
+  const moved = (who) => streams[who].seen.filter((e) => e.ev === 'position').map((e) => e.data.id).sort().join();
+  t('Ada moving reaches the admin and Ada', moved('admin') === '2,3' && moved('ada') === '2,3', [moved('admin'), moved('ada')]);
+  t('and never reaches Grace, who only hears herself', moved('grace') === '3', moved('grace'));
+
+  // Grace takes the grant back while Ada is watching; the next move must stop.
+  await hit('grace', '/api/circle/viewer/2', 'DELETE');
+  publish(store.update({ id: '3', name: 'Grace', latitude: 36.7, longitude: 59.6, accuracy: 5, at: now + 9, liveUntil: now + 600 }));
+  await new Promise((r) => setTimeout(r, 150));
+  t('revoking is immediate, on an already-open stream', moved('ada') === '2,3', moved('ada'));
+  t('and on the next list', (await ids('ada')) === '2');
+  // Not only does nothing new arrive: the marker already on Ada's map is
+  // taken off it, rather than sitting there until she reloads.
+  t('and Grace is taken off the map Ada already has open',
+    streams.ada.seen.some((e) => e.ev === 'forget' && e.data.id === '3'));
+  t('Grace’s own map is not told to forget her',
+    !streams.grace.seen.some((e) => e.ev === 'forget'));
+
+  Object.values(streams).forEach((st) => st.close());
+  server.close();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

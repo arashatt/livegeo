@@ -85,6 +85,9 @@ export function load() {
     // The bot's own credential, from @BotFather. One value, no login, and it
     // can be revoked without touching an account.
     botToken: process.env.BOT_TOKEN || '',
+    // Where the Bot API lives. Telegram's own, unless you run their
+    // self-hosted server (github.com/tdlib/telegram-bot-api) — or a test does.
+    telegramApi: process.env.TELEGRAM_API || 'https://api.telegram.org',
 
     // Only needed by the account ingest, and asked for only then — a bot
     // deployment should not have to invent an api_id to start.
