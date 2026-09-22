@@ -133,6 +133,17 @@ export function serve(positions, config, {
     return true;
   }
 
+  async function serveTile(tile, res) {
+    const got = await tiles.get(tile);
+    if (!got) { res.writeHead(502, { 'content-type': 'text/plain' }); res.end('no tile'); return; }
+    res.writeHead(200, {
+      'content-type': 'image/png',
+      'cache-control': 'private, max-age=604800',
+      'x-tile-source': got.from,
+    });
+    res.end(got.bytes);
+  }
+
   async function serveStatic(url, res) {
     const hit = staticFile(url.pathname);
     const bytes = hit ? await readFile(hit.file).catch(() => null) : null;
@@ -611,6 +622,12 @@ export function serve(positions, config, {
     const tileForShare = parseTilePath(url.pathname) && shareToken && await validShare(shareToken);
 
     if (!ok && !tileForShare) return deny();
+    // A share page's tiles, admitted by the share token alone, with nobody
+    // signed in behind them. Served here, so that nothing below — all of which
+    // is about a viewer — ever runs without one. (It once did: the check that
+    // keeps a watch to its allowance read `viewer.via` on nobody, and every
+    // share page took the server down with its first tile.)
+    if (!ok) return serveTile(parseTilePath(url.pathname), res);
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
       const html = await readFile(PAGE, 'utf8').catch(() => null);
@@ -723,17 +740,7 @@ export function serve(positions, config, {
     // The basemap. Guarded like everything else, so this cannot be used as
     // somebody else's free tile proxy.
     const tile = parseTilePath(url.pathname);
-    if (tile) {
-      const got = await tiles.get(tile);
-      if (!got) { res.writeHead(502, { 'content-type': 'text/plain' }); res.end('no tile'); return; }
-      res.writeHead(200, {
-        'content-type': 'image/png',
-        'cache-control': 'private, max-age=604800',
-        'x-tile-source': got.from,
-      });
-      res.end(got.bytes);
-      return;
-    }
+    if (tile) return serveTile(tile, res);
 
     // What is at a point. Asked per person by the page, which rounds the
     // coordinates before asking, so someone standing still asks once.

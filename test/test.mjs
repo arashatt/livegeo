@@ -1664,6 +1664,13 @@ head('private places, on the wire');
   const opened = await (await fetch(`${base}/api/shared/${token}`)).json();
   t('the link opens on that path', opened.points.length === shared.points.length);
   t('without saying whose it is', !('person' in opened));
+  // The share page's tiles come with the token and nobody signed in. They
+  // used to reach a check that read `viewer.via` on nobody, and the first one
+  // took the whole server down.
+  const tileRes = await fetch(`${base}/tiles/15/21809/12850.png?s=${token}`);
+  t('a share page can ask for tiles by its token', tileRes.status === 200 || tileRes.status === 502, tileRes.status);
+  t('and the server is still there afterwards', (await fetch(`${base}/healthz`)).status === 200);
+  t('a tile with a made-up token is refused', (await fetch(`${base}/tiles/15/21809/12850.png?s=notarealtoken123`)).status === 401);
   const asGpx = await fetch(`${base}/api/shared/${token}?format=gpx`);
   t('and gives it as GPX too', asGpx.status === 200 && /application\/gpx\+xml/.test(asGpx.headers.get('content-type'))
     && (await asGpx.text()).split('<trkpt ').length - 1 === shared.points.length);
