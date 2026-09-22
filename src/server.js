@@ -228,8 +228,9 @@ export function serve(positions, config, {
     }
 
     // Leaflet is a public library and a share page needs it, so it is not
-    // behind the dashboard token. It carries no data.
-    if (url.pathname.startsWith('/vendor/')) return serveStatic(url, res);
+    // behind the dashboard token. It carries no data. /lib/ is the same for
+    // code of our own that both pages load — arithmetic, not information.
+    if (url.pathname.startsWith('/vendor/') || url.pathname.startsWith('/lib/')) return serveStatic(url, res);
 
     // A share link is a second key, and a far narrower one: it opens the
     // viewer, the one path behind it, and the tiles that page draws on.
@@ -337,7 +338,11 @@ export function serve(positions, config, {
     // recorded, so the page does not need to know whether PostGIS is there.
     if (url.pathname.startsWith('/api/history/')) {
       const id = decodeURIComponent(url.pathname.slice('/api/history/'.length));
-      const points = geo ? await geo.historyOf(id, { limit: 1000 }) : [];
+      // A window, because a path drawn across a week is a tangle nobody reads.
+      const since = Number(url.searchParams.get('since'));
+      const points = geo
+        ? await geo.historyOf(id, { limit: 1000, since: Number.isFinite(since) && since > 0 ? since : null })
+        : [];
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ id, points }));
       return;

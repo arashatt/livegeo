@@ -244,6 +244,20 @@ Raise `MIN_MOVE` if paths still look restless, lower it if short walks are
 being missed. It is only the floor: a poor fix always raises the bar for
 itself.
 
+### What time it was, anywhere on a path
+
+Hover over a path — or tap it, on a phone — and it says when that part was
+travelled, how long ago, and how fast: `≈ 14:32 · 8m ago · 4.1 km/h`. Lighting
+somebody also draws their last day from history, not just the recent trail.
+
+The `≈` is the honest part. Between two fixes nothing was observed — the same
+filter above drops readings that did not move far enough — so a time between
+them is an estimate at a steady pace. At a fix itself the time is exact, and
+the `≈` goes away.
+
+Shared paths keep their times too. A share made before times were recorded
+still opens, and says "time not recorded" rather than inventing one.
+
 ## How live locations actually work
 
 A live location is **one message that its sender keeps editing**. So:

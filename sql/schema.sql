@@ -59,3 +59,6 @@ CREATE TABLE IF NOT EXISTS shares (
   expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shares_expires_idx ON shares (expires_at);
+-- When each vertex of a shared path was passed, in epoch seconds, index for
+-- index with the line. Added after shares existed; older rows have none.
+ALTER TABLE shares ADD COLUMN IF NOT EXISTS times bigint[];

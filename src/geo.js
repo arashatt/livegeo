@@ -176,11 +176,15 @@ export function makeGeo({ url, log = console } = {}) {
     async createShare({ token, person, name = '', points, ttlSeconds }) {
       if (!pool || !Array.isArray(points) || points.length < 2) return false;
       const wkt = points.map((p) => `${p.longitude} ${p.latitude}`).join(',');
+      // When each point was passed, kept beside the line rather than in it:
+      // PostGIS can carry a measure per vertex, but an array the page reads
+      // directly is simpler than asking every query to unpack one.
+      const times = points.map((p) => (Number.isFinite(Number(p.at)) ? Math.floor(Number(p.at)) : null));
       await pool.query(
-        `INSERT INTO shares (token, person, name, path, expires_at)
-         VALUES ($1, $2, $3, ST_GeogFromText($4),
+        `INSERT INTO shares (token, person, name, path, times, expires_at)
+         VALUES ($1, $2, $3, ST_GeogFromText($4), $6::bigint[],
                  now() + make_interval(secs => $5))`,
-        [token, String(person), name, `SRID=4326;LINESTRING(${wkt})`, Number(ttlSeconds)],
+        [token, String(person), name, `SRID=4326;LINESTRING(${wkt})`, Number(ttlSeconds), times],
       );
       return true;
     },
@@ -190,7 +194,7 @@ export function makeGeo({ url, log = console } = {}) {
     async readShare(token) {
       if (!pool) return null;
       const { rows } = await pool.query(
-        `SELECT name,
+        `SELECT name, times,
                 extract(epoch FROM created_at)::bigint AS at,
                 ST_AsGeoJSON(path::geometry) AS geojson
            FROM shares
@@ -204,6 +208,11 @@ export function makeGeo({ url, log = console } = {}) {
         at: Number(rows[0].at),
         // GeoJSON is longitude first; the map wants latitude first.
         points: coords.map(([lon, lat]) => [lat, lon]),
+        // Shares made before times were kept have none, and say so by being
+        // null rather than by inventing any.
+        times: Array.isArray(rows[0].times) && rows[0].times.length === coords.length
+          ? rows[0].times.map((t) => (t === null ? null : Number(t)))
+          : null,
       };
     },
 
@@ -314,15 +323,16 @@ export function makeGeo({ url, log = console } = {}) {
       }));
     },
 
-    async historyOf(person, { limit = 500 } = {}) {
+    async historyOf(person, { limit = 500, since = null } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(
         `SELECT extract(epoch FROM at)::bigint AS at,
                 ST_Y(geom::geometry) AS latitude,
                 ST_X(geom::geometry) AS longitude
-           FROM positions WHERE person = $1
+           FROM positions
+          WHERE person = $1 AND ($3::bigint IS NULL OR at > to_timestamp($3))
           ORDER BY at DESC LIMIT $2`,
-        [String(person), limit],
+        [String(person), limit, since === null ? null : Math.floor(Number(since))],
       );
       return rows.map((r) => ({
         at: Number(r.at),

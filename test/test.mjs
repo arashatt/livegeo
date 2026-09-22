@@ -18,6 +18,8 @@ import { fromUpdate } from '../src/positions.js';
 import { connect as connectBot, commandIn } from '../src/bot.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
+import '../public/lib/path-time.js';
+const { PathTime } = globalThis;
 import { createHash, createHmac } from 'node:crypto';
 import { serve, staticFile } from '../src/server.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -981,6 +983,71 @@ head('what the message says');
   t('and a departure', announce({ who: 'Ada', name: 'home', entered: false }) === 'Ada left home');
   t('somebody with no name is still somebody',
     announce({ who: '', name: 'home', entered: true }) === 'Someone arrived at home');
+}
+
+
+// -------------------------------------------- what time it was, on a path
+
+head('finding the part of a path under the pointer');
+{
+  const pts = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
+  const mid = PathTime.nearestSegment(pts, { x: 50, y: 4 });
+  t('the first segment, halfway along', mid.index === 0 && Math.abs(mid.t - 0.5) < 1e-9, mid);
+  t('four pixels off it', Math.abs(mid.distance - 4) < 1e-9, mid.distance);
+  const down = PathTime.nearestSegment(pts, { x: 103, y: 75 });
+  t('the second segment, three-quarters down', down.index === 1 && Math.abs(down.t - 0.75) < 1e-9, down);
+  // Past the end of a segment is clamped to its end, not extrapolated beyond.
+  const beyond = PathTime.nearestSegment(pts, { x: -40, y: 0 });
+  t('before the start is the start', beyond.index === 0 && beyond.t === 0, beyond);
+  t('two fixes on one pixel do not divide by zero',
+    PathTime.nearestSegment([{ x: 5, y: 5 }, { x: 5, y: 5 }], { x: 8, y: 9 }).distance === 5);
+  t('a single point is not a path', PathTime.nearestSegment([{ x: 0, y: 0 }], { x: 0, y: 0 }) === null);
+}
+
+head('the time at a point between two fixes');
+{
+  const times = [1000, 1600, 1900];
+  t('a steady pace between fixes', PathTime.timeAt(times, 0, 0.5) === 1300);
+  t('exact at the far end', PathTime.timeAt(times, 1, 1) === 1900);
+  t('clamped rather than extrapolated', PathTime.timeAt(times, 0, 1.4) === 1600);
+  // A share made before times were stored has none, and the page must say so
+  // rather than print midnight on the first of January 1970.
+  t('no times is no answer', PathTime.timeAt(null, 0, 0.5) === null);
+  t('nor is half a pair', PathTime.timeAt([1000, null], 0, 0.5) === null);
+  t('and a missing time is not the start of 1970',
+    PathTime.speedBetween({ latitude: 0, longitude: 0, at: null }, { latitude: 0, longitude: 1, at: 100 }) === null);
+}
+
+head('speed between fixes');
+{
+  // One degree of latitude is about 111.2 km; over an hour that is a car.
+  const a = { latitude: 36, longitude: 59, at: 0 };
+  const b = { latitude: 37, longitude: 59, at: 3600 };
+  const kmh = PathTime.speedBetween(a, b) * 3.6;
+  t('a hundred and eleven km in an hour', Math.abs(kmh - 111.2) < 0.5, kmh);
+  t('reads as a whole number at driving pace', PathTime.speedLabel(PathTime.speedBetween(a, b)) === '111 km/h');
+  t('and to a decimal at walking pace', PathTime.speedLabel(4.1 / 3.6) === '4.1 km/h');
+  t('standing still says so', PathTime.speedLabel(0.05) === 'still');
+  t('a fix that goes back in time has no speed',
+    PathTime.speedBetween({ ...b, at: 100 }, { ...a, at: 50 }) === null);
+}
+
+head('history and the live trail as one path');
+{
+  const history = [   // newest first, as the database returns it
+    { latitude: 1, longitude: 1, at: 300 },
+    { latitude: 1, longitude: 0.5, at: 200 },
+    { latitude: 1, longitude: 0, at: 100 },
+  ];
+  const trail = [
+    { latitude: 1, longitude: 1, at: 300 },        // also in history
+    { latitude: 1, longitude: 1.5, at: 400 },
+  ];
+  const merged = PathTime.merge(history, trail);
+  t('in time order', merged.map((q) => q.at).join() === '100,200,300,400', merged.map((q) => q.at));
+  t('with the overlap kept once', merged.length === 4, merged.length);
+  t('and a fix with no position dropped',
+    PathTime.merge([{ latitude: null, longitude: null, at: 5 }], []).length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

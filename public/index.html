@@ -93,6 +93,10 @@
   .card .chandle{font-size:.82rem;color:var(--quiet)}
   .card .cid{font-size:.75rem;color:var(--quiet);font-variant-numeric:tabular-nums;opacity:.7}
   .leaflet-popup-content{margin:.7rem .8rem}
+  /* The time under the pointer. A label, not a card: it follows the cursor. */
+  .time-tip{font:600 .78rem/1.3 ui-sans-serif,system-ui,sans-serif;padding:.2rem .45rem;
+            border-radius:.35rem;white-space:nowrap}
+  .time-tip .quiet{font-weight:400;opacity:.7}
   /* A fence is a place, not a person: drawn quietly, under everything else. */
   .fencing #map{cursor:crosshair}
   .fencing #newfence{background:var(--ink);color:var(--paper);border-color:var(--ink)}
@@ -114,6 +118,7 @@
 </main>
 
 <script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/lib/path-time.js"></script>
 <script>
 (function () {
   var map = L.map('map', {
@@ -269,10 +274,19 @@
   // stays; `hovered` is transient and only exists on a device with a pointer.
   var lit = null;
   var hovered = null;
+  // Separate from `hovered` because a marker and its path are hovered by
+  // different things, and one leaving must not unlight the other.
+  var pathHover = null;
 
   function shine() {
-    var id = lit || hovered;
+    var id = lit || hovered || pathHover;
     document.body.classList.toggle('spotlight', Boolean(id));
+    // The row follows the map. It used to be marked only when the list was
+    // rebuilt, so lighting somebody by hovering dimmed their own row with
+    // everyone else's.
+    document.querySelectorAll('#list .person').forEach(function (row) {
+      row.classList.toggle('lit', Boolean(id) && row.dataset.id === String(id));
+    });
 
     people.forEach(function (e, key) {
       if (!e.data) return;
@@ -315,11 +329,128 @@
 
   function pin(id) {
     lit = (lit === id) ? null : id;
+    if (lit) loadHistory(lit);
     shine();
   }
 
-  // Tapping the map itself puts everything back.
-  map.on('click', function () { lit = null; hovered = null; shine(); });
+  // ------------------------------------------------ what time it was there
+  //
+  // The live trail is the last TRAIL_MAX fixes, which on a busy day is the
+  // last hour. Lighting a person asks for their last day from history, which
+  // is recorded and until now was never drawn.
+  var historyAsked = {};
+  function loadHistory(id) {
+    if (historyAsked[id]) return;
+    historyAsked[id] = true;
+    var since = Math.floor(Date.now() / 1000) - 86400;
+    fetch('/api/history/' + encodeURIComponent(id) + '?since=' + since, { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var e = people.get(id);
+        if (!d || !d.points || !d.points.length || !e || !e.data) return;
+        e.history = d.points;
+        draw(e.data);
+        shine();
+      })
+      .catch(function () { historyAsked[id] = false; });
+  }
+
+  // How far from a line a pointer can be and still mean it. A thin dashed
+  // line is hard to land on exactly, and a finger is wider than a cursor.
+  var REACH = 12;
+
+  // The nearest drawn path to a point on screen, if any is close enough.
+  // Only the lit one while something is pinned, so moving across the map
+  // does not flick between people.
+  function pathHit(pt) {
+    var best = null;
+    var ids = lit ? [lit] : Array.from(people.keys());
+    ids.forEach(function (id) {
+      var e = people.get(id);
+      if (!e || !e.path || !e.pts || e.pts.length < 2) return;
+      var px = e.pts.map(function (q) { return map.latLngToContainerPoint([q.latitude, q.longitude]); });
+      var hit = PathTime.nearestSegment(px, pt);
+      if (hit && hit.distance <= REACH && (!best || hit.distance < best.hit.distance)) {
+        best = { id: id, e: e, hit: hit, px: px };
+      }
+    });
+    return best;
+  }
+
+  function clock(at) {
+    var d = new Date(at * 1000);
+    var hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Yesterday's 14:32 is not today's; history reaches back a day.
+    return d.toDateString() === new Date().toDateString()
+      ? hm
+      : d.toLocaleDateString([], { weekday: 'short' }) + ' ' + hm;
+  }
+
+  var timeTip = L.tooltip({ direction: 'top', offset: [0, -8], className: 'time-tip', opacity: 1 });
+
+  function showTime(found) {
+    var e = found.e;
+    var h = found.hit;
+    var a = e.pts[h.index];
+    var b = e.pts[h.index + 1];
+    var at = PathTime.timeAt(e.pts.map(function (q) { return q.at; }), h.index, h.t);
+    if (at === null) { hideTime(); return; }
+
+    // Exact at a fix, estimated between two. Within a few pixels of a fix
+    // the reader is pointing at it, and it would be odd to call that a guess.
+    var len = found.px[h.index].distanceTo(found.px[h.index + 1]);
+    var exact = Math.min(h.t, 1 - h.t) * len < 6;
+    var speed = PathTime.speedLabel(PathTime.speedBetween(a, b));
+
+    var where = L.latLng(
+      a.latitude + (b.latitude - a.latitude) * h.t,
+      a.longitude + (b.longitude - a.longitude) * h.t
+    );
+    timeTip.setLatLng(where).setContent(
+      (exact ? '' : '≈ ') + esc(clock(at))
+      + ' <span class="quiet">· ' + esc(ago(at)) + (speed ? ' · ' + esc(speed) : '') + '</span>'
+    );
+    if (!map.hasLayer(timeTip)) timeTip.addTo(map);
+  }
+
+  function hideTime() { if (map.hasLayer(timeTip)) map.removeLayer(timeTip); }
+
+  // Coalesced to one check per frame: projecting every fix on every mousemove
+  // is cheap for a handful of people, but not free.
+  var frame = 0;
+  var pointer = null;
+  map.on('mousemove', function (ev) {
+    pointer = ev.containerPoint;
+    if (frame) return;
+    frame = requestAnimationFrame(function () {
+      frame = 0;
+      if (arming || !pointer) return;
+      var found = pathHit(pointer);
+      var want = found ? found.id : null;
+      if (!lit && want !== pathHover) { pathHover = want; shine(); }
+      if (found) showTime(found); else hideTime();
+    });
+  });
+  map.on('mouseout', function () {
+    pointer = null;
+    hideTime();
+    if (pathHover) { pathHover = null; shine(); }
+  });
+
+  // A tap on a path is how a touch screen asks the same question, since it
+  // has no hover. A tap anywhere else puts everything back.
+  map.on('click', function (ev) {
+    if (arming) return;
+    var found = pathHit(ev.containerPoint);
+    if (found) {
+      if (lit !== found.id) { lit = found.id; loadHistory(lit); shine(); }
+      showTime(found);
+      return;
+    }
+    lit = null; hovered = null; pathHover = null;
+    hideTime();
+    shine();
+  });
 
   // Delegated: the card's markup is replaced when the identity lookup lands,
   // so a handler bound to the button would not survive it.
@@ -370,7 +501,9 @@
       entry.halo.setLatLng(here).setRadius(p.accuracy).setStyle({ color: colour });
     }
 
-    var line = (p.trail || []).map(function (t) { return [t.latitude, t.longitude]; });
+    // Every fix keeps its time beside it; the hover asks for it by index.
+    entry.pts = PathTime.merge(entry.history, p.trail);
+    var line = entry.pts.map(function (t) { return [t.latitude, t.longitude]; });
     if (line.length > 1) {
       if (!entry.path) entry.path = L.polyline(line, { weight: 2, opacity: .45, dashArray: '4 4', color: colour }).addTo(map);
       else entry.path.setLatLngs(line).setStyle({ color: colour });
@@ -412,7 +545,8 @@
     list.innerHTML = '';
     rows.forEach(function (p) {
       var el = document.createElement('button');
-      el.className = 'person' + (live(p) ? ' live' : '') + (lit === p.id ? ' lit' : '');
+      el.className = 'person' + (live(p) ? ' live' : '') + ((lit || hovered || pathHover) === p.id ? ' lit' : '');
+      el.dataset.id = p.id;
       el.innerHTML =
         '<span class="who"><i></i>' + esc(label(p)) + '</span>' +
         '<span class="meta">' +
@@ -440,7 +574,7 @@
         var entry = people.get(p.id);
         // Fit the whole path when lighting one, rather than zooming to the
         // last point — the point of lighting it is to see where it went.
-        if (lit === p.id && entry && entry.path && (p.trail || []).length > 1) {
+        if (lit === p.id && entry && entry.path && (entry.pts || []).length > 1) {
           map.fitBounds(entry.path.getBounds().pad(0.25));
         } else {
           map.setView([p.latitude, p.longitude], 16);
@@ -478,12 +612,19 @@
       // Above the centre rather than on it: a fence usually has somebody
       // standing in the middle of it, and the label was landing under them.
       shape.bindTooltip(f.name, { permanent: true, direction: 'top', className: 'fence-label' });
+      // Under the paths, always: fences are redrawn whenever one changes, and
+      // redrawn last they would otherwise sit on top of everything.
+      shape.bringToBack();
       shape.on('click', function (e) {
         // Only swallow the click when it means something here. Stopping it
         // unconditionally made the inside of an existing fence a dead zone:
         // the map never saw the click, so a new fence could not overlap an
         // old one.
         if (arming) return;
+        // A tap near a path inside a fence is a question about the path, and
+        // letting it bubble means the map's handler answers it. Otherwise
+        // asking the time of anywhere near home offered to delete home.
+        if (pathHit(e.containerPoint)) return;
         L.DomEvent.stopPropagation(e);
         if (!window.confirm('Remove the fence “' + f.name + '”?')) return;
         fetch('/api/fences/' + encodeURIComponent(f.id), { method: 'DELETE' })
