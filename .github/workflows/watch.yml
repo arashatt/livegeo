@@ -1,0 +1,47 @@
+name: Watch apps
+
+# Built here because they cannot be built anywhere else this project runs:
+# the Android SDK and Xcode are not on the server, and not on the machine the
+# code was written on. These runners have both.
+on:
+  push:
+    paths: ['watch/**', '.github/workflows/watch.yml']
+  pull_request:
+    paths: ['watch/**', '.github/workflows/watch.yml']
+  workflow_dispatch:
+
+jobs:
+  wearos:
+    name: Galaxy Watch (Wear OS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: watch/wearos
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The logic — client, outbox, sessions, cadence, tile maths — is plain
+      # Kotlin with its own tests; the app is the Android layer around it.
+      - name: Test the core
+        run: ./gradlew --no-daemon :core:test
+
+      - name: Build the app
+        env:
+          # Set this repository variable to your deployment's public URL, and
+          # the APK is built to talk to it. Unset, it builds against a
+          # placeholder and says so in the app.
+          LIVEGEO_SERVER: ${{ vars.LIVEGEO_SERVER }}
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: livegeo-wearos-debug
+          path: watch/wearos/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
