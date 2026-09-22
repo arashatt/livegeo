@@ -16,7 +16,10 @@ import {
 import { makeCircles, canActFor } from './circles.js';
 import { makeDevices, makeCodes } from './devices.js';
 import { readFixes, fromDevice, MAX_BATCH } from './ingest.js';
-import { makePrivacy, ZONE_MIN, ZONE_MAX, ZONES_EACH } from './privacy.js';
+import {
+  makePrivacy, ZONE_MIN, ZONE_MAX, ZONES_EACH, trimEnds, trimLengths, breaksOf, withBreaks,
+} from './privacy.js';
+import { toGpx, splitAtPauses, dayOf, contentDisposition } from './gpx.js';
 import { randomBytes } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
@@ -45,6 +48,12 @@ function escapeAttr(value) {
 // What a paired watch may read, besides tiles. Everything else is not found.
 const DEVICE_READS = new Set(['/api/me', '/api/positions', '/api/place', '/api/fences']);
 const DEVICE_READ_PREFIXES = ['/api/history/', '/api/person/', '/api/photo/'];
+
+// A GPX file is a day of somebody's movements in a form made to be kept, so
+// its size is bounded twice: a week at most, and a number of fixes no real
+// week comes near.
+const GPX_WINDOW = 7 * 86400;
+const GPX_MAX = 50_000;
 
 // The body of a request as JSON, or an error saying why not. Capped, because
 // a body is whatever the other end chose to send.
@@ -665,9 +674,34 @@ export function serve(positions, config, {
 
     if (url.pathname.startsWith('/api/shared/')) {
       const shared = (await validShare(shareToken)) && geo ? await geo.readShare(shareToken) : null;
-      if (!shared) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"error":"gone"}'); return; }
+      // Private places made, or Passive windows recorded, after the link was
+      // sent still apply to it: hiding home should not depend on remembering
+      // every link that was ever handed out.
+      const points = shared ? privacy.veilPoints(shared.person, withBreaks(
+        shared.points.map(([latitude, longitude], i) => ({ latitude, longitude, at: shared.times ? shared.times[i] : null })),
+        shared.breaks,
+      )) : [];
+      if (points.length < 2) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"error":"gone"}'); return; }
+      if (url.searchParams.get('format') === 'gpx') {
+        const first = points.find((q) => q.at !== null)?.at ?? shared.at;
+        res.writeHead(200, {
+          'content-type': 'application/gpx+xml; charset=utf-8',
+          'content-disposition': contentDisposition(shared.name, dayOf(first)),
+          'cache-control': 'no-store',
+        });
+        res.end(toGpx({ name: shared.name ? `${shared.name}’s path` : 'A shared path', points: splitAtPauses(points), time: first }));
+        return;
+      }
+      // Field by field: `person` is for this server, not for whoever holds
+      // the link.
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(JSON.stringify(shared));
+      res.end(JSON.stringify({
+        name: shared.name,
+        at: shared.at,
+        points: points.map((q) => [q.latitude, q.longitude]),
+        times: shared.times ? points.map((q) => q.at) : null,
+        breaks: breaksOf(points),
+      }));
       return;
     }
 
@@ -840,6 +874,32 @@ export function serve(positions, config, {
       return;
     }
 
+    // A day of your own path as GPX, for Strava, Garmin or your own records.
+    // Yours, or an admin's call: a circle sees a path on the map, but a file
+    // made to be kept is for the person who walked it.
+    if (url.pathname.startsWith('/api/gpx/') && req.method === 'GET') {
+      const id = decodeURIComponent(url.pathname.slice('/api/gpx/'.length));
+      if (!canActFor(viewer, id)) return notFound();
+      if (!geo || !geo.enabled()) return json(503, { error: 'no database' });
+      const nowS = Math.floor(Date.now() / 1000);
+      const to = Number(url.searchParams.get('to')) || nowS;
+      const from = Number(url.searchParams.get('from')) || to - 86400;
+      if (!(to > from) || to - from > GPX_WINDOW) return json(400, { error: 'a window of at most seven days' });
+      const tz = Math.max(-840, Math.min(840, Number(url.searchParams.get('tz')) || 0));
+      const recorded = await geo.historyOf(id, { since: from - 1, until: to, limit: GPX_MAX + 1 });
+      if (recorded.length > GPX_MAX) return json(413, { error: 'more than 50,000 fixes in that window — pick a shorter one' });
+      if (!recorded.length) return json(404, { error: 'nothing recorded then' });
+      const name = circles.user(id)?.name || positions.get(id)?.name || '';
+      const day = dayOf(from, tz);
+      res.writeHead(200, {
+        'content-type': 'application/gpx+xml; charset=utf-8',
+        'content-disposition': contentDisposition(name, day),
+        'cache-control': 'no-store',
+      });
+      res.end(toGpx({ name: `${name || 'Path'} — ${day}`, points: splitAtPauses([...recorded].reverse()), time: from }));
+      return;
+    }
+
     // Hand one person's path to somebody who does not have the dashboard.
     if (url.pathname.startsWith('/api/share/') && req.method === 'POST') {
       const id = decodeURIComponent(url.pathname.slice('/api/share/'.length));
@@ -850,10 +910,15 @@ export function serve(positions, config, {
       const points = (person?.trail || []).filter((t) => t.latitude !== null);
       if (!geo || !geo.enabled()) { res.writeHead(503, { 'content-type': 'application/json' }); res.end('{"error":"no database"}'); return; }
       if (points.length < 2) { res.writeHead(409, { 'content-type': 'application/json' }); res.end('{"error":"no path yet"}'); return; }
+      // What the world gets is what the circle gets, less a few hundred
+      // metres at each end: a path usually starts or ends at somebody's door,
+      // and a share should never show which one.
+      const shown = trimEnds(privacy.veilPoints(id, points), trimLengths());
+      if (shown.length < 2) return json(409, { error: 'too short to share without its ends' });
 
       const token = randomBytes(18).toString('base64url');
       const made = await geo.createShare({
-        token, person: id, name: person.name || '', points, ttlSeconds: config.shareTtl,
+        token, person: id, name: person.name || '', points: shown, breaks: breaksOf(shown), ttlSeconds: config.shareTtl,
       }).catch((e) => { log.error('share:', e && e.message ? e.message : e); return false; });
       if (!made) { res.writeHead(500, { 'content-type': 'application/json' }); res.end('{"error":"could not share"}'); return; }
 

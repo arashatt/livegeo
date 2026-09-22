@@ -25,6 +25,7 @@ import { verifyIdToken, resetCaches, bytesToB64u } from '../src/oidc.js';
 import {
   offsetCentre, zoneAt, veilPoints, veilPerson, trimEnds, trimLengths, breaksOf, withBreaks, makePrivacy,
 } from '../src/privacy.js';
+import { toGpx, splitAtPauses, dayOf, contentDisposition, xmlText } from '../src/gpx.js';
 import { seal, unseal } from '../src/login.js';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -1131,9 +1132,11 @@ head('the leak matrix: every route, as every kind of viewer');
 
   const store = new Positions({ minMove: 1 });
   const now = Math.floor(Date.now() / 1000);
+  // Two kilometres each, a fix every 55 m: long enough to share once a few
+  // hundred metres come off each end.
   for (const [id, name, lat] of [['2', 'Ada', 36.30], ['3', 'Grace', 36.31]]) {
-    for (let i = 0; i < 2; i++) {
-      store.update({ id, name, latitude: lat + i * 0.01, longitude: 59.6, accuracy: 5, at: now - 60 + i, liveUntil: now + 600 });
+    for (let i = 0; i < 40; i++) {
+      store.update({ id, name, latitude: lat + i * 0.0005, longitude: 59.6, accuracy: 5, at: now - 60 + i, liveUntil: now + 600 });
     }
   }
   const { server, publish } = serve(store, {
@@ -1167,7 +1170,7 @@ head('the leak matrix: every route, as every kind of viewer');
     signedIn: ['/', '/index.html', '/api/me', '/api/place'],
     filtered: ['/api/positions', '/api/stream'],
     canSee: ['/api/history/', '/api/person/', '/api/photo/'],
-    selfOnly: ['/api/share/', '/api/forget/'],
+    selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/'],
     owned: ['/api/fences', '/api/fences/'],
     ownCircle: ['/api/circle', '/api/circle/', '/api/circle/invite', '/api/circle/viewer/', '/api/circle/owner/'],
     pairing: ['/api/devices/pair'],
@@ -1209,6 +1212,13 @@ head('the leak matrix: every route, as every kind of viewer');
   t('Ada cannot take Grace’s share down', (await hit('ada', `/api/share/${token}`, 'DELETE')).status === 404);
   t('Grace can', (await hit('grace', `/api/share/${token}`, 'DELETE')).status === 200);
   t('Grace cannot erase Ada', (await hit('grace', '/api/forget/2', 'POST')).status === 404);
+  t('Ada, who can see Grace, cannot take a GPX of her', (await hit('ada', '/api/gpx/3')).status === 404);
+  const gpx = await hit('grace', '/api/gpx/3');
+  t('Grace can take her own', gpx.status === 200 && /application\/gpx\+xml/.test(gpx.headers.get('content-type'))
+    && /^attachment; filename="grace-/.test(gpx.headers.get('content-disposition')), gpx.headers.get('content-disposition'));
+  t('and it is GPX', /<gpx version="1.1"[\s\S]*<trkpt lat="1.0000000" lon="1.0000000">/.test(await gpx.text()));
+  t('an admin can take anybody’s', (await hit('token', '/api/gpx/3')).status === 200);
+  t('a window longer than a week is refused', (await hit('grace', '/api/gpx/3?from=1&to=900000')).status === 400);
   t('and nothing was erased', db.forgotten.length === 0, db.forgotten);
 
   // --- fences are somebody's
@@ -1267,6 +1277,7 @@ head('the leak matrix: every route, as every kind of viewer');
     ['list or remove devices', '/api/devices', 'GET'],
     ['hide a place', '/api/zones?lat=1&lon=1&radius=500', 'POST'],
     ['switch Passive on', '/api/passive', 'POST'],
+    ['take a GPX of its owner', '/api/gpx/3', 'GET'],
   ]) {
     t(`a watch cannot ${what}`, (await watch(path, method)).status === 404, path);
   }
@@ -1510,6 +1521,32 @@ head('Passive mode, as the bot hears it');
   t('an hour reads as one', lasting(3600) === '1 h' && lasting(5400) === '1 h 30 min' && lasting(2700) === '45 min');
 }
 
+head('GPX: a path as a file other software reads');
+{
+  const t0 = 1_790_000_000;
+  const walk = Array.from({ length: 3 }, (_, i) => ({ latitude: 36.3 + i * 0.001, longitude: 59.6, at: t0 + i * 30 }));
+  const later = walk.map((q) => ({ ...q, latitude: q.latitude + 0.01, at: q.at + 3600 }));
+  const file = toGpx({ name: 'Ada', points: splitAtPauses([...walk, ...later]), time: t0 });
+  t('it declares GPX 1.1', file.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1"')
+    && file.includes('xmlns="http://www.topografix.com/GPX/1/1"'));
+  t('an hour’s pause starts a new segment, so nothing joins the two with a line',
+    file.split('<trkseg>').length - 1 === 2);
+  t('a hidden stretch does too', toGpx({ points: [walk[0], walk[1], { ...walk[2], gap: true }] }).split('<trkseg>').length - 1 === 2);
+  t('times are UTC, to the second', file.includes('<time>2026-09-21T14:13:20Z</time>'));
+  t('coordinates to seven places', file.includes('<trkpt lat="36.3000000" lon="59.6000000">'));
+  t('a fix without a time has none, rather than 1970', !toGpx({ points: [{ latitude: 1, longitude: 1, at: null }] }).includes('<time>'));
+  t('nonsense coordinates are left out', !toGpx({ points: [{ latitude: 91, longitude: 0 }, { latitude: 'x', longitude: 1 }] }).includes('<trkpt'));
+  const odd = xmlText('Ada <b> & "Grace" \u0001\u000B');
+  t('a name is escaped, and characters XML forbids are dropped', odd === 'Ada &lt;b&gt; &amp; &quot;Grace&quot; ', odd);
+  t('the day is the one the page picked, not Greenwich’s', dayOf(1_790_022_600, -210) === '2026-09-22' && dayOf(1_790_022_600, 0) === '2026-09-21');
+  const persian = contentDisposition('آرش', '2026-09-22');
+  t('a Persian name survives as the file name', persian.includes("filename*=UTF-8''%D8%A2%D8%B1%D8%B4%202026-09-22.gpx"), persian);
+  t('with a plain fallback for anything old', persian.startsWith('attachment; filename="2026-09-22.gpx"'));
+  t('and a name that is only punctuation is a path', contentDisposition('', '').includes('filename="path.gpx"'));
+  const quoted = /filename\*=UTF-8''([^;]*)$/.exec(contentDisposition("O'Neil (x)", '2026-01-01'))[1];
+  t('quotes and brackets are encoded, not trusted', quoted === 'O%27Neil%20%28x%29%202026-01-01.gpx', quoted);
+}
+
 head('private places and Passive, on the wire');
 {
   const db = {
@@ -1534,6 +1571,14 @@ head('private places and Passive, on the wire');
     deleteZone: async (id) => { db.zones = db.zones.filter((z) => z.id !== id); return 1; },
     createPassive: async (w) => { const id = db.next++; db.passive.push({ id, ...w }); return id; },
     setPassiveEnd: async () => 1,
+    shares: [],
+    createShare: async ({ token, person, name, points, breaks }) => { geo.shares.push({ token, person, name, points, breaks }); return true; },
+    readShare: async (token) => {
+      const sh = geo.shares.find((x) => x.token === token);
+      return sh ? { name: sh.name, at: now, points: sh.points.map((q) => [q.latitude, q.longitude]),
+        times: sh.points.map((q) => q.at), breaks: sh.breaks, person: sh.person } : null;
+    },
+    shareOwner: async (token) => geo.shares.find((x) => x.token === token)?.person ?? null,
   };
   const botToken = '123:privacy';
   const circles = makeCircles({ geo, admins: ['1'] });
@@ -1544,8 +1589,9 @@ head('private places and Passive, on the wire');
   await privacy.load();
   const store = new Positions({ minMove: 1 });
   const now = Math.floor(Date.now() / 1000);
-  // Grace walks home from the north. The last two fixes are inside the place.
-  const walk = [36.3100, 36.3060, 36.3020, 36.3004];
+  // Grace walks home from the north, a fix every 55 m for two kilometres. The
+  // last three fixes are inside the place she is about to hide.
+  const walk = [...Array.from({ length: 40 }, (_, i) => +(36.3225 - i * 0.0005).toFixed(4)), 36.3025, 36.3020, 36.3004];
   walk.forEach((lat, i) => {
     const fix = { id: '3', name: 'Grace', latitude: lat, longitude: 59.6, accuracy: 5, heading: 180, at: now - 600 + i * 100, liveUntil: now + 3600 };
     store.update(fix);
@@ -1625,10 +1671,11 @@ head('private places and Passive, on the wire');
   const adaList = await take('ada', '/api/positions');
   const g = graceIn(adaList.people);
   t('Ada’s list has Grace as the place, not the point', g.hidden && g.latitude === centre.latitude && g.heading === null);
-  t('with the part of her path that was outside it', g.trail.map((q) => q.latitude).join() === '36.31,36.306', g.trail);
+  t('with the part of her path that was outside it', g.trail.length === 40
+    && g.trail.every((q) => metresBetween(q, centre) > centre.radius) && g.trail[39].latitude === 36.303, g.trail.length);
   const adaHistory = await take('ada', '/api/history/3');
   t('Ada’s history of Grace stops where the place begins',
-    adaHistory.points.map((q) => q.latitude).join() === '36.306,36.31', adaHistory.points);
+    adaHistory.points.length === 40 && adaHistory.points[0].latitude === 36.303, adaHistory.points.slice(0, 3));
   await take('ada', '/api/person/3');
   await take('ada', '/api/me');
   await take('ada', '/api/zones');
@@ -1636,7 +1683,34 @@ head('private places and Passive, on the wire');
   t('the admin still sees exactly', graceIn((await (await hit('admin', '/api/positions')).json()).people).latitude === 36.3004);
   t('and so does the shared token', graceIn((await (await hit('token', '/api/positions')).json()).people).latitude === 36.3004);
   t('and Grace herself', graceIn((await (await hit('grace', '/api/positions')).json()).people).latitude === 36.3004);
-  t('the admin’s history is whole', (await (await hit('admin', '/api/history/3')).json()).points.length === 4);
+  t('the admin’s history is whole', (await (await hit('admin', '/api/history/3')).json()).points.length === 43);
+
+  // Sharing, with the place in force: what the world gets is the circle's
+  // view, less a few hundred metres at each end.
+  const shareRes = await hit('grace', '/api/share/3', 'POST');
+  const shared = geo.shares[0];
+  t('Grace can share her walk home', shareRes.status === 200 && Boolean(shared), shareRes.status);
+  t('and nothing inside her place is in it', shared.points.every((q) => metresBetween(q, centre) > centre.radius));
+  const alongStart = metresBetween({ latitude: 36.3225, longitude: 59.6 }, shared.points[0]);
+  const alongEnd = metresBetween({ latitude: 36.3030, longitude: 59.6 }, shared.points[shared.points.length - 1]);
+  t('its first few hundred metres are gone', alongStart >= 200 && alongStart < 560, alongStart);
+  t('and the last few hundred before the place', alongEnd >= 200 && alongEnd < 560, alongEnd);
+  const token = (await shareRes.json()).token;
+  const opened = await (await fetch(`${base}/api/shared/${token}`)).json();
+  t('the link opens on that path', opened.points.length === shared.points.length);
+  t('without saying whose it is', !('person' in opened));
+  const asGpx = await fetch(`${base}/api/shared/${token}?format=gpx`);
+  t('and gives it as GPX too', asGpx.status === 200 && /application\/gpx\+xml/.test(asGpx.headers.get('content-type'))
+    && (await asGpx.text()).split('<trkpt ').length - 1 === shared.points.length);
+  // A place hidden after the link was sent covers it too.
+  await hit('grace', '/api/zones?name=Cafe&lat=36.316&lon=59.6&radius=200', 'POST');
+  const cafe = privacy.zonesOf('3').find((z) => z.name === 'Cafe');
+  const reopened = await (await fetch(`${base}/api/shared/${token}`)).json();
+  t('a place hidden later is taken out of a link already sent',
+    reopened.points.length < opened.points.length
+    && reopened.points.every(([latitude, longitude]) => metresBetween({ latitude, longitude }, cafe) > cafe.radius));
+  t('and the path says where it jumps', reopened.breaks.length === 1, reopened.breaks);
+  await hit('grace', `/api/zones/${cafe.id}`, 'DELETE');
 
   // She moves about at home. Ada's maps hear only that she is still there.
   publish(store.update({ id: '3', name: 'Grace', latitude: 36.3001, longitude: 59.6, accuracy: 5, heading: 90, at: now + 5, liveUntil: now + 3600 }));
@@ -1689,7 +1763,7 @@ head('private places and Passive, on the wire');
     return out;
   };
   const seenByAda = texts.flatMap((x) => coords(JSON.parse(x)));
-  const hiddenPoints = [36.3020, 36.3004, 36.3001].map((lat) => ({ latitude: lat, longitude: 59.6 })).concat([away]);
+  const hiddenPoints = [36.3025, 36.3020, 36.3004, 36.3001].map((lat) => ({ latitude: lat, longitude: 59.6 })).concat([away]);
   const blurs = events.filter((e) => e.data?.hidden).map((e) => e.data);
   const badly = seenByAda.filter((c) => {
     const isBlur = blurs.some((b) => b.latitude === c.latitude && b.longitude === c.longitude);
@@ -1700,7 +1774,7 @@ head('private places and Passive, on the wire');
   t('and none is anywhere Grace was while hidden',
     !seenByAda.some((c) => hiddenPoints.some((h) => metresBetween(c, h) < 1)));
   t('nor does any of those numbers appear in anything Ada was sent',
-    !texts.some((x) => /36\.3004|36\.3001|36\.302[^\d]|36\.35[^\d]/.test(x)));
+    !texts.some((x) => /36\.3025|36\.3004|36\.3001|36\.302[^\d]|36\.35[^\d]/.test(x)));
 
   // Places are the owner's alone.
   const adaZones = JSON.parse(bodies.find((b) => b.path === '/api/zones').text);

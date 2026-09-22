@@ -173,7 +173,7 @@ export function makeGeo({ url, log = console } = {}) {
 
     // A LineString needs two points; one place is not a path, and refusing is
     // better than sharing a link that opens on nothing.
-    async createShare({ token, person, name = '', points, ttlSeconds }) {
+    async createShare({ token, person, name = '', points, breaks = [], ttlSeconds }) {
       if (!pool || !Array.isArray(points) || points.length < 2) return false;
       const wkt = points.map((p) => `${p.longitude} ${p.latitude}`).join(',');
       // When each point was passed, kept beside the line rather than in it:
@@ -181,10 +181,11 @@ export function makeGeo({ url, log = console } = {}) {
       // directly is simpler than asking every query to unpack one.
       const times = points.map((p) => (Number.isFinite(Number(p.at)) ? Math.floor(Number(p.at)) : null));
       await pool.query(
-        `INSERT INTO shares (token, person, name, path, times, expires_at)
-         VALUES ($1, $2, $3, ST_GeogFromText($4), $6::bigint[],
+        `INSERT INTO shares (token, person, name, path, times, breaks, expires_at)
+         VALUES ($1, $2, $3, ST_GeogFromText($4), $6::bigint[], $7::int[],
                  now() + make_interval(secs => $5))`,
-        [token, String(person), name, `SRID=4326;LINESTRING(${wkt})`, Number(ttlSeconds), times],
+        [token, String(person), name, `SRID=4326;LINESTRING(${wkt})`, Number(ttlSeconds), times,
+         (breaks || []).map(Number)],
       );
       return true;
     },
@@ -194,7 +195,7 @@ export function makeGeo({ url, log = console } = {}) {
     async readShare(token) {
       if (!pool) return null;
       const { rows } = await pool.query(
-        `SELECT name, times,
+        `SELECT name, times, breaks, person,
                 extract(epoch FROM created_at)::bigint AS at,
                 ST_AsGeoJSON(path::geometry) AS geojson
            FROM shares
@@ -213,6 +214,12 @@ export function makeGeo({ url, log = console } = {}) {
         times: Array.isArray(rows[0].times) && rows[0].times.length === coords.length
           ? rows[0].times.map((t) => (t === null ? null : Number(t)))
           : null,
+        // Where the path resumes after a hidden stretch. Older shares had
+        // none to keep.
+        breaks: Array.isArray(rows[0].breaks) ? rows[0].breaks.map(Number) : [],
+        // Whose path it is — for the server, which applies their private
+        // places when the share is read. Never sent to the page.
+        person: String(rows[0].person),
       };
     },
 
