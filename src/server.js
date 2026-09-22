@@ -9,7 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { parseTilePath, makeTiles } from './tiles.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
-import { SESSION_COOKIE, mint, readSession, checkWidget } from './login.js';
+import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
+import {
+  getDiscovery, issuerFor, randomToken, codeChallenge, exchangeCode, verifyIdToken, userFromClaims,
+} from './oidc.js';
 import { makeCircles, canActFor } from './circles.js';
 import { makeDevices, makeCodes } from './devices.js';
 import { readFixes, fromDevice, MAX_BATCH } from './ingest.js';
@@ -241,14 +244,45 @@ export function serve(positions, config, {
     return viewer ? { ...viewer, via: 'session' } : null;
   };
 
-  const setSession = (res, id, to = '/') => {
+  const setSession = (res, id, to = '/', also = []) => {
     res.writeHead(302, {
       location: to,
       'cache-control': 'no-store',
-      'set-cookie': `${SESSION_COOKIE}=${encodeURIComponent(mint(id, { botToken: config.botToken }))}`
-        + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000',
+      'set-cookie': [
+        `${SESSION_COOKIE}=${encodeURIComponent(mint(id, { botToken: config.botToken }))}`
+          + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000',
+        ...also,
+      ],
     });
     res.end();
+  };
+
+  const cookieOf = (req, name) => {
+    const hit = String(req.headers.cookie || '').split(';').map((c) => c.trim()).find((c) => c.startsWith(`${name}=`));
+    if (!hit) return '';
+    try { return decodeURIComponent(hit.slice(name.length + 1)); } catch { return ''; }
+  };
+  // Lax, not Strict: the OpenID callback arrives as a navigation from
+  // Telegram, and Strict would withhold exactly the cookie it needs.
+  const shortCookie = (name, value, seconds) =>
+    `${name}=${encodeURIComponent(value)}; Path=/auth/; HttpOnly; SameSite=Lax; Max-Age=${seconds}`;
+  const OIDC_TX = 'tll_oidc_tx';
+  const OIDC_PENDING = 'tll_oidc';
+
+  // "Sign in with Telegram". Needs the client secret, and circles: the
+  // subject Telegram issues is scoped to this site and has to be linked, once,
+  // to the id the bot knows — which needs somewhere to keep the link.
+  const oidcOn = () => Boolean(config.oidcSecret && config.oidcClientId && circles.enabled && geo);
+  const oidcEnv = { TELEGRAM_OIDC_ISSUER: config.oidcIssuer || undefined };
+  const redirectUri = (req) => config.oidcRedirect
+    || `${config.publicUrl || `http://${req.headers.host || 'localhost'}`}/auth/telegram/callback`;
+
+  const page = (res, status, title, body, cookies = []) => {
+    res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'set-cookie': cookies });
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeAttr(title)}</title>
+<body style="font:15px/1.6 system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1rem">
+<h1 style="font-size:1.1rem">${escapeAttr(title)}</h1>${body}</body>`);
   };
 
   const server = createServer(async (req, res) => {
@@ -275,7 +309,7 @@ export function serve(positions, config, {
       if (page) {
         res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         res.end(page.replace('<body>',
-          `<body data-bot="${escapeAttr(botName)}" data-domain="${escapeAttr(config.botDomain || '')}">`));
+          `<body data-bot="${escapeAttr(botName)}" data-domain="${escapeAttr(config.botDomain || '')}" data-oidc="${oidcOn() ? '1' : ''}">`));
         return;
       }
       res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
@@ -338,6 +372,86 @@ export function serve(positions, config, {
       return;
     }
 
+    if (url.pathname === '/auth/telegram/start') {
+      if (!oidcOn()) return json(404, { error: 'not found' });
+      const discovery = await getDiscovery(oidcEnv).catch((e) => { log.error('oidc:', e.message); return null; });
+      if (!discovery) return page(res, 503, 'Telegram sign-in is unavailable', '<p>Telegram could not be reached. Try /login in the bot instead.</p>');
+      const state = randomToken(24);
+      const nonce = randomToken(24);
+      const verifier = randomToken(32);
+      const to = new URL(discovery.authorization_endpoint);
+      to.searchParams.set('response_type', 'code');
+      to.searchParams.set('client_id', config.oidcClientId);
+      to.searchParams.set('redirect_uri', redirectUri(req));
+      to.searchParams.set('scope', config.oidcScope);
+      to.searchParams.set('state', state);
+      to.searchParams.set('nonce', nonce);
+      to.searchParams.set('code_challenge', await codeChallenge(verifier));
+      to.searchParams.set('code_challenge_method', 'S256');
+      res.writeHead(302, {
+        location: to.toString(),
+        'cache-control': 'no-store',
+        'set-cookie': shortCookie(OIDC_TX, seal('oidc-tx', { state, nonce, verifier }, 600, config.oidcSecret), 600),
+      });
+      res.end();
+      return;
+    }
+
+    if (url.pathname === '/auth/telegram/callback') {
+      if (!oidcOn()) return json(404, { error: 'not found' });
+      const dropTx = shortCookie(OIDC_TX, '', 0);
+      const fail = (why) => page(res, 400, 'Sign-in did not work', `<p>${escapeAttr(why)}</p><p><a href="/">Try again</a>, or send /login to the bot.</p>`, [dropTx]);
+      if (url.searchParams.get('error')) return fail(url.searchParams.get('error_description') || url.searchParams.get('error'));
+      const tx = unseal('oidc-tx', cookieOf(req, OIDC_TX), config.oidcSecret);
+      // A missing or mismatched state is either an expired attempt or a
+      // forged callback, and the answer to both is to start again.
+      if (!tx || tx.state !== url.searchParams.get('state') || !url.searchParams.get('code')) {
+        return fail('That sign-in expired or did not match. Please start again.');
+      }
+      let user;
+      try {
+        const discovery = await getDiscovery(oidcEnv);
+        const tokens = await exchangeCode({
+          tokenEndpoint: discovery.token_endpoint,
+          code: url.searchParams.get('code'),
+          codeVerifier: tx.verifier,
+          redirectUri: redirectUri(req),
+          clientId: config.oidcClientId,
+          clientSecret: config.oidcSecret,
+        });
+        const claims = await verifyIdToken(tokens.id_token, {
+          jwksUri: discovery.jwks_uri, issuer: issuerFor(oidcEnv), clientId: config.oidcClientId, nonce: tx.nonce,
+        });
+        // The claim *names*, never their values: enough to tell from the logs
+        // whether Telegram ever sends the bot-visible id, which would make the
+        // linking step below unnecessary.
+        log.info(`oidc: claims received — ${Object.keys(claims).sort().join(', ')}`);
+        user = userFromClaims(claims);
+      } catch (e) {
+        log.error('oidc: callback failed —', e.message);
+        return fail('Telegram’s answer could not be verified.');
+      }
+      if (!user.id) return fail('Telegram did not say who you are.');
+
+      const linked = await geo.userBySub(user.id);
+      if (linked && circles.viewerFor(linked)) {
+        log.info('login: somebody signed in with Telegram');
+        return setSession(res, linked, '/', [dropTx]);
+      }
+      // The first time only. Telegram's subject for this site is not the id
+      // the bot knows, so it is carried, sealed, until this browser opens a
+      // /login link — which proves the Telegram account the bot knows. Both
+      // proofs in one browser are the same person. It adds nothing to steal:
+      // somebody holding your /login link can already sign in as you.
+      const pending = seal('oidc-pending', { sub: user.id, name: user.firstName || '' }, 900, config.oidcSecret);
+      return page(res, 200, 'One more step, the first time', `
+<p>Telegram has confirmed who you are. To connect that to your place on the map:</p>
+<ol><li>Open ${botName ? '<b>@' + escapeAttr(botName) + '</b>' : 'the bot'} in Telegram and send <code>/login</code>.</li>
+<li>Open the link it sends <b>in this browser</b>, within fifteen minutes.</li></ol>
+<p>After that, “Sign in with Telegram” takes you straight in.</p>`,
+      [dropTx, shortCookie(OIDC_PENDING, pending, 900)]);
+    }
+
     if (signInOn() && url.pathname.startsWith('/auth/')) {
       const refuse = (why) => {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
@@ -370,7 +484,14 @@ export function serve(positions, config, {
       if (!id) return refuse('that link has been used already, or has expired — send /login again');
       if (!circles.viewerFor(id)) return refuse('that account cannot sign in here');
       log.info('login: somebody signed in through the bot');
-      return setSession(res, id);
+      // A Telegram sign-in waiting in this browser is linked to the account
+      // this link belongs to, and not asked for again.
+      const waiting = oidcOn() ? unseal('oidc-pending', cookieOf(req, OIDC_PENDING), config.oidcSecret) : null;
+      if (waiting?.sub) {
+        await geo.linkSub(id, waiting.sub).catch((e) => log.error('oidc: cannot link —', e.message));
+        log.info('login: a Telegram sign-in was linked');
+      }
+      return setSession(res, id, '/', waiting ? [shortCookie(OIDC_PENDING, '', 0)] : []);
     }
 
     // Leaflet is a public library and a share page needs it, so it is not

@@ -64,6 +64,38 @@ export function readSession(value, { botToken, now = () => Date.now() }) {
   }
 }
 
+// ------------------------------------------------- short-lived sealed values
+//
+// The same signing, for other things a browser has to carry between two
+// requests — the OpenID transaction, a sign-in waiting to be linked. Each has
+// a purpose mixed into its key, as in arashatt/telegram's session.js, so a
+// value sealed for one purpose can never be opened as another: a transaction
+// cookie replayed as a session simply fails to verify.
+//
+// The session cookie above is this with the purpose 'session' — the same key
+// keyFor() has always produced, so no existing session is invalidated.
+
+const purposeKey = (purpose, secret) => createHash('sha256').update(`livegeo/${purpose}/${secret}`).digest();
+
+export function seal(purpose, payload, ttlSeconds, secret, now = () => Date.now()) {
+  const body = b64(JSON.stringify({ ...payload, exp: Math.floor(now() / 1000) + ttlSeconds }));
+  return `${body}.${b64(createHmac('sha256', purposeKey(purpose, secret)).update(body).digest())}`;
+}
+
+export function unseal(purpose, value, secret, now = () => Date.now()) {
+  if (!secret || typeof value !== 'string' || !value.includes('.')) return null;
+  const [body, sig] = value.split('.', 2);
+  const want = b64(createHmac('sha256', purposeKey(purpose, secret)).update(body).digest());
+  if (!sig || !same(sig, want)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!payload.exp || payload.exp < Math.floor(now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 // ------------------------------------------------- the widget's signed reply
 //
 // Telegram signs the payload with a key that is SHA256 of the bot token, over

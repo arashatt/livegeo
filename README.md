@@ -133,9 +133,42 @@ an admin, as a person with a grant, and as one without, with the route list
 read from the source itself — a route added later without a decision about who
 may reach it fails the suite instead of shipping.
 
-- **The Login Widget** — the familiar *Log in with Telegram* button. It only
-  works from a domain registered with BotFather (`/setdomain`), so it stays
-  hidden until `BOT_DOMAIN` is set to that domain.
+### Sign in with Telegram
+
+The button, rather than a link from the bot. It uses Telegram's OpenID
+Connect provider (`oauth.telegram.org`) with PKCE: the code is exchanged here,
+the `id_token` is verified against Telegram's published keys — signature,
+issuer, audience, expiry, nonce — and neither it nor the client secret ever
+reaches a browser. The protocol code is ported from `arashatt/telegram`, where
+it already runs.
+
+It needs a domain. Register it on the bot with BotFather's `/setdomain` — the
+Worker's `*.workers.dev` hostname qualifies; a quick-tunnel hostname does not,
+because it changes whenever the tunnel restarts. Then:
+
+```sh
+TELEGRAM_CLIENT_SECRET=…     # from BotFather; this is what switches it on
+PUBLIC_URL=https://…         # the redirect is PUBLIC_URL/auth/telegram/callback
+```
+
+The client id is the bot's own id — the digits before the colon in
+`BOT_TOKEN` — unless `TELEGRAM_CLIENT_ID` says otherwise. It asks for
+`openid profile` and nothing more; `TELEGRAM_OIDC_SCOPE` replaces that.
+
+**The first time, there is one more step.** Telegram's sign-in gives this site
+an id of its own, which does not match the id the bot sees — so it cannot
+tell, on its own, which person on the map you are. The page asks you to send
+`/login` to the bot and open the link in the same browser. That proves the
+Telegram account the bot knows; both proofs in one browser are the same
+person, and they are linked from then on. It adds nothing to steal: anyone
+holding your `/login` link could already sign in as you.
+
+The callback logs the *names* of the claims Telegram sends, never their
+values. If Telegram ever includes the id the bot sees, that log line will show
+it, and this step can go.
+
+- **The Login Widget** — the older *Log in with Telegram* iframe, deprecated by
+  Telegram in favour of the above. It stays hidden until `BOT_DOMAIN` is set.
 
 Sessions are cookies signed with a key derived from the bot token, so rotating
 `BOT_TOKEN` ends every session at once.

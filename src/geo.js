@@ -362,6 +362,22 @@ export function makeGeo({ url, log = console } = {}) {
       return true;
     },
 
+    // Telegram's OpenID subject is scoped to this site and does not match the
+    // id the bot sees, so the two are linked once and remembered.
+    async userBySub(sub) {
+      if (!pool) return null;
+      const { rows } = await pool.query('SELECT id FROM users WHERE oidc_sub = $1', [String(sub)]);
+      return rows[0] ? String(rows[0].id) : null;
+    },
+
+    async linkSub(id, sub) {
+      if (!pool) return false;
+      // A subject belongs to one person; linking it again moves it.
+      await pool.query('UPDATE users SET oidc_sub = NULL WHERE oidc_sub = $2 AND id <> $1', [String(id), String(sub)]);
+      const res = await pool.query('UPDATE users SET oidc_sub = $2 WHERE id = $1', [String(id), String(sub)]);
+      return res.rowCount === 1;
+    },
+
     async listUsers() {
       if (!pool) return [];
       const { rows } = await pool.query('SELECT id, name, username FROM users');

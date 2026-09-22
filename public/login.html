@@ -25,6 +25,9 @@
        background:color-mix(in srgb,var(--ink) 8%,transparent);padding:.1em .35em;border-radius:.25em}
   .or{margin:1.1rem 0 .9rem;color:var(--quiet);font-size:.85rem;text-align:center}
   #widget:empty{display:none}
+  .oidc{display:block;text-align:center;text-decoration:none;font-weight:600;
+        background:#2aabee;color:#fff;border-radius:.6rem;padding:.7rem 1rem;margin-bottom:1rem}
+  .oidc[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -32,6 +35,7 @@
   <h1>This map is not public</h1>
   <p>It shows where people are, so it asks who you are first.</p>
 
+  <a id="oidc" class="oidc" href="/auth/telegram/start" hidden>Sign in with Telegram</a>
   <div id="widget"></div>
   <div class="or" id="or" hidden>or</div>
 
@@ -45,6 +49,10 @@
   // Filled in by the server, which is the only thing that knows which bot
   // this is and whether a domain has been registered for the widget.
   var bot = document.body.dataset.bot || '';
+  if (document.body.dataset.oidc === '1') {
+    document.getElementById('oidc').hidden = false;
+    document.getElementById('or').hidden = false;
+  }
   var domain = document.body.dataset.domain || '';
   if (bot) document.getElementById('bot').textContent = '@' + bot;
 

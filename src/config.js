@@ -106,6 +106,16 @@ export function load() {
       .split(',').map((s) => s.trim()).filter(Boolean),
     // Where the dashboard is reachable, so the bot can send a working link.
     publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
+    // "Sign in with Telegram" through Telegram's OpenID provider. The secret
+    // switches it on; the client id is the bot's own id (the digits before the
+    // colon in BOT_TOKEN) unless given; the redirect must be on the domain set
+    // with BotFather's /setdomain.
+    oidcSecret: process.env.TELEGRAM_CLIENT_SECRET || '',
+    oidcClientId: process.env.TELEGRAM_CLIENT_ID || String(process.env.BOT_TOKEN || '').split(':')[0],
+    oidcIssuer: process.env.TELEGRAM_OIDC_ISSUER || '',
+    oidcScope: process.env.TELEGRAM_OIDC_SCOPE || 'openid profile',
+    oidcRedirect: process.env.TELEGRAM_REDIRECT_URI || '',
+
     // The domain registered for the bot with BotFather. Only the Login Widget
     // needs it, and the widget cannot work without it, so it doubles as the
     // switch for that button.

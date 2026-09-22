@@ -21,7 +21,10 @@ import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
 import { makeDevices, makeCodes, makeLimiter, hashToken } from '../src/devices.js';
 import { fromDevice, readFixes } from '../src/ingest.js';
+import { verifyIdToken, resetCaches, bytesToB64u } from '../src/oidc.js';
+import { seal, unseal } from '../src/login.js';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import '../public/lib/path-time.js';
 const { PathTime } = globalThis;
 import { createHash, createHmac } from 'node:crypto';
@@ -1155,7 +1158,8 @@ head('the leak matrix: every route, as every kind of viewer');
   const source = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const routes = [...new Set([...source.matchAll(/pathname(?: ===|\.startsWith\()\s*'([^']+)'/g)].map((m) => m[1]))];
   const classified = {
-    public: ['/healthz', '/vendor/', '/lib/', '/auth/logout', '/auth/', '/auth/widget'],
+    public: ['/healthz', '/vendor/', '/lib/', '/auth/logout', '/auth/', '/auth/widget',
+      '/auth/telegram/start', '/auth/telegram/callback'],
     shareToken: ['/share/', '/api/shared/'],
     signedIn: ['/', '/index.html', '/api/me', '/api/place'],
     filtered: ['/api/positions', '/api/stream'],
@@ -1376,6 +1380,155 @@ head('pairing codes');
   t('then refuses', limiter.over('x'));
   clock += 101;
   t('and forgives after the window', !limiter.over('x'));
+}
+
+
+// ------------------------------------------------ Sign in with Telegram
+
+// A signing key and a JWKS, made here, standing in for Telegram's.
+async function oidcKeys(kid = 'k1') {
+  const pair = await crypto.subtle.generateKey(
+    { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+    true, ['sign', 'verify'],
+  );
+  const jwk = { ...(await crypto.subtle.exportKey('jwk', pair.publicKey)), kid, use: 'sig', alg: 'RS256' };
+  const enc = (o) => bytesToB64u(new TextEncoder().encode(JSON.stringify(o)));
+  const sign = async (claims, header = { alg: 'RS256', kid }) => {
+    const head = `${enc(header)}.${enc(claims)}`;
+    const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', pair.privateKey, new TextEncoder().encode(head));
+    return `${head}.${bytesToB64u(new Uint8Array(sig))}`;
+  };
+  return { jwk, sign };
+}
+
+head('checking what Telegram signed');
+{
+  resetCaches();
+  const { jwk, sign } = await oidcKeys();
+  const other = await oidcKeys();
+  const jwksUri = 'https://issuer.test/jwks';
+  const fetchImpl = async (u) => new Response(JSON.stringify({ keys: [jwk] }));
+  const now = Math.floor(Date.now() / 1000);
+  const base = { iss: 'https://issuer.test', aud: '123', sub: 'site-scoped-9', exp: now + 300, iat: now, nonce: 'n1' };
+  const check = (token, opts = {}) => verifyIdToken(token, {
+    jwksUri, issuer: 'https://issuer.test', clientId: '123', nonce: 'n1', fetchImpl, ...opts,
+  }).then((c) => c, (e) => e);
+
+  const good = await check(await sign(base));
+  t('a token Telegram signed for us verifies', good.sub === 'site-scoped-9', good && good.message);
+  t('one meant for another client does not', /audience/.test((await check(await sign({ ...base, aud: '999' }))).message));
+  t('nor an expired one', /expired/.test((await check(await sign({ ...base, exp: now - 3600 }))).message));
+  t('nor one answering somebody else’s request', /nonce/.test((await check(await sign({ ...base, nonce: 'n2' }))).message));
+  t('nor one from another issuer', /issuer/.test((await check(await sign({ ...base, iss: 'https://evil.test' }))).message));
+  t('nor one signed with a key that is not Telegram’s',
+    /signature/.test((await check(await other.sign(base))).message));
+  const unknownKid = await check(await sign(base, { alg: 'RS256', kid: 'nope' }));
+  t('an unknown key id is refused, after asking for fresh keys once', /No matching JWKS key/.test(unknownKid.message));
+  t('and "none" is not an algorithm', /Unsupported/.test((await check(await sign(base, { alg: 'none', kid: 'k1' }))).message));
+}
+
+head('purpose-separated seals');
+{
+  const tx = seal('oidc-tx', { state: 's' }, 60, 'secret');
+  t('a sealed value opens for its own purpose', unseal('oidc-tx', tx, 'secret')?.state === 's');
+  t('and not as a session', unseal('session', tx, 'secret') === null);
+  t('nor under another secret', unseal('oidc-tx', tx, 'other') === null);
+  t('nor once expired', unseal('oidc-tx', seal('oidc-tx', {}, -1, 'secret'), 'secret') === null);
+}
+
+head('Sign in with Telegram, end to end against a stand-in provider');
+{
+  resetCaches();
+  const { jwk, sign } = await oidcKeys();
+  // The stand-in: discovery, a token endpoint, and the keys.
+  let nextNonce = '';
+  let signWith = sign;
+  const provider = createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const base = `http://127.0.0.1:${provider.address().port}`;
+    const out = (o) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (u.pathname === '/.well-known/openid-configuration') {
+      return out({ issuer: base, authorization_endpoint: `${base}/auth`, token_endpoint: `${base}/token`, jwks_uri: `${base}/jwks` });
+    }
+    if (u.pathname === '/jwks') return out({ keys: [jwk] });
+    if (u.pathname === '/token') {
+      const now = Math.floor(Date.now() / 1000);
+      return out({ id_token: await signWith({ iss: base, aud: '777', sub: 'site-scoped-ada', exp: now + 300, iat: now, nonce: nextNonce, given_name: 'Ada' }) });
+    }
+    res.writeHead(404); res.end();
+  }).listen(0, '127.0.0.1');
+  await new Promise((r) => provider.once('listening', r));
+  const issuer = `http://127.0.0.1:${provider.address().port}`;
+
+  const linkedSubs = [];
+  const geo = {
+    enabled: () => true,
+    listUsers: async () => [{ id: '3', name: 'Ada', username: '' }],
+    listGrants: async () => [],
+    upsertUser: async () => true,
+    userBySub: async (sub) => linkedSubs.find((l) => l.sub === sub)?.id ?? null,
+    linkSub: async (id, sub) => { linkedSubs.push({ id, sub }); return true; },
+  };
+  const circles = makeCircles({ geo, admins: [] });
+  await circles.load();
+  const links = makeLinks();
+  const { server } = serve(new Positions(), {
+    dashboardToken: '', botToken: '777:oidc', viewers: [], port: 0, host: '127.0.0.1',
+    oidcSecret: 'client-secret', oidcClientId: '777', oidcIssuer: issuer, oidcScope: 'openid profile',
+    publicUrl: 'http://app.test',
+  }, { geo, circles, links, log: { info() {}, error() {} } });
+  await new Promise((r) => server.once('listening', r));
+  const app = `http://127.0.0.1:${server.address().port}`;
+  const cookieFrom = (res, name) => (res.headers.getSetCookie?.() || []).map((c) => c.split(';')[0]).find((c) => c.startsWith(name + '=')) || '';
+
+  // Round one: signed in by Telegram, not yet linked.
+  const start = await fetch(`${app}/auth/telegram/start`, { redirect: 'manual' });
+  const to = new URL(start.headers.get('location'));
+  t('start sends the browser to Telegram with PKCE', start.status === 302 && to.searchParams.get('code_challenge_method') === 'S256'
+    && to.searchParams.get('client_id') === '777');
+  t('asking only for what is used', to.searchParams.get('scope') === 'openid profile');
+  const tx = cookieFrom(start, 'tll_oidc_tx');
+  nextNonce = to.searchParams.get('nonce');
+  const state = to.searchParams.get('state');
+
+  const forged = await fetch(`${app}/auth/telegram/callback?code=c&state=someone-elses`, { headers: { cookie: tx }, redirect: 'manual' });
+  t('a callback with the wrong state is refused', forged.status === 400);
+  const noTx = await fetch(`${app}/auth/telegram/callback?code=c&state=${state}`, { redirect: 'manual' });
+  t('and one without the transaction cookie', noTx.status === 400);
+
+  const first = await fetch(`${app}/auth/telegram/callback?code=c&state=${state}`, { headers: { cookie: tx }, redirect: 'manual' });
+  const pending = cookieFrom(first, 'tll_oidc');
+  t('the first time, it asks for one more step instead of guessing who this is',
+    first.status === 200 && /One more step/.test(await first.text()) && Boolean(pending));
+  t('and grants no session yet', !cookieFrom(first, 'tll_session'));
+
+  // The bot's /login link, opened in the same browser, proves the account.
+  const token = links.issue('3');
+  const opened = await fetch(`${app}/auth/${token}`, { headers: { cookie: pending }, redirect: 'manual' });
+  t('opening /login’s link in that browser signs in', opened.status === 302 && Boolean(cookieFrom(opened, 'tll_session')));
+  t('and links the Telegram sign-in to the account the bot knows',
+    linkedSubs.length === 1 && linkedSubs[0].id === '3' && linkedSubs[0].sub === 'site-scoped-ada', linkedSubs);
+
+  // Round two: straight in.
+  const start2 = await fetch(`${app}/auth/telegram/start`, { redirect: 'manual' });
+  const to2 = new URL(start2.headers.get('location'));
+  nextNonce = to2.searchParams.get('nonce');
+  const second = await fetch(`${app}/auth/telegram/callback?code=c&state=${to2.searchParams.get('state')}`,
+    { headers: { cookie: cookieFrom(start2, 'tll_oidc_tx') }, redirect: 'manual' });
+  t('after that, Telegram sign-in goes straight in', second.status === 302 && Boolean(cookieFrom(second, 'tll_session')));
+
+  // A token not signed by the provider's key.
+  const impostor = await oidcKeys();
+  signWith = impostor.sign;
+  const start3 = await fetch(`${app}/auth/telegram/start`, { redirect: 'manual' });
+  const to3 = new URL(start3.headers.get('location'));
+  nextNonce = to3.searchParams.get('nonce');
+  const bad = await fetch(`${app}/auth/telegram/callback?code=c&state=${to3.searchParams.get('state')}`,
+    { headers: { cookie: cookieFrom(start3, 'tll_oidc_tx') }, redirect: 'manual' });
+  t('a token signed by anyone else signs nobody in', bad.status === 400 && !cookieFrom(bad, 'tll_session'));
+
+  server.close();
+  provider.close();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
