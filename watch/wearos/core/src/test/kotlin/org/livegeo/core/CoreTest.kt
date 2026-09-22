@@ -177,11 +177,16 @@ class SharingTest {
     }
 
     @Test fun `a point lands in the right tile, at the right place in it`() {
-        // Tile 9/337/201 is the one the server's own tile tests use for Mashhad.
+        // The quadrants at zoom 1 are unambiguous: north-west is 0/0, south-east 1/1.
+        assertEquals(0 to 0, Tiles.spot(45.0, -90.0, 1).let { it.x to it.y })
+        assertEquals(1 to 1, Tiles.spot(-45.0, 90.0, 1).let { it.x to it.y })
+        // Mashhad at zoom 9, computed independently of this code: tile
+        // 340/200, about 198 px across and 136 px down inside it.
         val s = Tiles.spot(36.297, 59.606, 9)
-        assertEquals(337, s.x)
-        assertEquals(201, s.y)
-        assertTrue(s.px in 0.0..256.0 && s.py in 0.0..256.0)
+        assertEquals(340, s.x)
+        assertEquals(200, s.y)
+        assertEquals(197.9, s.px, 0.1)
+        assertEquals(136.2, s.py, 0.1)
         // The top edge of a row really is that row's boundary.
         val top = Tiles.latitudeOfRow(201, 9)
         assertEquals(201, Tiles.spot(top - 1e-9, 59.606, 9).y)
