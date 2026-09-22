@@ -29,12 +29,20 @@
   .time-tip{font:600 .78rem/1.3 ui-sans-serif,system-ui,sans-serif;padding:.2rem .45rem;
             border-radius:.35rem;white-space:nowrap}
   .time-tip .quiet{font-weight:400;opacity:.7}
+  header a.dl{margin-left:auto;font-size:.8rem;color:var(--quiet);text-decoration:none;
+              border:1px solid var(--hairline);border-radius:999px;padding:.15rem .6rem}
+  header a.dl:hover{color:var(--ink);border-color:var(--quiet)}
+  /* Where the path goes out of view: its real start and end are not shown,
+     and neither is anything inside a private place, so the line fades out
+     there rather than stopping at a point that would look like the truth. */
+  .fade-end{width:26px;height:26px;border-radius:50%;filter:blur(2px);opacity:.7}
 </style>
 </head>
 <body>
 <header>
   <h1 id="who">A shared path</h1>
   <span class="meta" id="when"></span>
+  <a class="dl" id="gpx" href="#" download hidden>Download GPX</a>
 </header>
 <div id="map"></div>
 
@@ -65,10 +73,7 @@
   // Hovering the path, or tapping it, says when that part was travelled.
   // The same helper and the same honesty as the dashboard: exact at a fix,
   // marked ≈ between two. A share made before times were kept says so.
-  function whenWasI(points, times) {
-    var pts = points.map(function (p, i) {
-      return { latitude: p[0], longitude: p[1], at: times ? times[i] : null };
-    });
+  function whenWasI(pts, times) {
     var tip = L.tooltip({ direction: 'top', offset: [0, -8], className: 'time-tip', opacity: 1 });
     var esc = function (v) {
       return String(v).replace(/[&<>"']/g, function (c) {
@@ -82,7 +87,13 @@
         + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
     function ask(pt) {
-      var px = pts.map(function (q) { return map.latLngToContainerPoint([q.latitude, q.longitude]); });
+      // A gap is where the path resumes after a hidden stretch: there is no
+      // segment across it to hover, and no time to read off one.
+      var px = pts.map(function (q) {
+        var pt = map.latLngToContainerPoint([q.latitude, q.longitude]);
+        if (q.gap) pt.gap = true;
+        return pt;
+      });
       var h = PathTime.nearestSegment(px, pt);
       if (!h || h.distance > 12) { if (map.hasLayer(tip)) map.removeLayer(tip); return; }
       var a = pts[h.index];
@@ -120,21 +131,46 @@
         return;
       }
       if (d.name) document.getElementById('who').textContent = d.name + '’s path';
-      document.getElementById('when').textContent = 'shared ' + ago(d.at);
+      // The first and last few hundred metres are always left out, so the
+      // ends shown are never somebody's door. Saying so is part of the page.
+      document.getElementById('when').textContent = 'shared ' + ago(d.at) + ' · the first and last stretch are left out';
+      var dl = document.getElementById('gpx');
+      dl.href = '/api/shared/' + encodeURIComponent(token) + '?format=gpx';
+      dl.hidden = false;
+
+      var breaks = {};
+      (d.breaks || []).forEach(function (i) { breaks[i] = true; });
+      var pts = d.points.map(function (p, i) {
+        var q = { latitude: p[0], longitude: p[1], at: d.times ? d.times[i] : null };
+        if (breaks[i]) q.gap = true;
+        return q;
+      });
+      var runs = PathTime.runs(pts);
+      var lines = runs.filter(function (r) { return r.length > 1; })
+        .map(function (r) { return r.map(function (q) { return [q.latitude, q.longitude]; }); });
 
       var colour = getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33';
       // The same two-line treatment the dashboard uses when a path is lit:
       // a wide soft line under a solid one.
-      L.polyline(d.points, { weight: 14, opacity: .2, color: colour, lineCap: 'round', lineJoin: 'round' }).addTo(map);
-      var line = L.polyline(d.points, { weight: 4, opacity: 1, color: colour }).addTo(map);
+      L.polyline(lines, { weight: 14, opacity: .2, color: colour, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+      var line = L.polyline(lines, { weight: 4, opacity: 1, color: colour }).addTo(map);
 
-      L.circleMarker(d.points[0], { radius: 6, weight: 3, color: colour, fillColor: '#fff', fillOpacity: 1 })
-        .addTo(map).bindTooltip('start');
-      L.circleMarker(d.points[d.points.length - 1], { radius: 7, weight: 3, color: colour, fillColor: colour, fillOpacity: 1 })
-        .addTo(map).bindTooltip('end');
+      // No start and end markers: the real ones are not shown. Each end of
+      // each stretch fades out instead.
+      var fade = function (q, tip) {
+        L.marker([q.latitude, q.longitude], {
+          icon: L.divIcon({ className: '', iconSize: [26, 26], iconAnchor: [13, 13],
+            html: '<div class="fade-end" style="background:radial-gradient(closest-side,' + colour + ',transparent)"></div>' }),
+          keyboard: false,
+        }).addTo(map).bindTooltip(tip);
+      };
+      runs.forEach(function (run, k) {
+        fade(run[0], k === 0 ? 'the path starts before here' : 'back in view');
+        fade(run[run.length - 1], k === runs.length - 1 ? 'and goes on after here' : 'out of view');
+      });
 
       map.fitBounds(line.getBounds().pad(0.2));
-      whenWasI(d.points, d.times);
+      whenWasI(pts, d.times);
     })
     .catch(function () {
       document.body.innerHTML = '<p class="gone">This link could not be opened.</p>';
