@@ -453,7 +453,66 @@ export function makeGeo({ url, log = console } = {}) {
       await pool.query('UPDATE devices SET last_seen_at = now() WHERE id = $1', [Number(id)]);
     },
 
-    async historyOf(person, { limit = 500, since = null } = {}) {
+    // ------------------------------------------------------------- privacy
+
+    async listZones() {
+      if (!pool) return [];
+      const { rows } = await pool.query(
+        `SELECT id, owner, name, radius,
+                ST_Y(centre::geometry) AS latitude, ST_X(centre::geometry) AS longitude
+           FROM zones`,
+      );
+      return rows.map((r) => ({
+        id: Number(r.id), owner: String(r.owner), name: r.name,
+        latitude: Number(r.latitude), longitude: Number(r.longitude), radius: Number(r.radius),
+      }));
+    },
+
+    // Given the centre already moved; the spot that was clicked never gets
+    // this far.
+    async createZone({ owner, name = '', latitude, longitude, radius }) {
+      const { rows } = await pool.query(
+        `INSERT INTO zones (owner, name, centre, radius)
+         VALUES ($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography, $5)
+         RETURNING id`,
+        [String(owner), String(name).slice(0, 80), Number(longitude), Number(latitude), Number(radius)],
+      );
+      return Number(rows[0].id);
+    },
+
+    async deleteZone(id) {
+      if (!pool) return 0;
+      const res = await pool.query('DELETE FROM zones WHERE id = $1', [Number(id)]);
+      return res.rowCount;
+    },
+
+    async listPassive() {
+      if (!pool) return [];
+      const { rows } = await pool.query(
+        `SELECT id, person, extract(epoch FROM starts_at)::bigint AS start,
+                extract(epoch FROM ends_at)::bigint AS "end"
+           FROM passive`,
+      );
+      return rows.map((r) => ({ id: Number(r.id), person: String(r.person), start: Number(r.start), end: Number(r.end) }));
+    },
+
+    async createPassive({ person, start, end }) {
+      const { rows } = await pool.query(
+        `INSERT INTO passive (person, starts_at, ends_at)
+         VALUES ($1, to_timestamp($2), to_timestamp($3)) RETURNING id`,
+        [String(person), Number(start), Number(end)],
+      );
+      return Number(rows[0].id);
+    },
+
+    // Ending early and extending are the same write: the window's end moves.
+    async setPassiveEnd(id, end) {
+      if (!pool) return 0;
+      const res = await pool.query('UPDATE passive SET ends_at = to_timestamp($2) WHERE id = $1', [Number(id), Number(end)]);
+      return res.rowCount;
+    },
+
+    async historyOf(person, { limit = 500, since = null, until = null } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(
         `SELECT extract(epoch FROM at)::bigint AS at,
@@ -461,8 +520,10 @@ export function makeGeo({ url, log = console } = {}) {
                 ST_X(geom::geometry) AS longitude
            FROM positions
           WHERE person = $1 AND ($3::bigint IS NULL OR at > to_timestamp($3))
+                AND ($4::bigint IS NULL OR at <= to_timestamp($4))
           ORDER BY at DESC LIMIT $2`,
-        [String(person), limit, since === null ? null : Math.floor(Number(since))],
+        [String(person), limit, since === null ? null : Math.floor(Number(since)),
+         until === null ? null : Math.floor(Number(until))],
       );
       return rows.map((r) => ({
         at: Number(r.at),
@@ -480,8 +541,9 @@ export function makeGeo({ url, log = console } = {}) {
         `WITH gone AS (DELETE FROM positions WHERE person = $1 RETURNING 1),
               ev   AS (DELETE FROM fence_events WHERE person = $1 RETURNING 1),
               sh   AS (DELETE FROM shares WHERE person = $1 RETURNING 1),
-              -- Grants, invites and their fences go with the user row, on
-              -- the foreign keys' cascade.
+              -- Grants, invites, devices, their fences, private places and
+              -- Passive windows go with the user row, on the foreign keys'
+              -- cascade.
               us   AS (DELETE FROM users WHERE id = $1 RETURNING 1)
          SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM ev)
               + (SELECT count(*) FROM sh) + (SELECT count(*) FROM us) AS n`,

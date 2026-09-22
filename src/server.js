@@ -16,6 +16,7 @@ import {
 import { makeCircles, canActFor } from './circles.js';
 import { makeDevices, makeCodes } from './devices.js';
 import { readFixes, fromDevice, MAX_BATCH } from './ingest.js';
+import { makePrivacy, ZONE_MIN, ZONE_MAX, ZONES_EACH } from './privacy.js';
 import { randomBytes } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
@@ -92,6 +93,9 @@ export function serve(positions, config, {
   // Given the positions a watch reported and the device, feeds them into the
   // same pipeline as Telegram's. Returns nothing worth waiting on.
   onIngest = null,
+  // Private places and Passive mode. Without a database there are none, and
+  // everybody is shown exactly as before.
+  privacy = makePrivacy(),
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -157,9 +161,18 @@ export function serve(positions, config, {
     }) : 0;
     circles.forget(id);
     devices.forget(id);
+    privacy.forget(id);
     for (const res of told) { try { send(res, 'forget', { id }); } catch { watchers.delete(res); } }
     return erased;
   }
+
+  // What one viewer is shown of one person. Everything, to themselves and to
+  // admins — the same line canActFor draws for erasing or publishing a path.
+  // To anybody else who may see them, what their private places and Passive
+  // mode leave: the exact point inside either is never sent, so there is
+  // nothing under the blur for a curious viewer to find.
+  const viewOf = (viewer, p) => (canActFor(viewer, p.id) ? p : privacy.veil(p));
+  const isLive = (p) => Boolean(p.liveUntil && p.liveUntil > Date.now() / 1000);
 
   // `about` is the person the event concerns, when there is one. An event
   // about nobody in particular goes to everyone; an event about somebody goes
@@ -174,11 +187,70 @@ export function serve(positions, config, {
 
   // Called whenever a position changes; every open map hears about it at once,
   // which is the whole point of doing this over MTProto rather than polling.
+  // Two versions at most — exact, and veiled — and the veiled one is only
+  // worked out if somebody is going to be sent it.
   const publish = (person) => {
-    broadcast('position',
-      { ...person, live: Boolean(person.liveUntil && person.liveUntil > Date.now() / 1000) },
-      { about: person.id });
+    const exact = { ...person, live: isLive(person) };
+    let veiled = null;
+    for (const [res, viewer] of watchers) {
+      if (!circles.canSee(viewer, person.id)) continue;
+      const view = canActFor(viewer, person.id) ? exact : (veiled ??= privacy.veil(exact));
+      try { send(res, 'position', view); } catch { watchers.delete(res); }
+    }
   };
+
+  // A private place made or removed, or Passive switched on or off: what a
+  // veiled viewer holds about this person may now be wrong in either
+  // direction. Their map is told to forget and is sent the person afresh —
+  // including the history it had fetched, which the page drops with the rest.
+  // The person's own maps are told to redraw their places.
+  function republish(id) {
+    const key = String(id);
+    const p = positions.get(key);
+    const payload = p ? { ...p, live: isLive(p) } : null;
+    let veiled = null;
+    for (const [res, viewer] of watchers) {
+      if (!circles.canSee(viewer, key)) continue;
+      try {
+        if (canActFor(viewer, key)) {
+          if (viewer.id === key) send(res, 'privacy', { id: key });
+          continue;
+        }
+        send(res, 'forget', { id: key });
+        if (payload) send(res, 'position', veiled ??= privacy.veil(payload));
+      } catch { watchers.delete(res); }
+    }
+  }
+
+  // Passive mode ends by itself, and open maps have to hear that it has, or
+  // the blur would stay until the person next moved. One timer per window,
+  // re-armed after a restart for any window still running.
+  const passiveTimers = new Map();
+  const armPassive = (person, end) => {
+    const key = String(person);
+    clearTimeout(passiveTimers.get(key));
+    const wait = Math.max(0, end * 1000 - Date.now()) + 1000;
+    const timer = setTimeout(() => { passiveTimers.delete(key); republish(key); }, wait);
+    timer.unref?.();
+    passiveTimers.set(key, timer);
+  };
+  for (const { person, end } of privacy.active()) armPassive(person, end);
+
+  // Through here from the page and from the bot, so both mean the same thing.
+  async function setPassive(person, minutes) {
+    const w = await privacy.startPassive(person, minutes);
+    armPassive(person, w.end);
+    republish(person);
+    return w;
+  }
+
+  async function endPassive(person) {
+    const ended = await privacy.endPassive(person);
+    clearTimeout(passiveTimers.get(String(person)));
+    passiveTimers.delete(String(person));
+    if (ended) republish(person);
+    return ended;
+  }
 
   // Changing a circle changes what open maps may show, and they should not
   // have to be reloaded to find out. Revoking takes the person off the other
@@ -196,9 +268,9 @@ export function serve(positions, config, {
     const done = await circles.grant(owner, viewer);
     const p = done ? positions.get(owner) : null;
     if (p) {
-      const payload = { ...p, live: Boolean(p.liveUntil && p.liveUntil > Date.now() / 1000) };
+      const payload = { ...p, live: isLive(p) };
       for (const [res, v] of watchers) {
-        if (v.id === String(viewer)) { try { send(res, 'position', payload); } catch { watchers.delete(res); } }
+        if (v.id === String(viewer)) { try { send(res, 'position', viewOf(v, payload)); } catch { watchers.delete(res); } }
       }
     }
     return done;
@@ -208,9 +280,15 @@ export function serve(positions, config, {
   // admins are told, and a crossing only if they may also see who crossed: a
   // fence is a named place in somebody's life, and "Ada arrived at home" is
   // two private facts, not one.
+  //
+  // A crossing inside somebody's private place, or while they are Passive,
+  // is `exactOnly`: told to them and admins, nobody else. Otherwise a 25 m
+  // fence dropped on a guessed doorstep would find exactly what the blur is
+  // there to hide.
   const publishFence = (data) => broadcast('fence', data, {
     about: data.person === undefined ? undefined : data.person,
-    to: (viewer) => viewer.admin || (data.owner !== null && data.owner !== undefined && viewer.id === String(data.owner)),
+    to: (viewer) => (viewer.admin || (data.owner !== null && data.owner !== undefined && viewer.id === String(data.owner)))
+      && (!data.exactOnly || canActFor(viewer, data.person)),
   });
 
   // Who this request is: { id, admin, via }, or null.
@@ -561,7 +639,9 @@ export function serve(positions, config, {
       if (!allowed) return notFound();
     }
 
-    const visible = () => positions.list().filter((p) => circles.canSee(viewer, p.id));
+    const visible = () => positions.list()
+      .filter((p) => circles.canSee(viewer, p.id))
+      .map((p) => viewOf(viewer, p));
 
     // Where a watch says it is. Only a watch may say it, and only as itself.
     if (url.pathname === '/api/ingest' && req.method === 'POST') {
@@ -608,6 +688,8 @@ export function serve(positions, config, {
         admin: viewer.admin,
         name: me?.name || '',
         circles: circles.enabled && Boolean(viewer.id),
+        // When your own Passive mode ends, so the page can count it down.
+        passive: viewer.id ? privacy.passiveOf(viewer.id)?.end ?? null : null,
       });
     }
 
@@ -671,9 +753,12 @@ export function serve(positions, config, {
       if (!circles.canSee(viewer, id)) return notFound();
       // A window, because a path drawn across a week is a tangle nobody reads.
       const since = Number(url.searchParams.get('since'));
-      const points = geo
+      const recorded = geo
         ? await geo.historyOf(id, { limit: 1000, since: Number.isFinite(since) && since > 0 ? since : null })
         : [];
+      // Newest first either way; the veiled one has its hidden stretches
+      // taken out and the fix after each marked as a gap.
+      const points = canActFor(viewer, id) ? recorded : privacy.veilPoints(id, recorded).reverse();
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ id, points }));
       return;
@@ -815,6 +900,60 @@ export function serve(positions, config, {
       return;
     }
 
+    // ------------------------------------------------------------ privacy
+    //
+    // Your own private places and Passive mode, and nobody else's: another
+    // person's places are exactly what these exist to keep from you. The
+    // shared token has nobody behind it to hide, and a watch is not on the
+    // list of what it may do.
+    if (url.pathname === '/api/zones' || url.pathname.startsWith('/api/zones/') || url.pathname === '/api/passive') {
+      if (!privacy.enabled || !viewer.id) return notFound();
+      const me = viewer.id;
+      // The rows below reference the user, and an admin named in
+      // DASHBOARD_USERS may never have written to the bot.
+      if (!circles.user(me)) await circles.seen({ id: me });
+
+      if (url.pathname === '/api/zones' && req.method === 'GET') {
+        return json(200, { zones: privacy.zonesOf(me) });
+      }
+      if (url.pathname === '/api/zones' && req.method === 'POST') {
+        const name = (url.searchParams.get('name') || '').trim().slice(0, 80);
+        const latitude = Number(url.searchParams.get('lat'));
+        const longitude = Number(url.searchParams.get('lon'));
+        const radius = Number(url.searchParams.get('radius'));
+        const sane = Number.isFinite(latitude) && Math.abs(latitude) <= 90
+          && Number.isFinite(longitude) && Math.abs(longitude) <= 180
+          && Number.isFinite(radius) && radius >= ZONE_MIN && radius <= ZONE_MAX;
+        if (!sane) return json(400, { error: `need a point and a radius between ${ZONE_MIN} m and ${ZONE_MAX / 1000} km` });
+        if (privacy.zonesOf(me).length >= ZONES_EACH) return json(409, { error: `${ZONES_EACH} private places is the limit` });
+        const zone = await privacy.addZone({ owner: me, name, latitude, longitude, radius })
+          .catch((e) => { log.error('privacy:', e && e.message ? e.message : e); return null; });
+        if (!zone) return json(500, { error: 'could not save that place' });
+        republish(me);
+        return json(200, { zone, zones: privacy.zonesOf(me) });
+      }
+      if (url.pathname.startsWith('/api/zones/') && req.method === 'DELETE') {
+        const gone = await privacy.removeZone(me, Number(url.pathname.slice('/api/zones/'.length)))
+          .catch(() => false);
+        if (!gone) return notFound();
+        republish(me);
+        return json(200, { zones: privacy.zonesOf(me) });
+      }
+      if (url.pathname === '/api/passive' && req.method === 'GET') {
+        return json(200, { until: privacy.passiveOf(me)?.end ?? null });
+      }
+      if (url.pathname === '/api/passive' && req.method === 'POST') {
+        const w = await setPassive(me, Number(url.searchParams.get('minutes')) || 60)
+          .catch((e) => { log.error('privacy:', e && e.message ? e.message : e); return null; });
+        return w ? json(200, { until: w.end }) : json(500, { error: 'could not switch Passive mode on' });
+      }
+      if (url.pathname === '/api/passive' && req.method === 'DELETE') {
+        await endPassive(me).catch(() => false);
+        return json(200, { until: null });
+      }
+      return notFound();
+    }
+
     // ------------------------------------------------------------ circles
     //
     // Only for a person signed in as themselves: the shared token has nobody
@@ -864,7 +1003,7 @@ export function serve(positions, config, {
   });
 
   return {
-    server, publish, publishFence, forget, watchers, grant, revoke,
+    server, publish, publishFence, forget, watchers, grant, revoke, setPassive, endPassive,
     // Told once the bot has connected, so the login page can name it.
     setBot: (username) => { botName = username || ''; },
   };

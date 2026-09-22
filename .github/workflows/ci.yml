@@ -43,6 +43,7 @@ jobs:
             await import('./src/devices.js');
             await import('./src/ingest.js');
             await import('./src/fences.js');
+            await import('./src/privacy.js');
             console.log('all modules load');
           "
 

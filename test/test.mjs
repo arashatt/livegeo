@@ -15,13 +15,16 @@ import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
 import worker from '../worker/src/index.js';
 import { fromUpdate } from '../src/positions.js';
-import { connect as connectBot, commandIn } from '../src/bot.js';
+import { connect as connectBot, commandIn, passiveArgs, lasting } from '../src/bot.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
 import { makeDevices, makeCodes, makeLimiter, hashToken } from '../src/devices.js';
 import { fromDevice, readFixes } from '../src/ingest.js';
 import { verifyIdToken, resetCaches, bytesToB64u } from '../src/oidc.js';
+import {
+  offsetCentre, zoneAt, veilPoints, veilPerson, trimEnds, trimLengths, breaksOf, withBreaks, makePrivacy,
+} from '../src/privacy.js';
 import { seal, unseal } from '../src/login.js';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -1170,6 +1173,7 @@ head('the leak matrix: every route, as every kind of viewer');
     pairing: ['/api/devices/pair'],
     ownDevices: ['/api/devices/code', '/api/devices', '/api/devices/'],
     deviceOnly: ['/api/ingest'],
+    ownPrivacy: ['/api/zones', '/api/zones/', '/api/passive'],
   };
   const known = new Set(Object.values(classified).flat());
   const unclassified = routes.filter((r) => !known.has(r));
@@ -1261,6 +1265,8 @@ head('the leak matrix: every route, as every kind of viewer');
     ['create a fence', '/api/fences?name=x&lat=1&lon=1&radius=100', 'POST'],
     ['mint pairing codes', '/api/devices/code', 'POST'],
     ['list or remove devices', '/api/devices', 'GET'],
+    ['hide a place', '/api/zones?lat=1&lon=1&radius=500', 'POST'],
+    ['switch Passive on', '/api/passive', 'POST'],
   ]) {
     t(`a watch cannot ${what}`, (await watch(path, method)).status === 404, path);
   }
@@ -1343,6 +1349,378 @@ head('the leak matrix: every route, as every kind of viewer');
   server.close();
 }
 
+
+head('private places: where the circle is centred, and what is left of a path');
+{
+  const spot = { latitude: 36.3, longitude: 59.6, radius: 500 };
+  let far = 0;
+  let sum = 0;
+  for (let i = 0; i < 1000; i++) {
+    const d = metresBetween(spot, offsetCentre(spot));
+    far = Math.max(far, d);
+    sum += d;
+  }
+  t('the centre is never more than half the radius from the spot', far <= 250.01, far);
+  // Uniform over a disc of radius a, the mean distance is 2a/3 — a third of
+  // the place's radius. Bunched at the middle it would be less, and the
+  // offset would give the spot away.
+  t('and is spread evenly over that disc', Math.abs(sum / 1000 - 500 / 3) < 15, sum / 1000);
+  t('with no chance in it, it is the spot', metresBetween(spot, offsetCentre(spot, () => 0)) < 1e-6);
+  t('at its furthest, half the radius', Math.abs(metresBetween(spot, offsetCentre(spot, () => 0.999999)) - 250) < 1);
+
+  const zone = { id: 1, latitude: 36.3, longitude: 59.6, radius: 300 };
+  t('a point 220 m from the centre is inside', zoneAt([zone], 36.302, 59.6) === zone);
+  t('one 330 m away is not', zoneAt([zone], 36.303, 59.6) === null);
+  t('nor is no point at all', zoneAt([zone], null, null) === null);
+
+  const track = [
+    { at: 100, latitude: 36.310, longitude: 59.6 },
+    { at: 200, latitude: 36.301, longitude: 59.6 },
+    { at: 300, latitude: 36.300, longitude: 59.6 },
+    { at: 400, latitude: 36.305, longitude: 59.6 },
+    { at: 500, latitude: 36.306, longitude: 59.6 },
+  ];
+  const v = veilPoints(track, { zones: [zone] });
+  t('fixes inside a private place are gone', v.map((q) => q.at).join() === '100,400,500', v);
+  t('and the fix after them says a stretch is missing', v[1].gap === true && !v[0].gap && !v[2].gap, v);
+  t('history arriving newest first comes out the same',
+    JSON.stringify(veilPoints([...track].reverse(), { zones: [zone] })) === JSON.stringify(v));
+  t('veiling twice changes nothing', JSON.stringify(veilPoints(v, { zones: [zone] })) === JSON.stringify(v));
+  const late = veilPoints([track[1], track[3]], { zones: [zone] });
+  t('a gap before the first fix shown is no gap', late.length === 1 && !('gap' in late[0]), late);
+
+  const windows = [{ start: 1000, end: 2000 }];
+  const times = [99, 100, 1500, 2000, 2001].map((at) => ({ at, latitude: 1, longitude: 1 }));
+  t('a Passive window hides its own fixes and the quarter hour before it',
+    veilPoints(times, { windows }).map((q) => q.at).join() === '99,2001');
+  t('and the fix after it is a gap', veilPoints(times, { windows })[1].gap === true);
+  t('a fix with no time is never in a window', veilPoints([{ at: null, latitude: 1, longitude: 1 }], { windows }).length === 1);
+
+  const grace = { id: '3', name: 'Grace', latitude: 36.3005, longitude: 59.6, accuracy: 8, heading: 90, at: 600, trail: track };
+  const hidden = veilPerson(grace, { zones: [zone] });
+  t('inside a place, the position is its centre', hidden.latitude === zone.latitude && hidden.longitude === zone.longitude);
+  t('the accuracy is its radius', hidden.accuracy === 300);
+  t('the heading is gone', hidden.heading === null);
+  t('and it says it is hidden', hidden.hidden === true && !hidden.passive);
+  t('the trail is veiled with it', hidden.trail.map((q) => q.at).join() === '100,400,500');
+  t('the exact point is nowhere in it', !JSON.stringify(hidden).includes('36.3005') && !JSON.stringify(hidden).includes('36.301,'));
+  const out = veilPerson({ ...grace, latitude: 36.31 }, { zones: [zone] });
+  t('outside every place the position is exact', out.latitude === 36.31 && out.heading === 90 && !out.hidden);
+  t('though the trail is still veiled', out.trail.length === 3);
+  const passive = veilPerson(grace, { passive: { latitude: 36.32, longitude: 59.61, radius: 5000 } });
+  t('in Passive mode a blur stands in for the person', passive.hidden && passive.passive && passive.accuracy === 5000
+    && passive.latitude === 36.32);
+  t('somebody with no position is left as they are', veilPerson({ id: '9', latitude: null, longitude: null, trail: [] }, { zones: [zone] }).latitude === null);
+
+  // A straight line north, a fix every 50 m, two kilometres long.
+  const line = Array.from({ length: 41 }, (_, i) => ({ at: i, latitude: 36.3 + i * 0.00045, longitude: 59.6 }));
+  const cut = trimEnds(line, { start: 300, end: 450 });
+  const lost = metresBetween(line[0], cut[0]);
+  const lostEnd = metresBetween(line[40], cut[cut.length - 1]);
+  t('the first few hundred metres of a share are gone', lost >= 300 && lost < 351, lost);
+  t('and the last', lostEnd >= 450 && lostEnd < 501, lostEnd);
+  t('whole fixes only, and the middle kept', cut.length === 26 && cut[0].at === 6 && cut[25].at === 31, cut.length);
+  t('too short to lose both ends, nothing is shared', trimEnds(line.slice(0, 10), { start: 300, end: 300 }).length === 0);
+  const lengths = Array.from({ length: 200 }, () => trimLengths());
+  t('each end loses between 200 and 500 m, differently each time',
+    lengths.every((l) => l.start >= 200 && l.start <= 500 && l.end >= 200 && l.end <= 500)
+    && new Set(lengths.map((l) => Math.round(l.start))).size > 50);
+  const gappy = [line[0], line[1], { ...line[2], gap: true }, line[3]];
+  t('a share keeps its gaps as indexes', breaksOf(gappy).join() === '2');
+  t('and gets them back', withBreaks(line.slice(0, 4), [2])[2].gap === true && !withBreaks(line.slice(0, 4), [2])[1].gap);
+}
+
+head('private places and Passive, kept');
+{
+  const rows = { zones: [], passive: [], next: 1 };
+  const geo = {
+    enabled: () => true,
+    listZones: async () => rows.zones.map((z) => ({ ...z })),
+    listPassive: async () => rows.passive.map((w) => ({ ...w })),
+    createZone: async (z) => { const id = rows.next++; rows.zones.push({ id, ...z }); return id; },
+    deleteZone: async (id) => { rows.zones = rows.zones.filter((z) => z.id !== id); return 1; },
+    createPassive: async (w) => { const id = rows.next++; rows.passive.push({ id, ...w }); return id; },
+    setPassiveEnd: async (id, end) => { rows.passive.find((w) => w.id === id).end = end; return 1; },
+  };
+  let clock = 10_000;
+  // Half-way out, due south, every time: 250 · √½ ≈ 177 m.
+  const store = makePrivacy({ geo, now: () => clock, random: () => 0.5 });
+  await store.load();
+  const spot = { latitude: 36.3, longitude: 59.6 };
+  const made = await store.addZone({ owner: '3', name: 'Home', ...spot, radius: 500 });
+  t('a place is kept with its centre moved', Math.abs(metresBetween(spot, made) - 176.8) < 1, metresBetween(spot, made));
+  t('and the spot that was clicked is not stored anywhere',
+    !JSON.stringify(rows).includes('36.3,') && !JSON.stringify(rows).includes('"latitude":36.3}'), rows.zones);
+  t('its owner sees it', store.zonesOf('3').length === 1 && store.zonesOf('2').length === 0);
+  t('everything within half the radius of the spot is hidden',
+    [0, 90, 180, 270].every((deg) => {
+      const b = (deg * Math.PI) / 180;
+      const p = { latitude: spot.latitude + (249 / 111195) * Math.cos(b), longitude: spot.longitude + (249 / (111195 * Math.cos(36.3 * Math.PI / 180))) * Math.sin(b) };
+      return store.hiddenAt('3', p.latitude, p.longitude);
+    }));
+  t('nobody else can remove it', (await store.removeZone('2', made.id)) === false && store.zonesOf('3').length === 1);
+
+  const w = await store.startPassive('3', 60);
+  t('Passive runs as long as asked', w.start === 10_000 && w.end === 13_600 && store.passiveOf('3').end === 13_600);
+  const again = await store.startPassive('3', 120);
+  t('asking again extends it rather than stacking another', again.end === 17_200 && rows.passive.length === 1);
+  const blur = store.veil({ id: '3', latitude: 36.4, longitude: 59.6, accuracy: 5, trail: [] });
+  t('in Passive, the person is a blur 5 km across the middle… of 10', blur.passive && blur.accuracy === 5000
+    && metresBetween({ latitude: 36.4, longitude: 59.6 }, blur) < 2500);
+  const still = store.veil({ id: '3', latitude: 36.401, longitude: 59.6, accuracy: 5, trail: [] });
+  t('it stays put while they stay inside it', still.latitude === blur.latitude && still.longitude === blur.longitude);
+  const moved = store.veil({ id: '3', latitude: 36.6, longitude: 59.6, accuracy: 5, trail: [] });
+  t('and is drawn afresh once they leave it', moved.latitude !== blur.latitude
+    && metresBetween({ latitude: 36.6, longitude: 59.6 }, moved) < 2500);
+  t('a fence reading during it counts as hidden', store.hiddenAt('3', 10, 10, 12_000));
+
+  clock = 20_000;
+  t('it ends by itself', store.passiveOf('3') === null);
+  t('after which the person is shown again', !store.veil({ id: '3', latitude: 40, longitude: 50, trail: [] }).hidden);
+  t('but what was walked during it stays hidden for good',
+    store.veilPoints('3', [{ at: 12_000, latitude: 40, longitude: 50 }, { at: 18_000, latitude: 40, longitude: 50 }])
+      .map((q) => q.at).join() === '18000');
+
+  await store.startPassive('3', 60);
+  clock = 20_100;
+  t('it can be ended early', (await store.endPassive('3')) === true && store.passiveOf('3') === null);
+  t('and ending it twice is no error', (await store.endPassive('3')) === false);
+
+  const again2 = makePrivacy({ geo, now: () => clock });
+  await again2.load();
+  t('a restart finds the same places and windows', again2.zonesOf('3').length === 1
+    && again2.veilPoints('3', [{ at: 12_000, latitude: 40, longitude: 50 }]).length === 0);
+  store.forget('3');
+  t('/stop takes them with it', store.zonesOf('3').length === 0 && !store.hiddenAt('3', 36.3, 59.6, 12_000));
+  t('its owner can remove a place', (await again2.removeZone('3', made.id)) === true && again2.zonesOf('3').length === 0);
+  t('a person with neither is passed through untouched', (() => {
+    const p = { id: '8', latitude: 1, longitude: 1, trail: [] };
+    return again2.veil(p) === p;
+  })());
+}
+
+head('Passive mode, as the bot hears it');
+{
+  t('/passive alone is an hour', passiveArgs('').minutes === 60);
+  t('/passive 3h', passiveArgs('3h').minutes === 180);
+  t('/passive 30m', passiveArgs('30 min').minutes === 30);
+  t('a bare number is hours', passiveArgs('2').minutes === 120);
+  t('/passive off', passiveArgs('off').off === true && passiveArgs('STOP').off === true);
+  t('anything else is not understood', passiveArgs('banana') === null && passiveArgs('0') === null);
+  t('an hour reads as one', lasting(3600) === '1 h' && lasting(5400) === '1 h 30 min' && lasting(2700) === '45 min');
+}
+
+head('private places and Passive, on the wire');
+{
+  const db = {
+    users: [{ id: '1', name: 'Admin', username: '' }, { id: '2', name: 'Ada', username: '' }, { id: '3', name: 'Grace', username: '' }],
+    grants: [{ owner: '3', viewer: '2' }],   // Grace lets Ada see her
+    zones: [], passive: [], next: 1, history: [],
+  };
+  const geo = {
+    enabled: () => true,
+    listUsers: async () => db.users,
+    listGrants: async () => db.grants,
+    upsertUser: async () => true,
+    addGrant: async () => true,
+    removeGrant: async () => 1,
+    historyOf: async (id) => (id === '3' ? [...db.history].sort((a, b) => b.at - a.at) : []),
+    listFences: async () => [],
+    placeOf: async () => '',
+    forget: async () => 1,
+    listZones: async () => db.zones,
+    listPassive: async () => db.passive,
+    createZone: async (z) => { const id = db.next++; db.zones.push({ id, ...z }); return id; },
+    deleteZone: async (id) => { db.zones = db.zones.filter((z) => z.id !== id); return 1; },
+    createPassive: async (w) => { const id = db.next++; db.passive.push({ id, ...w }); return id; },
+    setPassiveEnd: async () => 1,
+  };
+  const botToken = '123:privacy';
+  const circles = makeCircles({ geo, admins: ['1'] });
+  await circles.load();
+  // Half the offset, due south: the place's centre lands 177 m south of the
+  // spot Grace clicks, and everything within 500 m of it is hidden.
+  const privacy = makePrivacy({ geo, random: () => 0.5 });
+  await privacy.load();
+  const store = new Positions({ minMove: 1 });
+  const now = Math.floor(Date.now() / 1000);
+  // Grace walks home from the north. The last two fixes are inside the place.
+  const walk = [36.3100, 36.3060, 36.3020, 36.3004];
+  walk.forEach((lat, i) => {
+    const fix = { id: '3', name: 'Grace', latitude: lat, longitude: 59.6, accuracy: 5, heading: 180, at: now - 600 + i * 100, liveUntil: now + 3600 };
+    store.update(fix);
+    db.history.push({ at: fix.at, latitude: lat, longitude: 59.6 });
+  });
+  store.update({ id: '2', name: 'Ada', latitude: 36.40, longitude: 59.6, accuracy: 5, at: now, liveUntil: now + 3600 });
+
+  const { server, publish, publishFence } = serve(store, {
+    dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60,
+  }, { geo, circles, privacy, links: makeLinks(), log: { info() {}, error() {} } });
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = {
+    token: { cookie: 'tll_token=tok' },
+    admin: { cookie: `tll_session=${encodeURIComponent(mint('1', { botToken }))}` },
+    ada: { cookie: `tll_session=${encodeURIComponent(mint('2', { botToken }))}` },
+    grace: { cookie: `tll_session=${encodeURIComponent(mint('3', { botToken }))}` },
+  };
+  const hit = (who, path, method = 'GET') => fetch(base + path, { method, headers: as[who] });
+  const open = async (who) => {
+    const res = await fetch(`${base}/api/stream`, { method: 'POST', headers: as[who] });
+    const seen = [];
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    (async () => {
+      for (;;) {
+        const step = await reader.read().catch(() => ({ done: true }));
+        if (step.done) return;
+        buf += dec.decode(step.value, { stream: true });
+        const parts = buf.split('\n\n'); buf = parts.pop();
+        for (const c of parts) {
+          const ev = /event: (\w+)/.exec(c)?.[1];
+          const raw = /data: (.*)/.exec(c)?.[1] || '{}';
+          seen.push({ ev, data: JSON.parse(raw), raw });
+        }
+      }
+    })();
+    return { seen, close: () => reader.cancel().catch(() => {}) };
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 150));
+  const graceIn = (people) => people.find((p) => p.id === '3');
+
+  // Before any place exists, Ada sees Grace exactly — that is the baseline.
+  const early = await open('ada');
+  const adminStream = await open('admin');
+  await settle();
+  t('before a place exists, Ada sees Grace where she is',
+    graceIn(early.seen.find((e) => e.ev === 'hello').data.people).latitude === 36.3004);
+
+  const madeRes = await hit('grace', '/api/zones?name=Home&lat=36.3&lon=59.6&radius=500', 'POST');
+  const made = await madeRes.json();
+  const centre = made.zone;
+  t('Grace hides her home', madeRes.status === 200 && centre.radius === 500, made);
+  t('and the circle it is shown as is not centred on the spot she chose',
+    Math.abs(metresBetween({ latitude: 36.3, longitude: 59.6 }, centre) - 176.8) < 1);
+  await settle();
+  const after = early.seen.length;
+  const told = early.seen.slice(early.seen.findIndex((e) => e.ev === 'forget'));
+  t('Ada’s open map is told to forget what it had', told[0]?.ev === 'forget' && told[0].data.id === '3', early.seen.map((e) => e.ev));
+  t('and is sent Grace again, as a blur', told[1]?.ev === 'position' && told[1].data.hidden === true
+    && told[1].data.latitude === centre.latitude && told[1].data.accuracy === 500, told[1]?.data);
+  t('the admin’s map is not disturbed', !adminStream.seen.some((e) => e.ev === 'forget'));
+  t('Grace’s own map is told to redraw her places', await (async () => {
+    const own = await open('grace');
+    await hit('grace', '/api/zones?name=Work&lat=36.5&lon=59.6&radius=300', 'POST');
+    await settle();
+    own.close();
+    return own.seen.some((e) => e.ev === 'privacy') && !own.seen.some((e) => e.ev === 'forget');
+  })());
+
+  // Everything Ada can receive from here on is collected and swept.
+  const bodies = [];
+  const take = async (who, path) => { const r = await hit(who, path); const text = await r.text(); bodies.push({ path, text }); return JSON.parse(text); };
+  const late = await open('ada');
+  await settle();
+  const adaList = await take('ada', '/api/positions');
+  const g = graceIn(adaList.people);
+  t('Ada’s list has Grace as the place, not the point', g.hidden && g.latitude === centre.latitude && g.heading === null);
+  t('with the part of her path that was outside it', g.trail.map((q) => q.latitude).join() === '36.31,36.306', g.trail);
+  const adaHistory = await take('ada', '/api/history/3');
+  t('Ada’s history of Grace stops where the place begins',
+    adaHistory.points.map((q) => q.latitude).join() === '36.306,36.31', adaHistory.points);
+  await take('ada', '/api/person/3');
+  await take('ada', '/api/me');
+  await take('ada', '/api/zones');
+
+  t('the admin still sees exactly', graceIn((await (await hit('admin', '/api/positions')).json()).people).latitude === 36.3004);
+  t('and so does the shared token', graceIn((await (await hit('token', '/api/positions')).json()).people).latitude === 36.3004);
+  t('and Grace herself', graceIn((await (await hit('grace', '/api/positions')).json()).people).latitude === 36.3004);
+  t('the admin’s history is whole', (await (await hit('admin', '/api/history/3')).json()).points.length === 4);
+
+  // She moves about at home. Ada's maps hear only that she is still there.
+  publish(store.update({ id: '3', name: 'Grace', latitude: 36.3001, longitude: 59.6, accuracy: 5, heading: 90, at: now + 5, liveUntil: now + 3600 }));
+  await settle();
+  const exactToAdmin = adminStream.seen.filter((e) => e.ev === 'position' && e.data.id === '3').pop();
+  t('a move inside the place reaches the admin exactly', exactToAdmin?.data.latitude === 36.3001);
+
+  // Passive, while Ada watches, and then a walk well away from home.
+  const passiveOn = await hit('grace', '/api/passive?minutes=60', 'POST');
+  const until = (await passiveOn.json()).until;
+  t('Grace switches Passive on for an hour', passiveOn.status === 200 && Math.abs(until - now - 3600) < 60, until);
+  await settle();
+  const lastForget = late.seen.map((e) => e.ev).lastIndexOf('forget');
+  t('Ada’s map is told to forget, and gets the Passive blur',
+    lastForget >= 0 && late.seen[lastForget + 1]?.data.passive === true && late.seen[lastForget + 1].data.accuracy === 5000);
+  // Stamped with the real clock, as a fix would be: after Passive began.
+  const away = { id: '3', name: 'Grace', latitude: 36.3500, longitude: 59.6500, accuracy: 5, heading: 45, at: Math.floor(Date.now() / 1000), liveUntil: now + 3600 };
+  publish(store.update(away));
+  db.history.push({ at: away.at, latitude: away.latitude, longitude: away.longitude });
+  await settle();
+  await take('ada', '/api/positions');
+  await take('ada', '/api/history/3');
+  t('Ada’s history does not get the Passive walk',
+    !JSON.parse(bodies[bodies.length - 1].text).points.some((q) => q.latitude === 36.35));
+  t('the admin sees the walk', adminStream.seen.some((e) => e.ev === 'position' && e.data.latitude === 36.35));
+
+  // A fence of Ada's that Grace crossed while hidden is not Ada's to hear of.
+  publishFence({ person: '3', owner: '2', fence: 7, name: 'The park', entered: true, at: now, exactOnly: true });
+  await settle();
+  t('a crossing made while hidden is not told to Ada', !late.seen.some((e) => e.ev === 'fence'));
+  t('but it is told to the admin', adminStream.seen.some((e) => e.ev === 'fence' && e.data.fence === 7));
+  publishFence({ person: '3', owner: '2', fence: 8, name: 'The park', entered: true, at: now });
+  await settle();
+  t('while one made in the open still is', late.seen.some((e) => e.ev === 'fence' && e.data.fence === 8));
+
+  // The sweep: every coordinate Ada was sent from the moment the place
+  // existed, in every body and every event, is the place's centre, the
+  // Passive blur's, or a point well outside the place — and never one of the
+  // points Grace was hidden at.
+  const events = [...early.seen.slice(after), ...late.seen].filter((e) => e.ev !== 'fence');
+  const texts = [...bodies.map((b) => b.text), ...events.map((e) => e.raw)];
+  const coords = (value, out = []) => {
+    if (Array.isArray(value)) {
+      if (value.length === 2 && value.every((n) => typeof n === 'number')) out.push({ latitude: value[0], longitude: value[1] });
+      else value.forEach((x) => coords(x, out));
+    } else if (value && typeof value === 'object') {
+      if (typeof value.latitude === 'number' && typeof value.longitude === 'number') out.push({ latitude: value.latitude, longitude: value.longitude });
+      Object.values(value).forEach((x) => coords(x, out));
+    }
+    return out;
+  };
+  const seenByAda = texts.flatMap((x) => coords(JSON.parse(x)));
+  const hiddenPoints = [36.3020, 36.3004, 36.3001].map((lat) => ({ latitude: lat, longitude: 59.6 })).concat([away]);
+  const blurs = events.filter((e) => e.data?.hidden).map((e) => e.data);
+  const badly = seenByAda.filter((c) => {
+    const isBlur = blurs.some((b) => b.latitude === c.latitude && b.longitude === c.longitude);
+    const outsidePlace = metresBetween(c, centre) > centre.radius;
+    return !isBlur && !outsidePlace;
+  });
+  t('every coordinate Ada received is a blur’s centre or outside the place', seenByAda.length > 5 && badly.length === 0, badly);
+  t('and none is anywhere Grace was while hidden',
+    !seenByAda.some((c) => hiddenPoints.some((h) => metresBetween(c, h) < 1)));
+  t('nor does any of those numbers appear in anything Ada was sent',
+    !texts.some((x) => /36\.3004|36\.3001|36\.302[^\d]|36\.35[^\d]/.test(x)));
+
+  // Places are the owner's alone.
+  const adaZones = JSON.parse(bodies.find((b) => b.path === '/api/zones').text);
+  t('Ada’s list of places does not include Grace’s', adaZones.zones.length === 0);
+  t('Ada cannot remove Grace’s place', (await hit('ada', `/api/zones/${centre.id}`, 'DELETE')).status === 404);
+  t('the shared token has no places', (await hit('token', '/api/zones')).status === 404);
+  t('nor any Passive mode', (await hit('token', '/api/passive', 'POST')).status === 404);
+  t('a place needs a sensible radius', (await hit('grace', '/api/zones?lat=36&lon=59&radius=50', 'POST')).status === 400);
+
+  const off = await hit('grace', '/api/passive', 'DELETE');
+  await settle();
+  const back = late.seen.filter((e) => e.ev === 'position' && e.data.id === '3').pop();
+  t('ending Passive shows Grace again', off.status === 200 && back.data.latitude === 36.35 && !back.data.hidden);
+  t('though the Passive walk stays out of Ada’s history',
+    !(await (await hit('ada', '/api/history/3')).json()).points.some((q) => q.latitude === 36.35));
+  t('Grace can remove her own place', (await hit('grace', `/api/zones/${centre.id}`, 'DELETE')).status === 200);
+
+  [early, late, adminStream].forEach((s) => s.close());
+  server.close();
+}
 
 head('what a watch may report');
 {

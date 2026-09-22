@@ -15,8 +15,9 @@ import { makeGeo } from './geo.js';
 import { randomBytes } from 'node:crypto';
 import { makeLinks } from './login.js';
 import { makeWatcher, announce } from './fences.js';
-import { makeCircles } from './circles.js';
+import { makeCircles, canActFor } from './circles.js';
 import { makeDevices, makeCodes } from './devices.js';
+import { makePrivacy } from './privacy.js';
 
 const config = load();
 const positions = new Positions({
@@ -40,6 +41,13 @@ if (await circles.load().catch((e) => { console.error('circles:', e.message); re
   console.log('circles: on — everyone the bot meets can sign in and see their circle');
 } else {
   console.log('circles: off without DATABASE_URL — only DASHBOARD_USERS can sign in');
+}
+
+// Private places and Passive mode: what somebody's circle is shown a blur of
+// instead of where they are. Loaded before anything can be published.
+const privacy = makePrivacy({ geo });
+if (await privacy.load().catch((e) => { console.error('privacy:', e.message); return false; })) {
+  console.log('privacy: private places and Passive mode are on');
 }
 
 // Watches. Paired with a code from /pair or the map, known by a token after.
@@ -66,8 +74,8 @@ let notify = null;
 // the state survives for as long as the process does.
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
-const { publish, publishFence, forget, setBot, grant, revoke } = serve(positions, config, {
-  directory, geo, links, circles, makeInvite, devices, codes,
+const { publish, publishFence, forget, setBot, grant, revoke, setPassive, endPassive } = serve(positions, config, {
+  directory, geo, links, circles, makeInvite, devices, codes, privacy,
   onFenceDeleted: (id) => fences.dropFence(id),
   onIngest: (fixes) => ingest(fixes),
 });
@@ -138,6 +146,10 @@ async function checkFences(person) {
     readings,
   });
   const ownerOf = new Map(readings.map((r) => [r.fence, r.owner]));
+  // Inside a private place, or Passive: whoever may not see this person
+  // exactly is not told about the crossing either. A small fence would
+  // otherwise locate precisely what the blur hides.
+  const exactOnly = privacy.hiddenAt(person.id, person.latitude, person.longitude, person.at);
 
   for (const event of events) {
     const owner = ownerOf.get(event.fence) ?? null;
@@ -145,7 +157,7 @@ async function checkFences(person) {
     // everybody was, so losing it costs more than a missed message.
     await geo.recordFenceEvent({ person: person.id, ...event })
       .catch((e) => console.error('fence:', e && e.message ? e.message : e));
-    publishFence({ ...event, person: person.id, name: event.name, owner });
+    publishFence({ ...event, person: person.id, name: event.name, owner, exactOnly });
 
     const said = announce({ who: person.name, name: event.name, entered: event.entered });
     console.log(`fence: somebody ${event.entered ? 'arrived at' : 'left'} a place`);
@@ -156,7 +168,10 @@ async function checkFences(person) {
     if (!notify) continue;
     const recipients = owner === null
       ? config.viewers
-      : [owner].filter((id) => circles.canSee(circles.viewerFor(id), person.id));
+      : [owner].filter((id) => {
+        const viewer = circles.viewerFor(id);
+        return circles.canSee(viewer, person.id) && (!exactOnly || canActFor(viewer, person.id));
+      });
     for (const to of recipients) await notify(to, said);
   }
 }
@@ -198,8 +213,15 @@ const circle = circles.enabled ? {
   revoke: (owner, viewer) => revoke(owner, viewer),
 } : null;
 
+// Passive mode from the bot, through the server so open maps hear of it the
+// same way they do when it is switched on from the page.
+const passive = privacy.enabled ? {
+  start: (id, minutes) => setPassive(id, minutes),
+  end: (id) => endPassive(id),
+} : null;
+
 const telegram = config.ingest === 'bot'
-  ? await connectBot(config, { directory, onPosition, onForget, onLogin, circle })
+  ? await connectBot(config, { directory, onPosition, onForget, onLogin, circle, passive })
   : await connectAccount(config, { directory, onPosition });
 inviteLink = telegram.inviteLink || null;
 
