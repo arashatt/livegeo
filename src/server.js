@@ -438,8 +438,27 @@ export function serve(positions, config, {
 <h1 style="font-size:1.1rem">${escapeAttr(title)}</h1>${body}</body>`);
   };
 
-  const server = createServer(async (req, res) => {
+  // Every request, answered by `handle`. An exception anywhere in it is a
+  // 500 for that request, never the whole process: one bad request — a
+  // malformed escape in a path once did it, with nobody signed in — must not
+  // take the map down for everyone.
+  const server = createServer((req, res) => {
+    handle(req, res).catch((e) => {
+      log.error('request:', e && e.message ? e.message : e);
+      try {
+        if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain', 'cache-control': 'no-store' });
+        res.end('error');
+      } catch { /* the connection is already gone */ }
+    });
+  });
+
+  async function handle(req, res) {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    // The rest of a path after a prefix, decoded — or null when it is not
+    // valid percent-encoding, which every route treats as no such thing.
+    const after = (prefix) => {
+      try { return decodeURIComponent(url.pathname.slice(prefix.length)); } catch { return null; }
+    };
     const viewer = viewerOf(req, url);
     const ok = Boolean(viewer);
 
@@ -719,7 +738,7 @@ export function serve(positions, config, {
     }
 
     if (url.pathname.startsWith('/api/live-stream/')) {
-      const link = live.get(decodeURIComponent(url.pathname.slice('/api/live-stream/'.length)));
+      const link = live.get(after('/api/live-stream/'));
       if (!link) return json(404, { error: 'ended' });
       const follower = { id: null, admin: false, via: 'live', sees: link.person, since: link.createdAt, token: link.token };
       res.writeHead(200, {
@@ -891,7 +910,7 @@ export function serve(positions, config, {
     // Where someone has been. Empty rather than an error when nothing is
     // recorded, so the page does not need to know whether PostGIS is there.
     if (url.pathname.startsWith('/api/history/')) {
-      const id = decodeURIComponent(url.pathname.slice('/api/history/'.length));
+      const id = after('/api/history/');
       if (!circles.canSee(viewer, id)) return notFound();
       // A window, because a path drawn across a week is a tangle nobody reads.
       const since = Number(url.searchParams.get('since'));
@@ -910,7 +929,7 @@ export function serve(positions, config, {
     // Yours, or an admin's call: a circle sees a path on the map, but a file
     // made to be kept is for the person who walked it.
     if (url.pathname.startsWith('/api/gpx/') && req.method === 'GET') {
-      const id = decodeURIComponent(url.pathname.slice('/api/gpx/'.length));
+      const id = after('/api/gpx/');
       if (!canActFor(viewer, id)) return notFound();
       if (!geo || !geo.enabled()) return json(503, { error: 'no database' });
       const nowS = Math.floor(Date.now() / 1000);
@@ -934,7 +953,7 @@ export function serve(positions, config, {
 
     // Hand one person's path to somebody who does not have the dashboard.
     if (url.pathname.startsWith('/api/share/') && req.method === 'POST') {
-      const id = decodeURIComponent(url.pathname.slice('/api/share/'.length));
+      const id = after('/api/share/');
       // Your own path, or an admin's call. Being allowed to see somebody is
       // not their consent to have their movements published to the world.
       if (!canActFor(viewer, id)) return notFound();
@@ -960,7 +979,7 @@ export function serve(positions, config, {
     }
 
     if (url.pathname.startsWith('/api/share/') && req.method === 'DELETE') {
-      const token = decodeURIComponent(url.pathname.slice('/api/share/'.length));
+      const token = after('/api/share/');
       const whose = geo ? await geo.shareOwner(token) : null;
       if (!whose || !canActFor(viewer, whose)) return notFound();
       const gone = await geo.revokeShare(token);
@@ -974,7 +993,7 @@ export function serve(positions, config, {
     // directory caches, and answers "unknown" rather than blocking when
     // Telegram cannot say.
     if (url.pathname.startsWith('/api/person/')) {
-      const id = decodeURIComponent(url.pathname.slice('/api/person/'.length));
+      const id = after('/api/person/');
       if (!circles.canSee(viewer, id)) return notFound();
       const person = directory
         ? await directory.lookup(id)
@@ -987,7 +1006,7 @@ export function serve(positions, config, {
     // The profile photo, fetched only when someone opens a card — there is no
     // reason to pull every face just to draw dots on a map.
     if (url.pathname.startsWith('/api/photo/')) {
-      const id = decodeURIComponent(url.pathname.slice('/api/photo/'.length));
+      const id = after('/api/photo/');
       if (!circles.canSee(viewer, id)) return notFound();
       const bytes = directory ? await directory.photo(id) : null;
       if (!bytes || !bytes.length) {
@@ -1142,7 +1161,7 @@ export function serve(positions, config, {
         return json(200, describeLink(link));
       }
       if (url.pathname.startsWith('/api/live/') && req.method === 'DELETE') {
-        const link = live.get(decodeURIComponent(url.pathname.slice('/api/live/'.length)));
+        const link = live.get(after('/api/live/'));
         // Yours, or an admin's call; anybody else's reads as no such link.
         if (!link || !canActFor(viewer, link.person)) return notFound();
         // Stopping an SOS's link is ending the SOS, and everybody who was
@@ -1209,19 +1228,19 @@ export function serve(positions, config, {
       }
       // Taking back what you gave: somebody may no longer see you.
       if (url.pathname.startsWith('/api/circle/viewer/') && req.method === 'DELETE') {
-        await revoke(me, decodeURIComponent(url.pathname.slice('/api/circle/viewer/'.length)));
+        await revoke(me, after('/api/circle/viewer/'));
         return json(200, circles.circleOf(me));
       }
       // Giving back what you were given: you stop seeing somebody.
       if (url.pathname.startsWith('/api/circle/owner/') && req.method === 'DELETE') {
-        await revoke(decodeURIComponent(url.pathname.slice('/api/circle/owner/'.length)), me);
+        await revoke(after('/api/circle/owner/'), me);
         return json(200, circles.circleOf(me));
       }
       return notFound();
     }
 
     if (url.pathname.startsWith('/api/forget/') && req.method === 'POST') {
-      const id = decodeURIComponent(url.pathname.slice('/api/forget/'.length));
+      const id = after('/api/forget/');
       // Erasing is the most final thing here, and until circles it was open
       // to anyone who could load the page. Yourself, or an admin.
       if (!canActFor(viewer, id)) return notFound();
@@ -1233,7 +1252,7 @@ export function serve(positions, config, {
 
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
-  });
+  }
 
   server.listen(config.port, config.host, () => {
     log.info(`dashboard on http://${config.host}:${config.port}/?token=…`);

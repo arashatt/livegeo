@@ -1898,6 +1898,11 @@ head('live links: one person, from now, for a while');
   const pageRes = await hit('none', `/live/${made.token}`);
   t('the page opens for anybody holding the link', pageRes.status === 200 && (await pageRes.text()).includes('/api/live-stream/'));
   t('a made-up link is a page saying it has ended', (await hit('none', '/live/notarealtoken123')).status === 404);
+  // A malformed escape in a path once took the whole server down, and this
+  // stream is reachable by anybody.
+  t('a broken escape in a link is not found, from anybody', (await fetch(`${base}/api/live-stream/%E0%A4%A`, { method: 'POST' })).status === 404
+    && (await hit('grace', '/api/history/%E0%A4%A')).status === 404);
+  t('and the server is still there afterwards', (await fetch(`${base}/healthz`)).status === 200);
 
   const watching = await follow(made.token);
   await settle();
