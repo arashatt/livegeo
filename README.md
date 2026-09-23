@@ -227,8 +227,7 @@ DATABASE_URL=                 # optional PostGIS — see «Places and history»
 TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
 TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
 TILE_MAX_AGE=2592000          # seconds before a cached tile is refetched
-VECTOR_UPSTREAM=              # the 3D map's tiles where no extract is imported;
-                              # default OpenFreeMap's TileJSON, `off` for none
+VECTOR_UPSTREAM=              # where district names come from; default OpenFreeMap
 VECTOR_MAX_AGE=604800         # seconds before a cached vector tile is refetched
 SHARE_TTL=604800              # how long a shared path link stays readable
 SOS_CALL=                     # who an SOS says to call; default Iran's 110 / 115
@@ -547,78 +546,11 @@ A Worker passes the stream through unbuffered — it returns the upstream body
 rather than reading it — so this route was live before the POST change and is
 unaffected by it.
 
-## The 3D map
-
-The dashboard opens on a 3D map drawn with WebGL: a city at a tilt, seen the
-way an open-world game shows one, with its buildings standing up, its roads
-glowing, a sky, and light that follows the real sun over wherever you are
-looking — sunrise, day, golden hour, night. On top of it sits a game's HUD:
-
-- **Blips** for people. You are the blue one, with an arrow when you move;
-  somebody who asked for help is red, ringed, and labelled SOS; somebody not
-  live is grey and flat. Hover or focus one for their name; they are buttons,
-  so the keyboard reaches them.
-- **Three cameras.** *3D* tilts into the city as you zoom in and flattens out
-  to a globe. *Map* is flat and north up. *Chase* rides behind your own blip,
-  heading up — offered only while you are sharing.
-- **A radar** in the corner, centred on you and turned the way you are going,
-  with everyone else on it, stuck to its rim when they are further away.
-  Somebody inside a private place is never on it: an arrow pointing at them
-  would say more than the blur does. Off by default on phones.
-- **The name of the district** you are looking at, from the map's own place
-  names, the way a game names the part of town you drive into.
-- **A legend**, closed until asked for, saying what every mark means.
-
-Nothing about the privacy rules changed. The dashboard's own code decides
-what to draw exactly as it did — `public/lib/game/leaflet-gl.mjs` gives it the
-same Leaflet API on top of MapLibre — so the blur is still an area with no
-middle, paths still break where they were hidden, red is still only SOS. The
-blur lies flat on the ground at any tilt, and people are drawn above the
-buildings, never hidden behind one.
-
-**Where it cannot be drawn** — no WebGL2, an old in-app browser, MapLibre
-failing to start, or nothing loaded after thirty seconds — the page starts the
-classic map instead: Leaflet, as before, with every feature. **Layers → Classic
-2D map** chooses it on purpose and is remembered in that browser; `/?map=classic`
-does the same once.
-
-### Where the 3D map's streets come from
-
-`/vector/{z}/{x}/{y}.pbf` serves [Mapbox Vector Tiles](https://github.com/mapbox/vector-tile-spec)
-in the [OpenMapTiles](https://openmaptiles.org/schema/) layout, from two places:
-
-1. **The local extract**, where one is imported (see **Places and history**):
-   `src/vector.js` turns `planet_osm_*` into the layers the map draws, from
-   zoom 8 to 14. A building's height comes from its `height` or
-   `building:levels` tag, and otherwise from a stable made-up one by building
-   type; the legend says heights are illustrative.
-2. **Everywhere else, an upstream**: [OpenFreeMap](https://openfreemap.org/)
-   by default — free, keyless, the whole planet. It is proxied and cached on
-   disk under `TILE_CACHE/vector` exactly as raster tiles are, so the browser
-   still talks to nobody but this service. `VECTOR_UPSTREAM` takes another
-   TileJSON address or a `{z}/{x}/{y}` template; `off` leaves only the extract.
-
-Tiles are gzipped, cached, and behind the dashboard's sign-in like everything
-else. Without either source the map still draws the world's land from
-[Natural Earth](https://www.naturalearthdata.com/) (public domain) with a grid,
-so it is never blank.
-
-### What it is made of
-
-Everything the 3D map loads is in `public/vendor/`, served by this service:
-[MapLibre GL JS](https://maplibre.org/) 6 (BSD-3-Clause), the Noto Sans glyphs
-its labels are drawn with (SIL OFL, from Protomaps' font-maker builds, with
-Arabic script, so Persian names are shaped and joined), Oswald for the HUD's
-own words (SIL OFL), and Natural Earth's land. `node bin/vendor-map.mjs`
-fetches every one of them at a pinned version; run it only to upgrade, and
-commit what it writes. MapLibre 6 needs WebGL2 and ES modules, which is why
-the classic map stays.
-
 ## The basemap comes from here
 
-The page makes no third-party requests. Leaflet and MapLibre are served from
-`public/vendor`, and map tiles come through `/tiles/{z}/{x}/{y}.png` (and the
-3D map's through `/vector/…`), fetched upstream once and then cached on disk.
+The page makes no third-party requests. Leaflet is served from
+`public/vendor`, and map tiles come through `/tiles/{z}/{x}/{y}.png`, which
+fetches from OpenStreetMap once and then caches on disk.
 
 This is not about speed. The browser and the server are often on very
 different networks — the dashboard is frequently reached over an ssh tunnel
@@ -639,7 +571,7 @@ than a handful of people, run your own renderer and point `TILE_UPSTREAM` at
 it — it is one environment variable, and the PostGIS extract from the next
 section is most of what a renderer needs anyway.
 
-### Styled OpenStreetMap layers (the classic map)
+### Styled OpenStreetMap layers
 
 The dashboard opens on a world view. **Layers** controls the worldwide street
 map and six independent detail overlays: roads, railways, urban areas and
@@ -672,6 +604,34 @@ CI also runs `npm run test:cartography` against PostGIS to verify real geometry,
 tile alignment, edge buffering and feature budgets. To run that check locally,
 set `CARTOGRAPHY_TEST_DATABASE_URL` to a disposable PostGIS database. The test
 uses temporary fixture tables and does not change an imported OSM dataset.
+
+### The district name
+
+Zoomed in to a town, the map names where its middle is, in the bottom-right
+corner, the way a game names the district you drive into: the neighbourhood,
+quarter or suburb, else the village, town or city. A name in another script
+comes with a Latin line under it (OSM's `name:en`), in spaced capitals. It
+fades out from zoom 11 outwards, where one name would cover a whole city.
+
+The page asks `/api/district?lat=…&lon=…&z=…` once the map has settled, and
+gets one or two lines of text back. The names are OpenStreetMap's place nodes,
+from the imported extract where there is one (see **Places and history**).
+Everywhere else they come from the `place` layer of vector tiles in the
+OpenMapTiles layout, from `VECTOR_UPSTREAM`. That is
+[OpenFreeMap](https://openfreemap.org) by default: free, keyless, and covering
+the planet. Those tiles are proxied and cached on disk under
+`TILE_CACHE/vector` like the raster ones, so the browser still talks to
+nobody else, and a stale tile beats none. `VECTOR_UPSTREAM` is a TileJSON
+address or a `{z}/{x}/{y}` template, and `off` leaves only the import; a
+TileJSON may not point the server at a different host.
+
+Where somebody is looking is never logged. The upstream does see which tiles
+the server fetches, roughly which areas are looked at, just as OSM's tile
+servers do for the street map.
+
+The Latin line is set in Oswald (SIL OFL 1.1, `public/vendor/fonts`, from
+`@fontsource/oswald` 5.3.0). The name itself is in the system font, because
+it can be in any script.
 
 ## Handing a path to somebody
 
@@ -1249,12 +1209,10 @@ are, which is enough for a uptime check.
 | `src/live.js` | live links: one person, followed from now, for a while |
 | `src/sos.js` | an SOS: who is told, and what they are told |
 | `src/checks.js` | check on me: when to ask, and when to tell; the judgement is one pure function |
+| `src/district.js` | the name of where the middle of the map is: place nodes from the import, else vector tiles from the upstream |
+| `src/mvt.js` | just enough of a vector tile reader for that |
 | `src/config.js` | environment, checked once at startup |
-| `public/index.html` | the dashboard, and the start-up that picks the 3D or the classic map |
-| `public/lib/game/` | the 3D map: MapLibre, its style, the cameras, the radar, and `leaflet-gl.mjs`, which runs the dashboard's Leaflet code on it |
-| `src/vector.js` | the 3D map's vector tiles: from the local extract, or proxied and cached |
-| `bin/vendor-map.mjs` | fetches MapLibre, glyphs, fonts and Natural Earth into `public/vendor/`, pinned |
-| `docs/game-map/` | screenshots of the 3D map, from demo data |
+| `public/index.html` | the map: Leaflet, OpenStreetMap tiles, one EventSource |
 | `public/live.html` | the page a live link opens |
 | `public/lib/people-map.js` | how a person is drawn — the glide, the beam, the blur — for both |
 | `bin/login.mjs` | the one interactive step |

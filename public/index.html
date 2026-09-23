@@ -458,83 +458,27 @@
     .layers-panel{right:.55rem;top:3.4rem;width:min(19rem,calc(100vw - 1.1rem));max-height:calc(100% - 4rem)}
   }
 
-  /* Game HUD. Oswald (SIL OFL, /vendor/fonts) is for the page's own fixed
-     English words — buttons, titles. Never for anybody's name, and never
-     letter-spaced over Persian or Arabic, whose letters join. */
-  @font-face{font-family:"Oswald";font-weight:500;font-display:swap;src:url(/vendor/fonts/oswald-latin-500-normal.woff2) format("woff2")}
-  @font-face{font-family:"Oswald";font-weight:600;font-display:swap;src:url(/vendor/fonts/oswald-latin-600-normal.woff2) format("woff2")}
-  @font-face{font-family:"Oswald";font-weight:700;font-display:swap;src:url(/vendor/fonts/oswald-latin-700-normal.woff2) format("woff2")}
-  :root{ --hud:"Oswald",ui-sans-serif,system-ui,sans-serif; --sun1:#ffb35c; --sun2:#ff5fb7; --bevel:12px }
-  .brand h1{font:700 1.02rem/1 var(--hud);letter-spacing:.16em;
-    background:linear-gradient(92deg,var(--sun1),var(--sun2));-webkit-background-clip:text;background-clip:text;color:transparent}
-  .map-toolbar .ghost,.gl-camera .ghost{
-    font:600 .78rem/1 var(--hud);letter-spacing:.1em;text-transform:uppercase;
-    min-height:34px;padding:.3rem .7rem;border-radius:3px;
-    border:1px solid rgba(255,255,255,.24);background:rgba(7,10,22,.82);color:#e9e6f2}
-  .map-toolbar .ghost:hover,.gl-camera .ghost:hover{border-color:var(--sun1);color:#fff;box-shadow:0 0 0 1px rgba(255,179,92,.25),0 0 14px rgba(255,95,183,.18)}
-  .map-toolbar .ghost[aria-expanded="true"],.gl-camera .ghost[aria-pressed="true"]{
-    background:linear-gradient(92deg,rgba(255,179,92,.95),rgba(255,95,183,.95));color:#12081a;border-color:transparent}
-  .map-toolbar .ghost:focus-visible,.gl-camera .ghost:focus-visible,.panel-close:focus-visible{outline:2px solid #fff;outline-offset:2px}
-  .gl-camera{display:inline-flex;gap:2px;margin-right:.35rem}
-  .gl-camera .ghost+.ghost{border-left-color:transparent}
-  .people-panel,.detail-panel,.layers-panel,.legend-panel{
-    border-radius:0;border-color:rgba(255,255,255,.16);
-    clip-path:polygon(var(--bevel) 0,100% 0,100% calc(100% - var(--bevel)),calc(100% - var(--bevel)) 100%,0 100%,0 var(--bevel));
-    background-image:linear-gradient(90deg,var(--sun1),var(--sun2));background-size:100% 2px;background-repeat:no-repeat}
-  .panel-heading strong,.layers-title,.detail-head span{font-family:var(--hud);font-weight:600;letter-spacing:.14em}
-  .legend-panel{position:absolute;z-index:810;right:1rem;top:4.65rem;width:20rem;padding:.72rem;max-height:calc(100% - 5.65rem);overflow:auto;
-    background-color:rgba(7,10,22,.9);box-shadow:0 18px 48px rgba(0,0,0,.38);backdrop-filter:blur(14px)}
-  .legend-panel[hidden]{display:none}
-  .legend{display:grid;gap:.5rem;margin:.2rem 0 .4rem}
-  .legend div{display:grid;grid-template-columns:3.6rem 1fr;gap:.55rem;align-items:center}
-  .legend dt{display:grid;place-items:center}
-  .legend dd{font-size:.76rem;line-height:1.4;color:#c9d2d6}
-  .legend dd b{color:#fff;font-weight:600}
-  .lg-blip{width:14px;height:14px;border-radius:50%;background:var(--c);border:2px solid #071318;box-shadow:0 0 0 2px rgba(255,255,255,.85),0 0 10px var(--c)}
-  .lg-blip.sos{box-shadow:0 0 0 2px #fff,0 0 0 5px rgba(255,90,98,.45)}
-  .lg-haze{width:34px;height:22px;border-radius:50%;background:radial-gradient(closest-side,color-mix(in srgb,var(--c) 55%,transparent),transparent)}
-  .lg-haze.mine{--c:#7a6ff0;border:1.5px dashed #9d94ff}
-  .lg-fence{width:30px;height:18px;border:1.5px solid #7a6ff0;border-radius:40%;background:rgba(122,111,240,.08)}
-  .lg-trail{width:32px;height:0;border-top:2px dashed #78958c}
-  .lg-fade{width:16px;height:16px;border-radius:50%;background:radial-gradient(closest-side,#40e38f,transparent);filter:blur(1px)}
-  .lg-time{font:600 .7rem/1 ui-sans-serif,system-ui,sans-serif;background:rgba(8,16,21,.96);padding:.2rem .35rem;border-radius:4px;white-space:nowrap}
-  .gl-only{display:none}
-  body.gl .gl-only{display:block}
-  body.gl .classic-only{display:none}
-  .gl-switch{display:none}
-  body.can-gl .gl-switch{display:flex}
-  .layer-option select{margin-left:auto;font:inherit;font-size:.74rem;background:#0b1320;color:#e9e6f2;border:1px solid rgba(255,255,255,.22);border-radius:3px;padding:.2rem .3rem}
-  /* Until one of the two maps has started. */
-  body:not(.gl):not(.classic) .map-shell::after{content:"Loading the map…";position:absolute;inset:auto 0 45%;text-align:center;
-    font:600 .8rem/1 var(--hud);letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.55)}
-  @media (max-width:760px){
-    .map-toolbar{flex-wrap:wrap;justify-content:flex-end;max-width:calc(100vw - 4rem)}
-    .map-toolbar .ghost,.gl-camera .ghost{min-height:44px;padding:.3rem .6rem}
-    .legend-panel{left:.55rem;right:.55rem;top:auto;bottom:.55rem;width:auto;max-height:60vh}
-  }
-
   /* A day as GPX: seen before it goes anywhere. The dialog's box fills the
      dialog, so a click that lands on the dialog itself is on the backdrop. */
   /* margin:auto is what centres a modal dialog; the page's reset takes it away. */
   .gpx-dialog{margin:auto;padding:0;border:0;background:transparent;color:var(--ink);
     width:min(34rem,calc(100vw - 1.5rem));max-width:none;max-height:calc(100svh - 2rem);overflow:visible}
-  .gpx-dialog::backdrop{background:rgba(3,5,12,.62)}
-  .gpx-dialog.no-modal{position:fixed;inset:1rem 0 auto;margin:0 auto;z-index:5000;box-shadow:0 0 0 100vmax rgba(3,5,12,.62)}
+  .gpx-dialog::backdrop{background:rgba(3,8,11,.62)}
+  .gpx-dialog.no-modal{position:fixed;inset:1rem 0 auto;margin:0 auto;z-index:5000;box-shadow:0 0 0 100vmax rgba(3,8,11,.62)}
   /* One column that never grows past the dialog: the file's long lines scroll
      inside their own box rather than widening everything. */
   .gpx-body{display:grid;grid-template-columns:minmax(0,1fr);gap:.7rem;padding:.9rem;max-height:calc(100svh - 2rem);overflow:auto;
-    background:rgba(9,12,24,.98);border:1px solid rgba(255,255,255,.16);box-shadow:0 24px 60px rgba(0,0,0,.55);
-    clip-path:polygon(var(--bevel) 0,100% 0,100% calc(100% - var(--bevel)),calc(100% - var(--bevel)) 100%,0 100%,0 var(--bevel));
-    background-image:linear-gradient(90deg,var(--sun1),var(--sun2));background-size:100% 2px;background-repeat:no-repeat}
-  .gpx-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.6rem}
-  .gpx-kicker{display:block;font:600 .68rem/1 var(--hud);letter-spacing:.16em;text-transform:uppercase;color:var(--sun1);margin-bottom:.3rem}
+    background:var(--panel-solid);border:1px solid rgba(255,255,255,.11);border-radius:7px;box-shadow:0 24px 60px rgba(0,0,0,.55)}
+  .gpx-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.6rem;
+    padding-bottom:.5rem;border-bottom:1px solid rgba(255,255,255,.08)}
+  .gpx-kicker{display:block;font-size:.67rem;letter-spacing:.12em;text-transform:uppercase;color:#8e9ba0;margin-bottom:.3rem}
   /* The title can hold a name, in any script: the system font, as typed. */
   .gpx-head h2{font:650 1.05rem/1.25 ui-sans-serif,system-ui,sans-serif;color:#fff}
   .gpx-day{display:flex;align-items:center;gap:.35rem}
-  .gpx-day input{font:inherit;font-size:.9rem;min-height:40px;padding:.3rem .55rem;border-radius:3px;
-    background:#0b1320;color:#e9e6f2;border:1px solid rgba(255,255,255,.24);color-scheme:dark}
-  .gpx-day .ghost{min-width:40px;min-height:40px;font-size:1.1rem;border-radius:3px}
-  .gpx-map{height:16rem;border:1px solid rgba(255,255,255,.14);background:var(--map-bg)}
+  .gpx-day input{font:inherit;font-size:.9rem;min-height:40px;padding:.3rem .55rem;border-radius:6px;
+    background:#081116;color:var(--ink);border:1px solid rgba(255,255,255,.18);color-scheme:dark}
+  .gpx-day .ghost{min-width:40px;min-height:40px;font-size:1.1rem}
+  .gpx-map{height:16rem;border:1px solid var(--hairline);border-radius:6px;overflow:hidden;background:var(--map-bg)}
   /* Whoever is lit on the big map, the preview is not dimmed with it. */
   body.spotlight .gpx-map .leaflet-tile-pane{filter:invert(.88) hue-rotate(152deg) saturate(.65) brightness(1.04) contrast(.91)}
   .gpx-status{font-size:.85rem;color:#c9d2d6}
@@ -544,12 +488,12 @@
   .gpx-facts dt{color:#8fa0a6}
   .gpx-facts dd{margin:0;color:#f2eee8;font-variant-numeric:tabular-nums}
   .gpx-actions{display:flex;gap:.4rem;flex-wrap:wrap}
-  .gpx-actions .ghost{min-height:40px;padding:.3rem .95rem;border-radius:3px;font-size:.82rem}
+  .gpx-actions .ghost{min-height:40px;padding:.3rem .95rem;font-size:.82rem}
   .gpx-actions .ghost:disabled{opacity:.45;cursor:default}
-  .gpx-warn{font-size:.78rem;line-height:1.45;color:#ffe2bd;border-left:3px solid var(--sun1);padding-left:.55rem}
+  .gpx-warn{font-size:.78rem;line-height:1.45;color:#f1dfe7;border-left:3px solid var(--accent);padding-left:.55rem}
   .gpx-file[hidden]{display:none}
   .gpx-file summary{cursor:pointer;font-size:.8rem;color:#c9d2d6}
-  .gpx-file pre{margin-top:.4rem;max-height:13rem;overflow:auto;padding:.55rem;background:#05070f;border:1px solid rgba(255,255,255,.1);
+  .gpx-file pre{margin-top:.4rem;max-height:13rem;overflow:auto;padding:.55rem;background:#050b0e;border:1px solid rgba(255,255,255,.1);border-radius:5px;
     font:.7rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dc;white-space:pre;direction:ltr;text-align:left}
   .gpx-fine{font-size:.72rem;color:#8fa0a6}
   @media (max-width:760px){
@@ -557,6 +501,28 @@
     .gpx-body{max-height:calc(100svh - 1rem);padding:.75rem}
     .gpx-map{height:40svh}
   }
+
+  /* The district: the name of where the middle of the map is, the way a game
+     names the district you drive into. Bottom right, over the map, never in
+     the way of a click; the panels cover it. The name is somebody's own
+     word in any script, so the system font as written; the Latin line under
+     it is spaced capitals, in Oswald (SIL OFL, /vendor/fonts). */
+  @font-face{font-family:"Oswald";font-weight:600;font-display:swap;src:url(/vendor/fonts/oswald-latin-600-normal.woff2) format("woff2")}
+  .district{
+    position:absolute;right:1rem;bottom:2.4rem;z-index:700;pointer-events:none;
+    display:grid;justify-items:end;gap:.1rem;text-align:right;
+    opacity:0;transform:translateY(6px);transition:opacity .5s ease,transform .5s ease
+  }
+  .district.show{opacity:1;transform:none}
+  .district b{font:700 1.5rem/1.05 ui-sans-serif,system-ui,sans-serif;color:#fff;
+    text-shadow:0 2px 0 rgba(0,0,0,.6),0 0 16px rgba(0,0,0,.65)}
+  .district span{font:600 .95rem/1 "Oswald",ui-sans-serif,system-ui,sans-serif;letter-spacing:.2em;text-transform:uppercase;
+    color:#ffb35c;text-shadow:0 2px 0 rgba(0,0,0,.6),0 0 12px rgba(0,0,0,.6)}
+  @media (max-width:760px){
+    .district{right:.6rem;bottom:2.2rem}
+    .district b{font-size:1.15rem}
+  }
+  @media (prefers-reduced-motion:reduce){ .district{transition:none} }
 
 </style>
 </head>
@@ -575,9 +541,9 @@
 <main>
   <div class="map-shell">
     <div id="map"></div>
+    <div class="district" id="district" aria-live="polite"></div>
     <div class="map-toolbar" aria-label="Map controls">
       <button class="ghost" id="peoplebtn" type="button" aria-expanded="false">People <span id="peoplebadge"></span></button>
-      <button class="ghost" id="legendbtn" type="button" aria-expanded="false" aria-controls="legendPanel">Legend</button>
       <button class="ghost" id="layersbtn" type="button" aria-expanded="false" aria-controls="layersPanel">Layers</button>
       <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
     </div>
@@ -594,14 +560,6 @@
     <section class="detail-panel" id="detailPanel" aria-label="Person details" hidden></section>
 
     <section class="layers-panel" id="layersPanel" aria-label="Map layers" hidden>
-      <div class="gl-only">
-        <div class="layers-title">3D map</div>
-        <label class="layer-option"><input type="checkbox" data-game="buildings" checked><span>3D buildings</span><small>Off is lighter</small></label>
-        <label class="layer-option"><input type="checkbox" data-game="radar"><span>Radar</span><small>Centred on you</small></label>
-        <label class="layer-option"><span>Light</span><select data-game="time" aria-label="Light">
-          <option value="auto">The real sun</option><option value="day">Day</option><option value="golden">Golden hour</option><option value="night">Night</option>
-        </select></label>
-      </div>
       <div class="layers-title">Map layers</div>
       <label class="layer-option"><input type="checkbox" data-layer="raster" checked><span>Street map &amp; labels</span><small>Worldwide</small></label>
       <label class="layer-option"><input type="checkbox" data-layer="cartography" checked><span>Styled map details</span></label>
@@ -615,30 +573,11 @@
         <label class="layer-option"><input type="checkbox" data-feature="water" checked><i class="map-swatch" style="--swatch:#1caaca" aria-hidden="true"></i><span>Water</span></label>
         <label class="layer-option"><input type="checkbox" data-feature="buildings" checked><i class="map-swatch" style="--swatch:#73758f" aria-hidden="true"></i><span>Buildings</span><small>Street zoom</small></label>
       </fieldset>
-      <p class="layer-note classic-only">Feature switches affect the styled detail overlay. The street map retains its own features and labels.</p>
-      <p class="layer-note gl-only">Feature switches change the 3D map. The street map is for anywhere its streets are missing.</p>
+      <p class="layer-note">Feature switches affect the styled detail overlay. The street map retains its own features and labels.</p>
       <div class="layers-title">Live overlays</div>
       <label class="layer-option"><input type="checkbox" data-layer="trails" checked><span>Movement trails</span></label>
       <label class="layer-option"><input type="checkbox" data-layer="fences" checked><span>Geofences</span></label>
       <label class="layer-option"><input type="checkbox" data-layer="zones" checked><span>Private places</span></label>
-      <label class="layer-option gl-switch"><input type="checkbox" data-game="classic"><span>Classic 2D map</span><small>Lighter, for older phones</small></label>
-    </section>
-
-    <section class="legend-panel" id="legendPanel" aria-label="What the map shows" hidden>
-      <div class="layers-title">Legend</div>
-      <dl class="legend">
-        <div><dt><i class="lg-blip" style="--c:var(--me)"></i></dt><dd><b>You</b>, sharing. An arrow shows which way you are going.</dd></div>
-        <div><dt><i class="lg-blip" style="--c:var(--live)"></i></dt><dd><b>Sharing live</b>, exactly where they are.</dd></div>
-        <div><dt><i class="lg-blip" style="--c:var(--stale)"></i></dt><dd><b>Not live</b>: their last position.</dd></div>
-        <div><dt><i class="lg-blip sos" style="--c:var(--danger)"></i></dt><dd><b>Asked for help (SOS).</b> Red means only this. livegeo calls nobody.</dd></div>
-        <div><dt><i class="lg-haze" style="--c:var(--live)"></i></dt><dd><b>Somewhere in a private place</b>: inside that area, never a point. Its middle is not the spot.</dd></div>
-        <div><dt><i class="lg-haze mine"></i></dt><dd><b>Your private place</b>: where your circle stops seeing you. Only you see it.</dd></div>
-        <div><dt><i class="lg-fence"></i></dt><dd><b>Fence</b>: you are told when somebody arrives or leaves.</dd></div>
-        <div><dt><i class="lg-trail"></i></dt><dd><b>Trail</b>: where they have been. Solid and glowing when picked.</dd></div>
-        <div><dt><i class="lg-fade"></i></dt><dd><b>Faded end</b>: the path goes out of view here, into a private place.</dd></div>
-        <div><dt><span class="lg-time">≈ 14:32</span></dt><dd>A time with <b>≈</b> is estimated between two readings.</dd></div>
-      </dl>
-      <p class="layer-note gl-only">Building heights are illustrative where OpenStreetMap has none.</p>
     </section>
   </div>
 </main>
@@ -673,11 +612,7 @@
 <script src="/lib/people-map.js"></script>
 <script src="/lib/cartography.js"></script>
 <script>
-// The dashboard. It starts once, on one of two maps: the classic one (Leaflet,
-// with /lib/people-map.js and /lib/cartography.js), or the 3D one (/lib/game/),
-// which gives it the same API. Which one is decided by the start-up at the end
-// of this file; nothing below needs to know, except where `game` is asked.
-function startDashboard(L, PeopleMap, Cartography, game) {
+(function () {
   var map = L.map('map', {
     zoomControl: true,
     // Pan past the dateline and the world keeps going, with the markers
@@ -695,17 +630,13 @@ function startDashboard(L, PeopleMap, Cartography, game) {
   var rasterBase = L.tileLayer('/tiles/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-  });
-  // The 3D map draws its own streets; the street map stays in Layers for
-  // anywhere they are missing, off until asked for.
-  if (!game) rasterBase.addTo(map);
-  else document.querySelector('input[data-layer="raster"]').checked = false;
+  }).addTo(map);
 
   var cartography = Cartography.on(map, function (message) {
     document.getElementById('cartographyStatus').textContent = message;
   });
 
-  var layerPrefs = { raster: !game, cartography: true, trails: true, fences: true, zones: true };
+  var layerPrefs = { raster: true, cartography: true, trails: true, fences: true, zones: true };
 
   // A real geographic scale. Leaflet recomputes this from zoom and latitude,
   // so the number always corresponds to the map instead of being decorative.
@@ -715,6 +646,52 @@ function startDashboard(L, PeopleMap, Cartography, game) {
     imperial: false,
     maxWidth: 180
   }).addTo(map);
+
+  // The district: the name of where the middle of the map is, bottom right,
+  // the way a game names the district you drive into. The server reads it
+  // from the map's own place names (/api/district). Nothing is said zoomed out
+  // past a city, or where it does not know.
+  var districtBox = document.getElementById('district');
+  var districtAsk = 0;
+  var districtTimer = 0;
+  var districtSaid = '';
+  function sayDistrict(lines) {
+    var said = lines.join('\n');
+    if (said === districtSaid) return;
+    districtSaid = said;
+    districtBox.classList.remove('show');
+    if (!lines.length) return;
+    districtBox.textContent = '';
+    // A name is whatever OpenStreetMap calls the place, in its own script:
+    // text, never markup.
+    var name = document.createElement('b');
+    name.textContent = lines[0];
+    name.dir = 'auto';
+    districtBox.appendChild(name);
+    if (lines[1]) {
+      var latin = document.createElement('span');
+      latin.textContent = lines[1];
+      districtBox.appendChild(latin);
+    }
+    // Laid out before it is shown, so a new name fades in rather than
+    // replacing the old one where it stands.
+    void districtBox.offsetWidth;
+    districtBox.classList.add('show');
+  }
+  map.on('moveend', function () {
+    clearTimeout(districtTimer);
+    var ask = ++districtAsk;
+    // Once the map has settled, not at every step of a drag.
+    districtTimer = setTimeout(function () {
+      var z = map.getZoom();
+      if (z < 12) { sayDistrict([]); return; }
+      var c = map.getCenter().wrap();
+      fetch('/api/district?lat=' + c.lat.toFixed(5) + '&lon=' + c.lng.toFixed(5) + '&z=' + z)
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (ask === districtAsk) sayDistrict((d && d.lines) || []); })
+        .catch(function () { if (ask === districtAsk) sayDistrict([]); });
+    }, 350);
+  });
 
   // How a person is drawn — the blur over somebody in a private place, the
   // dot gliding to where they are now, the beam for the way they are heading
@@ -1220,7 +1197,7 @@ function startDashboard(L, PeopleMap, Cartography, game) {
         : 'none'],
     ];
     var dl = document.getElementById('gpxFacts');
-    dl.replaceChildren();
+    dl.textContent = '';
     facts.forEach(function (f) {
       var dt = document.createElement('dt');
       dt.textContent = f[0];
@@ -1245,13 +1222,11 @@ function startDashboard(L, PeopleMap, Cartography, game) {
     try { return new File([gpx.blob], gpx.name, { type: 'application/gpx+xml' }); } catch (e) { return null; }
   }
 
-  // Real Leaflet, whichever map the page is on: on the 3D map the page's
-  // L is MapLibre underneath, and this preview is a plain map of one day.
+  // A small map of its own, of that day only: the path and nothing else.
   function drawGpxMap(segs) {
-    var RL = window.L;
     clearGpxMap();
-    var map = gpx.map = RL.map(document.getElementById('gpxMap'), { scrollWheelZoom: false });
-    RL.tileLayer('/tiles/{z}/{x}/{y}.png', {
+    var map = gpx.map = L.map(document.getElementById('gpxMap'), { scrollWheelZoom: false });
+    L.tileLayer('/tiles/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
@@ -1261,14 +1236,14 @@ function startDashboard(L, PeopleMap, Cartography, game) {
       all = all.concat(line);
       // No pins at either end: the times are in the facts. A lone reading
       // is a dot, since a line of one point draws nothing.
-      if (line.length > 1) RL.polyline(line, { color: gpx.colour, weight: 3.5, opacity: 0.95, interactive: false }).addTo(map);
-      else RL.circleMarker(line[0], { radius: 4, weight: 2, color: '#071318', fillColor: gpx.colour, fillOpacity: 1, interactive: false }).addTo(map);
+      if (line.length > 1) L.polyline(line, { color: gpx.colour, weight: 3.5, opacity: 0.95, interactive: false }).addTo(map);
+      else L.circleMarker(line[0], { radius: 4, weight: 2, color: '#071318', fillColor: gpx.colour, fillOpacity: 1, interactive: false }).addTo(map);
     });
     var fit = function () {
       if (gpx.map !== map) return;
       map.invalidateSize({ animate: false });
       if (all.length === 1) map.setView(all[0], 16);
-      else map.fitBounds(RL.latLngBounds(all).pad(0.12));
+      else map.fitBounds(L.latLngBounds(all).pad(0.12));
     };
     fit();
     // The dialog has only just been laid out; measured again once it has.
@@ -1765,14 +1740,6 @@ function startDashboard(L, PeopleMap, Cartography, game) {
     return live(p) ? '#78958c' : '#5f7077';
   }
 
-  // What kind of blip somebody is on the 3D map, which draws each its own way;
-  // the classic map ignores it, as Leaflet ignores options it does not know.
-  function blipOf(p) {
-    if (p.sos) return 'sos';
-    if (mine(p)) return 'me';
-    return live(p) ? 'live' : 'stale';
-  }
-
   function draw(p) {
     if (p.latitude === null || p.longitude === null) return;
     var here = [p.latitude, p.longitude];
@@ -1817,11 +1784,11 @@ function startDashboard(L, PeopleMap, Cartography, game) {
       if (entry.chip) { map.removeLayer(entry.chip); entry.chip = null; }
       var fresh = !entry.marker;
       if (fresh) {
-        entry.marker = L.circleMarker(here, { radius: 6.5, weight: 2, color: '#071318', fillColor: colour, fillOpacity: 1, blip: blipOf(p) }).addTo(map);
+        entry.marker = L.circleMarker(here, { radius: 6.5, weight: 2, color: '#071318', fillColor: colour, fillOpacity: 1 }).addTo(map);
         entry.marker.bindTooltip(tipOf(p), { permanent: false });
         wire(entry.marker, entry);
       }
-      entry.marker.setStyle({ color: '#071318', fillColor: colour, blip: blipOf(p) });
+      entry.marker.setStyle({ color: '#071318', fillColor: colour });
       relabel(entry);
       if (p.accuracy) {
         if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour, interactive: false }).addTo(map);
@@ -2119,32 +2086,6 @@ function startDashboard(L, PeopleMap, Cartography, game) {
     if (name === 'trails') syncTrails();
   }
 
-  // The 3D map's own settings, and the switch between the two maps, which is
-  // remembered in this browser and takes a reload.
-  layersPanel.addEventListener('change', function (e) {
-    var t = e.target;
-    var key = t.getAttribute && t.getAttribute('data-game');
-    if (!key) return;
-    if (key === 'classic') {
-      try { localStorage.setItem('livegeo.map', t.checked ? 'classic' : '3d'); } catch (x) { /* not remembered */ }
-      location.reload();
-      return;
-    }
-    if (!game) return;
-    if (key === 'time') game.setTime(t.value);
-    else if (key === 'buildings') game.setBuildings(t.checked);
-    else if (key === 'radar') game.setRadar(t.checked);
-  });
-  (function () {
-    var classicBox = layersPanel.querySelector('[data-game="classic"]');
-    if (classicBox) classicBox.checked = !game;
-    if (!game) return;
-    var p = game.prefs();
-    layersPanel.querySelector('[data-game="time"]').value = p.time;
-    layersPanel.querySelector('[data-game="buildings"]').checked = p.buildings;
-    layersPanel.querySelector('[data-game="radar"]').checked = p.radar;
-  })();
-
   layersPanel.addEventListener('change', function (e) {
     var feature = e.target.closest && e.target.closest('input[data-feature]');
     if (feature) { cartography.setFeature(feature.getAttribute('data-feature'), feature.checked); return; }
@@ -2352,79 +2293,6 @@ function startDashboard(L, PeopleMap, Cartography, game) {
   // And the beams: somebody who stopped a few minutes ago is not heading
   // anywhere now, and no update will come to say so.
   setInterval(function () { people.forEach(aimAt); }, 5000);
-}
-
-// What the map means: the same on both maps, closed until asked for.
-(function () {
-  var button = document.getElementById('legendbtn');
-  var panel = document.getElementById('legendPanel');
-  function open(yes) {
-    panel.hidden = !yes;
-    button.setAttribute('aria-expanded', String(yes));
-  }
-  button.onclick = function () {
-    open(panel.hidden);
-    var layers = document.getElementById('layersPanel');
-    if (!panel.hidden && !layers.hidden) { layers.hidden = true; document.getElementById('layersbtn').setAttribute('aria-expanded', 'false'); }
-  };
-  document.addEventListener('mousedown', function (e) {
-    if (!panel.hidden && !panel.contains(e.target) && e.target !== button) open(false);
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !panel.hidden) { open(false); button.focus(); }
-  });
-})();
-
-// Start-up: the 3D map where the browser can draw it, the classic map
-// otherwise. Written the old way, like everything above: this has to run on
-// browsers that cannot run the 3D map, so they get the classic one.
-(function () {
-  var state = 'waiting';   // then 'gl' once the 3D map has claimed the page, 'running' or 'classic'
-  function webgl2() {
-    try { return Boolean(window.WebGL2RenderingContext && document.createElement('canvas').getContext('webgl2')); }
-    catch (e) { return false; }
-  }
-  var canGL = webgl2() && ('noModule' in document.createElement('script'));
-  var wantClassic = /[?&]map=classic\b/.test(location.search);
-  try { wantClassic = wantClassic || localStorage.getItem('livegeo.map') === 'classic'; } catch (e) { /* no storage */ }
-  if (canGL) document.body.classList.add('can-gl');
-
-  window.livegeoClaim = function () {
-    if (state !== 'waiting') return false;
-    state = 'gl';
-    return true;
-  };
-  window.livegeoStart = function (game) {
-    state = 'running';
-    startDashboard(game.L, game.PeopleMap, game.Cartography, game);
-  };
-  window.livegeoClassic = function () {
-    if (state === 'classic' || state === 'running') return;
-    if (state === 'gl') {
-      // Whatever the 3D map got as far as drawing goes; Leaflet gets a clean box.
-      var old = document.getElementById('map');
-      var box = document.createElement('div');
-      box.id = 'map';
-      old.parentNode.replaceChild(box, old);
-      ['gl-district', 'gl-radar', 'gl-camera'].forEach(function (c) {
-        var el = document.querySelector('.' + c);
-        if (el) el.parentNode.removeChild(el);
-      });
-    }
-    state = 'classic';
-    document.body.classList.remove('gl');
-    document.body.classList.add('classic');
-    startDashboard(window.L, window.PeopleMap, window.Cartography, null);
-  };
-
-  if (!canGL || wantClassic) { window.livegeoClassic(); return; }
-  var s = document.createElement('script');
-  s.type = 'module';
-  s.src = '/lib/game/boot.mjs';
-  s.onerror = function () { window.livegeoClassic(); };
-  document.body.appendChild(s);
-  // A slow network is not a reason to show nothing: past this, the classic map.
-  setTimeout(function () { if (state === 'waiting') window.livegeoClassic(); }, 30000);
 })();
 </script>
 </body>

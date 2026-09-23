@@ -168,6 +168,14 @@ The full vocabulary is in section 4. In brief:
 - **Fences:** faint purple shapes with a label.
 - **Your own private places:** a lighter blur with a dashed purple edge.
 - **Movement:** dots glide rather than jump.
+- **The district name** (`#district`), bottom right: where the middle of the map is, the way a game names the district you drive into. It is the neighbourhood, quarter or suburb, or else the village, town or city. It appears from zoom 12 inwards and fades in again whenever the name changes.
+  - A name in another script is followed by a Latin line in spaced orange capitals, for example **وادوتس / VADUZ**. The name is set in the system font, and the Latin line in Oswald.
+  - The names are OpenStreetMap's place nodes, from `/api/district`. That uses the imported extract where there is one, and vector tiles from OpenFreeMap everywhere else, proxied by the server.
+  - It never takes a click, and the panels cover it.
+
+![The district name, bottom right](design-handoff/14-district.jpg)
+
+In this screenshot Vaduz was given a Persian name in the local copy, to show a name in another script with its Latin line. The map under it is the placeholder grid city, with the Liechtenstein extract's styled detail over it.
 
 #### 3.1.3 Lighting a path (spotlight) and the time along it
 
@@ -380,8 +388,6 @@ The watches hard-code the same green (`#0A7D33`) and don't know about "you" blue
 
 Every mark on the map means one specific thing. Keep the meanings even if you change the look.
 
-> **Since 23 September the dashboard opens on a 3D map** (MapLibre, WebGL): a game-style city with blips, a radar and three cameras; screenshots are in `docs/game-map/`. The classic 2D map below is still what older phones get, and what **Layers → Classic 2D map** chooses. The meanings in this table are the same on both; how each is drawn in 3D is in the last paragraph of this section.
-
 | Mark | Means | Drawn as now | Rules |
 |---|---|---|---|
 | **Dot** | Where someone is, exactly as sent. | White circle, 7px radius, 3px ring in the state colour. 9px when lit. | Colour **is** state. Your dot is always drawn on top of others. |
@@ -397,14 +403,6 @@ Every mark on the map means one specific thing. Keep the meanings even if you ch
 | **Fence** | A named place you're told about when people arrive or leave. | Purple outline, 7% fill, name above it. | Drawn under everything else. |
 | **Time label** | When they were at this point on the path. | Small label that follows the pointer. | `≈` means estimated. No `≈` means an actual reading. "time not recorded" when there is none. |
 | **Spotlight** | "Look at this one person". | Everyone else at 20% opacity, map greyed out. | Clicking empty map releases it. |
-
-**On the 3D map** the same marks are drawn as a game would draw them, with the same rules:
-- **Dots are blips**: a disc with a dark edge, a white ring and a glow in the state colour. They are HTML buttons over the map, so they are never hidden behind a building, and the keyboard reaches them.
-- **You** are bigger, with a white centre. **SOS** adds a pulsing ring (still with reduced motion) and an "SOS" tag. **Not live** loses the glow.
-- **The heading fan is a chevron** just ahead of the blip, turned with the map. Your own is white.
-- **The blur is a soft disc lying on the ground** at any tilt, with no centre mark. Your own places add a dashed edge.
-- **Paths, halos and fences are drawn on the ground**, above the buildings.
-- **Labels and the time tip** are HTML over the map, as before.
 
 ---
 
@@ -434,7 +432,8 @@ Each page defines its own CSS variables inline in `:root`. There is no shared to
 
 ### 5.2 Type
 
-- **Font:** the system stack only (`ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`), with `ui-monospace` for codes. No web fonts (section 8.2).
+- **Font:** the system stack (`ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`), with `ui-monospace` for codes.
+- **One web font, self-hosted:** Oswald 600 (SIL OFL, Latin only), used only for the district name's Latin line. It is never used for anybody's name or for Persian, and letter-spacing is never applied to a script whose letters join (section 8.2).
 - **Base size:** 15px, line height 1.5 (1.6 on sign-in).
 - **Sizes in use:** 1rem titles; .85rem meta; .8rem buttons and meta; .78rem fine print and time labels; .75rem ids; .72rem fence labels and shared meta; .7rem the "you" tag; 1.6rem the watch pairing code.
 
@@ -448,7 +447,7 @@ That is a lot of small sizes, and below .8rem it is hard to read on phones.
 - Buttons are "ghost" pills: 999px radius, hairline border, `.15rem .6rem` padding, .8rem text. They end up about 24px tall.
 - Floating panels (Circle, live-page notice): radius .6rem; shadow `0 8px 30px rgba(0,0,0,.12)`.
 - Spacing is ad hoc: .3–1rem gaps. There is no scale.
-- There are no icons anywhere. Buttons are words. The only symbols are 🆘 and ⚠️ inside text. (The 3D map's HUD is still words; the blips, the chevron and the radar are its only drawn symbols.)
+- There are no icons anywhere. Buttons are words. The only symbols are 🆘 and ⚠️ inside text.
 
 ### 5.4 Motion
 
@@ -465,15 +464,6 @@ That is a lot of small sizes, and below .8rem it is hard to read on phones.
 | Live-link "ended" greying | .4 s | (short, kept) |
 
 ### 5.5 The map itself
-
-**The 3D map** (`public/lib/game/`, the default where WebGL2 works):
-- MapLibre GL JS 6, with vector tiles from `/vector/…`: the local OSM extract where there is one, and otherwise OpenFreeMap, proxied by the server.
-- The palette is in `public/lib/game/style.mjs`, in three lights that blend with the real sun: night (indigo ground, hot-pink and amber roads, lit windows), golden hour, and day (pastels, turquoise water).
-- The ground never uses red (SOS) or violet and purple (places).
-- The HUD uses Oswald (self-hosted) for the page's own words, and never for names.
-- Map labels are Noto Sans, local script first. Persian is shaped by MapLibre itself and never letter-spaced.
-
-**The classic map** (Leaflet), unchanged:
 
 - **Library:** Leaflet 1.9.4, self-hosted in `public/vendor/leaflet/`.
 - **Tiles:** OpenStreetMap's standard tiles, fetched and cached by the server (`/tiles/…`). The attribution "© OpenStreetMap" is a licence requirement and must stay visible.
@@ -544,6 +534,8 @@ A one-off "Send this location" appears on the map too, but never as live.
 
 ### 6.8 Sharing a path, and GPX
 
+![The GPX dialog](design-handoff/13-gpx-dialog.jpg)
+
 - **Share this path** makes a frozen copy that anyone can open for 7 days. Its first and last 200–500 m are cut at random, so neither end marks a door.
 - **A day as GPX…** opens a dialog showing the day before anything is saved: its path on a map, and how far and how long. From there it is downloaded for Strava, Garmin and similar apps, sent to another app, or copied. A download alone can silently fail in a phone's in-app browser.
 
@@ -613,7 +605,6 @@ These are product decisions about privacy and safety. Changing one is a conversa
 ### 8.1 How the front end is built
 
 - Plain HTML files, with CSS and JavaScript **inline in each file**. JavaScript is written in older ES5 style, for old in-app browsers. No build, no npm packages in the browser, no framework.
-- **The exception is the 3D map** (`public/lib/game/*.mjs`): modern JavaScript as ES modules. It is loaded only after the page has checked for WebGL2 and module support. Anything that fails before it starts hands the page to the classic map, so the ES5 rule still holds for everything every browser must run.
 - Shared pieces:
   - `public/lib/people-map.js` and `.css`: dots, blurs, glide, heading fan;
   - `public/lib/path-time.js`: path and time maths.
@@ -624,13 +615,13 @@ These are product decisions about privacy and safety. Changing one is a conversa
 - The pages are used on networks that filter traffic. A font from Google, an icon set from a CDN, or an analytics script is one more thing that can fail to load and take the page with it.
 - Everything must be in the repository and served by the app.
 - The one existing exception is Telegram's own login widget on the sign-in page, which only exists when configured.
-- **A custom typeface** must be delivered as files with a licence that allows self-hosting (OFL is ideal), and covering Persian if Persian is in scope. Vazirmatn is an example.
+- **A custom typeface** must be delivered as files with a licence that allows self-hosting (OFL is ideal), and covering Persian if Persian is in scope. Vazirmatn is an example. Oswald is already delivered this way (`public/vendor/fonts`, with its licence), for the district name's Latin line.
 - **Icons** should be inline SVG.
 
 ### 8.3 Things that break silently if renamed
 
-- **The GPX dialog:** `gpxDialog` and the ids inside it (`gpxTitle`, `gpxClose`, `gpxPrev`, `gpxDate`, `gpxNext`, `gpxMap`, `gpxStatus`, `gpxFacts`, `gpxWarning`, `gpxSave`, `gpxSend`, `gpxCopy`, `gpxFile`, `gpxText`). The card's button keeps the `gpxbtn` class. The preview map is always real Leaflet (`window.L`), even on the 3D map.
-- **Added with the 3D map:** `legendbtn`, `legendPanel`, the `data-game` controls in Layers, and the `gl-*` classes in `public/lib/game/game.css`. The dashboard also passes a `blip` kind (`me`, `live`, `stale`, `sos`) with each dot; keep it in step with `colourOf`.
+- **The GPX dialog:** `gpxDialog` and the ids inside it (`gpxTitle`, `gpxClose`, `gpxPrev`, `gpxDate`, `gpxNext`, `gpxMap`, `gpxStatus`, `gpxFacts`, `gpxWarning`, `gpxSave`, `gpxSend`, `gpxCopy`, `gpxFile`, `gpxText`). The card's button keeps the `gpxbtn` class.
+- **The district name:** `district`, the box in the map's bottom-right corner, filled from `/api/district`, and its `show` class.
 - **Element ids the scripts look up.**
   - Dashboard: `map`, `list`, `count`, `hint`, `recentre`, `newfence`, `circlebtn`, `signout`, `conn`, `circle`, and ids inside the Circle panel (`mkinvite`, `invitebox`, `livelist`, `zonelist`, `mkzone`, `devices`, `mkcode`, `codebox`, `copyinvite`).
   - Live page: `who`, `when`, `state`, `follow`, `notice`.
@@ -691,7 +682,7 @@ WCAG 2.2: 4.5:1 for normal text, 3:1 for large text, icons and borders.
   - The list rows are buttons, so the list is the keyboard route. Keep it complete.
   - Leaflet's own zoom buttons work.
 - **Screen readers.**
-  - Nothing announces an arriving SOS; there is no `aria-live` region.
+  - Nothing announces an arriving SOS. The only `aria-live` region is the district name (`polite`), which is read out when it changes as the map moves. If that proves chatty, it is one attribute.
   - The Circle panel has no dialog semantics or focus handling, and the Circle button has no `aria-expanded`.
   - Popups aren't announced.
 - **Touch targets** are about 24px tall (ghost buttons) and 14–18px (dots). The usual guidance is 44px.
@@ -746,8 +737,6 @@ In the bot it's `/sos`, which is easier but only if you remember it.
 **What's needed:** designed dialogs and sheets, including a map-based way to place fences and private places, with the circle previewed before saving.
 
 ### 10.4 P2: Nothing explains the map
-
-*Partly addressed on 23 September: a **Legend** button opens a panel explaining every mark, on both maps. It is closed by default. What remains is a first-run explanation.*
 
 **The problem:** there is no legend. The meanings in section 4 have to be guessed:
 - blue, green, grey, red and purple;

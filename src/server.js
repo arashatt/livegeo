@@ -7,8 +7,8 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname, join } from 'node:path';
-import { parseTilePath, parseCartoPath, parseVectorPath, makeTiles } from './tiles.js';
-import { makeVector, makeVectorUpstream } from './vector.js';
+import { parseTilePath, parseCartoPath, makeTiles } from './tiles.js';
+import { makeDistrict, makeVectorUpstream } from './district.js';
 import { EMPTY_CARTOGRAPHY, parseCartographyLayers } from './cartography.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
@@ -25,7 +25,6 @@ import { toGpx, splitAtPauses, dayOf, contentDisposition } from './gpx.js';
 import { makeLive, describeLink, LIVE_MINUTES, LIVE_EACH } from './live.js';
 import { CHECK_HOURS } from './checks.js';
 import { randomBytes, createHash } from 'node:crypto';
-import { gzipSync } from 'node:zlib';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 const PAGE = resolve(PUBLIC, 'index.html');
@@ -38,15 +37,8 @@ const STATIC_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
-  // The game map (public/lib/game/, public/vendor/): ES modules must arrive
-  // as JavaScript or the browser refuses to run them; glyphs, data and fonts
-  // are what MapLibre asks for.
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.pbf': 'application/x-protobuf',
-  '.json': 'application/json; charset=utf-8',
-  '.geojson': 'application/geo+json',
+  // Oswald, for the district name's Latin line (/vendor/fonts).
   '.woff2': 'font/woff2',
-  '.wasm': 'application/wasm',
 };
 
 // Resolves a request path inside public/, or returns null. The prefix check is
@@ -129,9 +121,10 @@ export function serve(positions, config, {
   // Where links sent from here point (address.js). Only its source is ever
   // said out loud, in /healthz.
   address = null,
-  // The game map's vector tiles (vector.js). Built from the config and the
-  // database unless given, which is what tests do.
-  vector = null,
+  // The name of where the middle of the map is (district.js): { at(lat, lon,
+  // zoom) }. Built from the config and the database unless given, which is
+  // what tests do.
+  district = null,
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -213,8 +206,8 @@ export function serve(positions, config, {
     log,
   });
 
-  const vectors = vector || makeVector({
-    postgis: geo && geo.vectorTile ? (t) => geo.vectorTile(t.z, t.x, t.y) : null,
+  const districts = district || makeDistrict({
+    postgis: geo && geo.placesIn ? { places: (t) => geo.placesIn(t) } : null,
     upstream: makeVectorUpstream({
       upstream: config.vectorUpstream,
       cacheDir: join(config.tileCache || '/tmp/livegeo-tiles', 'vector'),
@@ -222,36 +215,8 @@ export function serve(positions, config, {
       maxAge: config.vectorMaxAge,
       log,
     }),
+    log,
   });
-
-  // Gzipped, as every vector tile server sends them: they compress to a
-  // third. Nothing at all is a normal answer — sea, desert, no source — and
-  // MapLibre draws an empty tile for a 204.
-  async function serveVector(tile, req, res) {
-    const got = await vectors.tile(tile).catch((e) => {
-      log.error('tiles: vector tile failed —', e && e.message ? e.message : e);
-      return null;
-    });
-    const source = got ? got.from : 'none';
-    if (!got || !got.bytes.length) {
-      res.writeHead(204, { 'cache-control': 'private, max-age=60', 'x-vector-source': source });
-      res.end();
-      return;
-    }
-    const headers = {
-      'content-type': 'application/vnd.mapbox-vector-tile',
-      'cache-control': got.from === 'postgis' ? 'private, max-age=300' : 'private, max-age=86400',
-      'x-vector-source': source,
-    };
-    if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
-      headers['content-encoding'] = 'gzip';
-      res.writeHead(200, headers);
-      res.end(gzipSync(got.bytes));
-      return;
-    }
-    res.writeHead(200, headers);
-    res.end(got.bytes);
-  }
 
   const send = (res, event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -995,11 +960,6 @@ export function serve(positions, config, {
       return serveCartography(carto, res, layers);
     }
 
-    // The game map's vector tiles, guarded the same way: this is not a public
-    // tile host either, and watches do not draw them.
-    const vectorTile = parseVectorPath(url.pathname);
-    if (vectorTile) return serveVector(vectorTile, req, res);
-
     // The basemap. Guarded like everything else, so this cannot be used as
     // somebody else's free tile proxy.
     const tile = parseTilePath(url.pathname);
@@ -1013,6 +973,27 @@ export function serve(positions, config, {
       const place = geo ? await geo.placeOf(lat, lon) : '';
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ place }));
+      return;
+    }
+
+    // The name of where the middle of the map is, for the corner of the map
+    // (district.js). Asked once the map has settled. The coordinates are
+    // where somebody is looking, so they are never logged.
+    if (url.pathname === '/api/district') {
+      const num = (key) => {
+        const v = url.searchParams.get(key);
+        return v === null || v.trim() === '' ? NaN : Number(v);
+      };
+      const lat = num('lat');
+      const lon = num('lon');
+      const zoom = num('z');
+      if (!(Math.abs(lat) <= 90) || !Number.isFinite(lon) || !(zoom >= 0 && zoom <= 24)) {
+        return json(400, { error: 'lat, lon and z are needed' });
+      }
+      // Leaflet's longitude keeps counting past the dateline.
+      const lines = await districts.at(lat, ((lon + 180) % 360 + 360) % 360 - 180, zoom).catch(() => []);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300' });
+      res.end(JSON.stringify({ lines }));
       return;
     }
 

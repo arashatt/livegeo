@@ -15,7 +15,7 @@
 
 import pg from 'pg';
 import { makeCartography } from './cartography.js';
-import { makeVectorPostgis } from './vector.js';
+import { makePlacesPostgis } from './district.js';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -53,7 +53,7 @@ export function makeGeo({ url, log = console } = {}) {
   let state = url ? 'unreachable' : 'off';
 
   const cartography = makeCartography({ query: (...args) => pool.query(...args), log });
-  const vector = makeVectorPostgis({ query: (...args) => pool.query(...args), log });
+  const places = makePlacesPostgis({ query: (...args) => pool.query(...args), log });
 
   // Queries run against whatever osm2pgsql produced. If the extract was never
   // imported the tables are missing, which is a perfectly ordinary state —
@@ -172,9 +172,10 @@ export function makeGeo({ url, log = console } = {}) {
       return pool ? cartography.tile(z, x, y, layers) : null;
     },
 
-    // The game map's tiles from the import, or null for "ask the upstream".
-    async vectorTile(z, x, y) {
-      return pool ? vector.tile(z, x, y) : null;
+    // Place names in one tile, for the district name (district.js), or null
+    // for "ask the upstream".
+    async placesIn(tile) {
+      return pool ? places.places(tile) : null;
     },
 
     // The last known position of everyone seen recently — what the in-memory

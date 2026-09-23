@@ -3,8 +3,7 @@
 import assert from 'node:assert/strict';
 import pg from 'pg';
 import { CARTOGRAPHY_SQL, makeCartography } from '../src/cartography.js';
-import { makeVectorPostgis } from '../src/vector.js';
-import { decodeTile } from './mvt.mjs';
+import { makeDistrict, makePlacesPostgis, placeSql } from '../src/district.js';
 
 if (!process.env.CARTOGRAPHY_TEST_DATABASE_URL) throw new Error('CARTOGRAPHY_TEST_DATABASE_URL is required');
 const db = new pg.Client({ connectionString: process.env.CARTOGRAPHY_TEST_DATABASE_URL });
@@ -56,62 +55,42 @@ try {
   // Test a different hemisphere: the query has no city-specific bounds.
   assert.equal(await carto.tile(15, 25000, 25000), null);
   console.log('PostGIS cartography: geometry, orientation, edge buffer, budgets, selections and coverage passed');
+
+  // The district name, from the import's place nodes: the same query the
+  // server runs, against a few places around Vaduz.
+  await db.query('CREATE EXTENSION IF NOT EXISTS hstore');
+  await db.query(`
+    CREATE TEMP TABLE planet_osm_point (
+      osm_id bigint, way geometry(Point,3857), name text, place text, tags hstore
+    );
+    INSERT INTO planet_osm_point VALUES
+      (1, ST_Transform(ST_SetSRID(ST_MakePoint(9.5227962, 47.1392862), 4326), 3857), 'وادوتس', 'town', 'name:en=>Vaduz'),
+      (2, ST_Transform(ST_SetSRID(ST_MakePoint(9.5274876, 47.1069940), 4326), 3857), 'Triesen', 'village', ''),
+      (3, ST_Transform(ST_SetSRID(ST_MakePoint(9.5236000, 47.1408000), 4326), 3857), 'Ebenholz', 'neighbourhood', ''),
+      (4, ST_Transform(ST_SetSRID(ST_MakePoint(9.5500000, 47.1330000), 4326), 3857), 'Masescha', 'hamlet', ''),
+      (5, ST_Transform(ST_SetSRID(ST_MakePoint(9.5230000, 47.1390000), 4326), 3857), NULL, 'suburb', '');
+  `);
+  // z11: towns and villages; neighbourhoods only from z12, as OpenMapTiles.
+  const z11 = await db.query(placeSql(), [11, 1078, 719]);
+  assert.deepEqual(z11.rows.map((r) => r.name).sort(), ['Triesen', 'وادوتس']);
+  assert.equal(z11.rows.find((r) => r.place === 'town').en, 'Vaduz');
+  assert.ok(Math.abs(z11.rows.find((r) => r.place === 'town').lat - 47.1392862) < 1e-6);
+  const z14 = await db.query(placeSql({ tags: false }), [14, 8625, 5753]);
+  assert.deepEqual(z14.rows.map((r) => r.name), ['Ebenholz', 'وادوتس'], 'parts of a town first');
+  // One connection is what sees the TEMP table, so its queries take turns;
+  // the server's pool runs them side by side.
+  let turn = Promise.resolve();
+  const inTurn = (...args) => {
+    const run = turn.then(() => db.query(...args));
+    turn = run.catch(() => {});
+    return run;
+  };
+  const district = makeDistrict({ postgis: makePlacesPostgis({ query: inTurn }) });
+  assert.deepEqual(await district.at(47.1392862, 9.5227962, 12), ['وادوتس', 'Vaduz']);
+  assert.deepEqual(await district.at(47.1392862, 9.5227962, 16), ['Ebenholz']);
+  assert.deepEqual(await district.at(47.1069940, 9.5274876, 16), ['Triesen']);
+  assert.deepEqual(await district.at(-33.9, 18.4, 16), [], 'outside the import: nothing, with no upstream');
+  console.log('PostGIS district: place kinds by zoom, Latin names from tags, and the lookup passed');
 } finally {
   await db.end();
-}
-
-// The game map's vector tiles, from tables shaped like osm2pgsql's (with its
-// hstore tags), in a session of their own.
-const vt = new pg.Client({ connectionString: process.env.CARTOGRAPHY_TEST_DATABASE_URL });
-await vt.connect();
-try {
-  await vt.query(`
-    CREATE EXTENSION IF NOT EXISTS hstore;
-    CREATE TEMP TABLE planet_osm_polygon (
-      osm_id bigint, way geometry(Geometry,3857), way_area real, "natural" text, landuse text,
-      waterway text, water text, leisure text, building text, tags hstore
-    );
-    CREATE TEMP TABLE planet_osm_line (
-      osm_id bigint, way geometry(Geometry,3857), waterway text, railway text, highway text,
-      bridge text, tunnel text, name text, z_order int, tags hstore
-    );
-    CREATE TEMP TABLE planet_osm_point (
-      osm_id bigint, way geometry(Point,3857), place text, name text, tags hstore
-    );
-    WITH t AS (SELECT ST_TileEnvelope(14, 10000, 6000) AS g),
-    b AS (SELECT ST_XMin(g) AS x, ST_YMax(g) AS y, (ST_XMax(g)-ST_XMin(g))/512 AS p FROM t)
-    INSERT INTO planet_osm_polygon
-      SELECT 1, ST_MakeEnvelope(x+10*p,y-60*p,x+60*p,y-10*p,3857), 1e5, NULL, NULL, NULL, NULL, NULL, 'apartments',
-             'building:levels=>10'::hstore FROM b
-      UNION ALL
-      SELECT 2, ST_MakeEnvelope(x+100*p,y-160*p,x+160*p,y-100*p,3857), 1e5, NULL, NULL, NULL, NULL, NULL, 'yes', ''::hstore FROM b
-      UNION ALL
-      SELECT 3, ST_MakeEnvelope(x+200*p,y-400*p,x+400*p,y-200*p,3857), 1e7, 'water', NULL, NULL, NULL, NULL, NULL, ''::hstore FROM b;
-    WITH t AS (SELECT ST_TileEnvelope(14, 10000, 6000) AS g)
-    INSERT INTO planet_osm_line
-      SELECT 4, ST_SetSRID(ST_MakeLine(ST_MakePoint(ST_XMin(g), ST_YMin(g)), ST_MakePoint(ST_XMax(g), ST_YMax(g))),3857),
-             NULL, NULL, 'primary_link', 'yes', NULL, 'خیابان آزادی', 5, 'name:en=>"Azadi Street"'::hstore FROM t;
-    WITH t AS (SELECT ST_TileEnvelope(14, 10000, 6000) AS g)
-    INSERT INTO planet_osm_point
-      SELECT 5, ST_SetSRID(ST_MakePoint((ST_XMin(g)+ST_XMax(g))/2, (ST_YMin(g)+ST_YMax(g))/2),3857),
-             'suburb', 'Vaduz', ''::hstore FROM t;
-  `);
-  const tiles = makeVectorPostgis({ query: (...args) => vt.query(...args) });
-  const layers = decodeTile(await tiles.tile(14, 10000, 6000));
-  const heights = layers.building.map((f) => f.properties.render_height).sort((a, b) => a - b);
-  assert.equal(heights.length, 2);
-  assert.ok(heights.includes(33.5), 'ten levels are 33.5 m');
-  assert.ok(heights[0] > 0 && heights[0] < 40, 'a building without a height still stands');
-  assert.deepEqual(layers.transportation.map((f) => f.properties),
-    [{ class: 'primary', ramp: 1, brunnel: 'bridge' }]);
-  assert.deepEqual(layers.transportation_name[0].properties,
-    { name: 'خیابان آزادی', 'name:latin': 'Azadi Street', 'name:nonlatin': 'خیابان آزادی', class: 'primary' });
-  assert.equal(layers.water[0].properties.class, 'lake');
-  assert.equal(layers.place[0].properties['name:latin'], 'Vaduz');
-  assert.equal(layers.place[0].properties['name:nonlatin'], undefined);
-  assert.equal(await tiles.tile(14, 11000, 6000), null, 'nothing there means ask the upstream');
-  assert.equal(await tiles.tile(6, 1, 1), null, 'whole countries are never asked of PostGIS');
-  console.log('PostGIS vector tiles: layers, heights, names and scripts passed');
-} finally {
-  await vt.end();
 }
