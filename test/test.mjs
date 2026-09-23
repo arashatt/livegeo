@@ -354,7 +354,7 @@ head('geo without a database');
 {
   const geo = makeGeo({ url: '', log: { info() {}, error() {} } });
   t('connecting says no rather than throwing', (await geo.connect()) === false);
-  t('it reports itself disabled', geo.enabled() === false);
+  t('it reports itself disabled', geo.enabled() === false && geo.state() === 'off');
   t('recording is a no-op', (await geo.record({ id: '1', latitude: 1, longitude: 2, at: 1 })) === false);
   t('describing a point is empty', (await geo.placeOf(35.7, 51.4)) === '');
   t('history is empty, not an error', (await geo.historyOf('1')).length === 0);
@@ -363,6 +363,19 @@ head('geo without a database');
 }
 
 // -------------------------------------------------------------------- tiles
+
+head('a database that is not there yet');
+{
+  // Nothing listens on port 1: refused at once, every time.
+  const said = [];
+  const geo = makeGeo({ url: 'postgres://nobody@127.0.0.1:1/none', log: { info: (m) => said.push(m), error: (...m) => said.push(m.join(' ')) } });
+  const started = Date.now();
+  t('connecting tries more than once before giving up', (await geo.connect({ attempts: 3, wait: 20 })) === false
+    && said.filter((m) => /not reachable yet/.test(m)).length === 2 && said.some((m) => /cannot connect/.test(m)), said);
+  t('waiting between tries', Date.now() - started >= 40);
+  t('and then says it is unreachable, not off', geo.enabled() === false && geo.state() === 'unreachable');
+  await geo.close();
+}
 
 head('a tile path is three integers or nothing');
 {
@@ -1206,6 +1219,8 @@ head('the leak matrix: every route, as every kind of viewer');
   }
 
   // --- who can get in at all
+  const health = await (await fetch(base + '/healthz')).json();
+  t('/healthz answers anybody, and says whether the database is there', health.ok === true && health.database === 'connected', health);
   t('a session for somebody the bot never met is refused', (await hit('stranger', '/api/positions')).status === 401);
   t('the shared token still works, as an admin', (await ids('token')) === '2,3');
 

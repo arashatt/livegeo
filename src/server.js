@@ -494,8 +494,13 @@ export function serve(positions, config, {
     // the server itself, over loopback, and has no key to present. It reports
     // counts and nothing else.
     if (url.pathname === '/healthz') {
+      // Whether the database is there too: a service that came up without it
+      // answers, but with circles, private places and history all off, and
+      // the rollout should be able to tell that from a healthy one.
+      const database = typeof geo?.state === 'function' ? geo.state()
+        : (geo && geo.enabled && geo.enabled() ? 'connected' : 'off');
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, watching: watchers.size, people: positions.list().length }));
+      res.end(JSON.stringify({ ok: true, watching: watchers.size, people: positions.list().length, database }));
       return;
     }
 

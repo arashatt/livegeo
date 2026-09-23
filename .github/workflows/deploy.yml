@@ -142,11 +142,22 @@ jobs:
           # attempt. Twenty logins in a minute is the pattern fail2ban and
           # `ufw limit` exist to stop, and a banned runner looks exactly like
           # a service that never came back.
+          #
+          # Answering is not the whole of healthy: a service that could not
+          # reach its database comes up anyway, with circles, private places
+          # and history all off, and says so in /healthz. That is a failed
+          # deploy too, not a green one somebody finds out about later.
           ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
             -p "${SSH_PORT:-22}" "${USER:-root}@${HOST}" \
             "for _ in \$(seq 1 20); do \
-               curl -fsS http://127.0.0.1:${PORT:-8080}/healthz && exit 0; \
+               if body=\$(curl -fsS http://127.0.0.1:${PORT:-8080}/healthz); then \
+                 echo \"\$body\"; \
+                 if echo \"\$body\" | grep -q '\"database\":\"unreachable\"'; then \
+                   echo '::error::the service is up, but could not reach its database'; exit 1; \
+                 fi; \
+                 exit 0; \
+               fi; \
                sleep 3; \
              done; \
              exit 1" \

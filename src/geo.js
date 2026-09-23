@@ -46,6 +46,9 @@ export function placeName({ road, area } = {}) {
 
 export function makeGeo({ url, log = console } = {}) {
   let pool = null;
+  // 'off' without DATABASE_URL, 'connected', or 'unreachable': configured,
+  // tried, and given up on. /healthz says which.
+  let state = url ? 'unreachable' : 'off';
 
   // Queries run against whatever osm2pgsql produced. If the extract was never
   // imported the tables are missing, which is a perfectly ordinary state —
@@ -79,15 +82,35 @@ export function makeGeo({ url, log = console } = {}) {
 
   return {
     enabled: () => Boolean(pool),
+    state: () => state,
 
-    async connect() {
+    // Tried more than once. Straight after a reboot or a Docker restart the
+    // database can already be healthy while its name does not resolve yet
+    // (`getaddrinfo EAI_AGAIN postgis`), and a single failed attempt used to
+    // leave the service running without its database — circles, private
+    // places, history, all off — until somebody noticed and restarted it.
+    async connect({ attempts = 8, wait = 2500 } = {}) {
       if (!url) {
         log.info('geo: no DATABASE_URL — history and place names are off');
         return false;
       }
       pool = new pg.Pool({ connectionString: url, max: 4 });
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await pool.query('SELECT 1');
+          break;
+        } catch (e) {
+          if (attempt >= attempts) {
+            log.error('geo: cannot connect —', e && e.message ? e.message : e);
+            await pool.end().catch(() => {});
+            pool = null;
+            return false;
+          }
+          log.info(`geo: database not reachable yet (${e && (e.code || e.message)}), trying again`);
+          await new Promise((r) => setTimeout(r, wait));
+        }
+      }
       try {
-        await pool.query('SELECT 1');
         // The schema ships with the code and is applied on every boot. It was
         // briefly mounted into docker-entrypoint-initdb.d instead, which is
         // wrong twice over: that directory only runs on first initialisation,
@@ -96,12 +119,15 @@ export function makeGeo({ url, log = console } = {}) {
         // IF NOT EXISTS, so running it each time costs a few milliseconds.
         await pool.query(await readFile(SCHEMA, 'utf8'));
         log.info('geo: connected, schema applied');
+        state = 'connected';
         return true;
       } catch (e) {
         // A database that is configured but unreachable must not stop the
         // service: people's positions still matter without a place name.
         log.error('geo: cannot connect —', e && e.message ? e.message : e);
+        const gone = pool;
         pool = null;
+        await gone.end().catch(() => {});
         return false;
       }
     },
