@@ -377,6 +377,106 @@
     .leaflet-control-scale{margin-left:10px;margin-bottom:10px}
   }
 
+  /* Phase 2: the map is the product. Panels float over a full-width canvas. */
+  body{overflow:hidden}
+  main{position:relative;display:block;min-height:0;overflow:hidden}
+  .map-shell{position:absolute;inset:0}
+  .map-toolbar{
+    position:absolute;z-index:820;top:1rem;right:1rem;
+    display:flex;align-items:center;gap:.35rem
+  }
+  .map-toolbar .ghost{
+    background:rgba(7,14,18,.88);
+    backdrop-filter:blur(10px);
+    box-shadow:0 8px 20px rgba(0,0,0,.18)
+  }
+  #peoplebadge{
+    display:inline-grid;place-items:center;min-width:1.15rem;height:1.15rem;margin-left:.25rem;
+    padding:0 .25rem;border-radius:4px;background:rgba(255,255,255,.08);
+    color:#d9e1e3;font-size:.63rem;font-variant-numeric:tabular-nums
+  }
+  #peoplebadge:empty{display:none}
+
+  .people-panel,.detail-panel,.layers-panel{
+    position:absolute;z-index:810;
+    background:rgba(7,14,18,.92);
+    border:1px solid rgba(255,255,255,.11);
+    border-radius:7px;
+    box-shadow:0 18px 48px rgba(0,0,0,.38);
+    backdrop-filter:blur(14px)
+  }
+  .people-panel{
+    left:1rem;top:4.65rem;bottom:1rem;width:min(19rem,calc(100vw - 2rem));
+    padding:0;display:flex;flex-direction:column;overflow:hidden;
+    transform:translateX(calc(-100% - 1.4rem));opacity:0;pointer-events:none;
+    transition:transform .2s ease,opacity .16s ease
+  }
+  .people-panel.is-open{transform:none;opacity:1;pointer-events:auto}
+  .panel-heading{
+    display:flex;align-items:center;gap:.5rem;min-height:43px;padding:.55rem .65rem;
+    border-bottom:1px solid rgba(255,255,255,.08)
+  }
+  .panel-heading strong{font-size:.74rem;letter-spacing:.11em;text-transform:uppercase}
+  .panel-heading .panel-meta{margin-left:auto;color:var(--quiet);font-size:.68rem}
+  .panel-close{
+    width:28px;height:28px;padding:0;display:grid;place-items:center;
+    border:1px solid transparent;border-radius:5px;background:transparent;color:#89979b;cursor:pointer
+  }
+  .panel-close:hover{border-color:var(--hairline);background:rgba(255,255,255,.045);color:#fff}
+  #list{overflow:auto;padding:.45rem;display:flex;flex-direction:column;gap:.32rem}
+  #list .empty{padding:1.3rem .7rem;color:#7f8e93}
+
+  .detail-panel{right:1rem;top:4.65rem;width:min(21rem,calc(100vw - 2rem));padding:.7rem}
+  .detail-panel[hidden],.layers-panel[hidden]{display:none}
+  .detail-head{
+    display:flex;justify-content:space-between;align-items:center;margin-bottom:.55rem;
+    padding-bottom:.5rem;border-bottom:1px solid rgba(255,255,255,.08)
+  }
+  .detail-head span{font-size:.67rem;letter-spacing:.12em;text-transform:uppercase;color:#8e9ba0}
+  .detail-panel .card{display:grid;grid-template-columns:3rem 1fr;align-items:start;gap:.7rem;min-width:0}
+  .detail-panel .card>div:last-child{min-width:0}
+  .detail-panel .card .shared input{background:#081116}
+  .detail-panel .card .follow,.detail-panel .card .gpx,.detail-panel .card .sosline{margin-top:.65rem}
+
+  .layers-panel{right:1rem;top:4.65rem;width:15.5rem;padding:.72rem}
+  .layers-title{
+    margin-bottom:.55rem;padding-bottom:.5rem;border-bottom:1px solid rgba(255,255,255,.08);
+    font-size:.68rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase;color:#98a5a9
+  }
+  .layer-option{
+    display:flex;align-items:center;gap:.65rem;padding:.5rem .2rem;
+    color:#d2d9db;font-size:.76rem;cursor:pointer
+  }
+  .layer-option+ .layer-option{border-top:1px solid rgba(255,255,255,.045)}
+  .layer-option input{accent-color:var(--accent)}
+  .layer-option small{display:block;margin-left:auto;color:#74858a;font-size:.62rem}
+
+  /* Raster supplies labels; the PostGIS SVG pane adds independent feature
+     styling over it. Keeping them in separate panes lets Layers toggle either. */
+  .leaflet-cartography-pane{pointer-events:none}
+  .leaflet-cartography-pane .leaflet-tile{image-rendering:auto}
+  body.spotlight .leaflet-cartography-pane{opacity:.52;transition:opacity .18s ease}
+
+  .person .who i{width:.48rem;height:.48rem}
+  .person.live .who i{box-shadow:0 0 0 3px rgba(64,227,143,.08)}
+  .person.me.live:not(.sos) .who i{box-shadow:0 0 0 3px rgba(76,181,255,.11)}
+  .person.sos .who i{box-shadow:0 0 0 3px rgba(255,90,98,.12)}
+
+  @media (max-width:760px){
+    .map-toolbar{top:.7rem;right:.7rem}
+    .map-toolbar .ghost{min-height:32px}
+    .people-panel{
+      left:.55rem;right:.55rem;bottom:.55rem;top:auto;width:auto;max-height:43vh;
+      transform:translateY(calc(100% + 1rem))
+    }
+    .people-panel.is-open{transform:none}
+    .detail-panel{
+      left:.55rem;right:.55rem;top:auto;bottom:.55rem;width:auto;max-height:58vh;overflow:auto
+    }
+    .layers-panel{right:.55rem;top:4.25rem;width:min(15.5rem,calc(100vw - 1.1rem))}
+    .map-context{top:.7rem;left:.7rem}
+  }
+
 </style>
 </head>
 <body>
@@ -384,7 +484,6 @@
   <div class="brand"><h1>LIVEGEO</h1><span class="city">MASHHAD</span></div>
   <span class="count" id="count"></span>
   <span class="hint" id="hint" hidden></span>
-  <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
   <button class="ghost" id="newfence" type="button" hidden>New fence</button>
   <button class="ghost" id="circlebtn" type="button" hidden>Circle</button>
   <span class="spacer"></span>
@@ -399,8 +498,33 @@
       <span class="map-city">MASHHAD</span>
       <span class="map-coordinates">36.2605° N · 59.6168° E</span>
     </div>
+
+    <div class="map-toolbar" aria-label="Map controls">
+      <button class="ghost" id="peoplebtn" type="button" aria-expanded="true">People <span id="peoplebadge"></span></button>
+      <button class="ghost" id="layersbtn" type="button" aria-expanded="false">Layers</button>
+      <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
+    </div>
+
+    <aside class="people-panel is-open" id="peoplePanel" aria-label="People">
+      <div class="panel-heading">
+        <strong>People</strong>
+        <span class="panel-meta" id="panelcount"></span>
+        <button class="panel-close" id="peopleclose" type="button" aria-label="Close people panel">×</button>
+      </div>
+      <div id="list"><p class="empty">Nobody is sharing a location yet.</p></div>
+    </aside>
+
+    <section class="detail-panel" id="detailPanel" aria-label="Person details" hidden></section>
+
+    <section class="layers-panel" id="layersPanel" aria-label="Map layers" hidden>
+      <div class="layers-title">Map layers</div>
+      <label class="layer-option"><input type="checkbox" data-layer="cartography" checked><span>Styled cartography</span><small>PostGIS</small></label>
+      <label class="layer-option"><input type="checkbox" data-layer="raster" checked><span>Base labels</span><small>OSM</small></label>
+      <label class="layer-option"><input type="checkbox" data-layer="trails" checked><span>Movement trails</span></label>
+      <label class="layer-option"><input type="checkbox" data-layer="fences" checked><span>Geofences</span></label>
+      <label class="layer-option"><input type="checkbox" data-layer="zones" checked><span>Private places</span></label>
+    </section>
   </div>
-  <aside id="list"><p class="empty">Nobody is sharing a location yet.</p></aside>
 </main>
 
 <script src="/vendor/leaflet/leaflet.js"></script>
@@ -422,10 +546,26 @@
   // so the browser only ever talks to the host it loaded the page from. The
   // attribution stays either way — it is a condition of using the data, not a
   // consequence of where the bytes came from.
-  L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+  var rasterBase = L.tileLayer('/tiles/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   }).addTo(map);
+
+  // Transparent SVG geometry rendered from the same local osm2pgsql extract
+  // PostGIS already uses for place names. The raster stays underneath for
+  // labels; roads, parks, water, rail and buildings can now be styled
+  // independently instead of recolouring one PNG.
+  map.createPane('cartography');
+  map.getPane('cartography').style.zIndex = 250;
+  map.getPane('cartography').style.pointerEvents = 'none';
+  var cartography = L.tileLayer('/carto/{z}/{x}/{y}.svg', {
+    pane: 'cartography',
+    maxZoom: 19,
+    minZoom: 3,
+    opacity: 1
+  }).addTo(map);
+
+  var layerPrefs = { raster: true, cartography: true, trails: true, fences: true, zones: true };
 
   // A real geographic scale. Leaflet recomputes this from zoom and latitude,
   // so the number always corresponds to the map instead of being decorative.
@@ -440,6 +580,41 @@
   // dot gliding to where they are now, the beam for the way they are heading
   // — is shared with the page a live link opens. See /lib/people-map.js.
   var drawing = PeopleMap.on(map);
+
+  var peoplePanel = document.getElementById('peoplePanel');
+  var peopleButton = document.getElementById('peoplebtn');
+  var layersPanel = document.getElementById('layersPanel');
+  var layersButton = document.getElementById('layersbtn');
+  var detailPanel = document.getElementById('detailPanel');
+
+  function setPeopleOpen(open) {
+    peoplePanel.classList.toggle('is-open', open);
+    peopleButton.setAttribute('aria-expanded', String(open));
+  }
+  peopleButton.onclick = function () {
+    setPeopleOpen(!peoplePanel.classList.contains('is-open'));
+    layersPanel.hidden = true;
+    layersButton.setAttribute('aria-expanded', 'false');
+  };
+  document.getElementById('peopleclose').onclick = function () { setPeopleOpen(false); };
+  layersButton.onclick = function () {
+    layersPanel.hidden = !layersPanel.hidden;
+    layersButton.setAttribute('aria-expanded', String(!layersPanel.hidden));
+  };
+  if (window.matchMedia && window.matchMedia('(max-width:760px)').matches) setPeopleOpen(false);
+
+  document.addEventListener('mousedown', function (e) {
+    if (!layersPanel.hidden && !layersPanel.contains(e.target) && e.target !== layersButton) {
+      layersPanel.hidden = true;
+      layersButton.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  function closeDetail() {
+    detailPanel.hidden = true;
+    detailPanel.innerHTML = '';
+    delete detailPanel.dataset.id;
+  }
 
   // Leaflet measures the container when the map is built, and this one is
   // sized by a CSS grid that may not have settled yet. Measured too early it
@@ -938,13 +1113,19 @@
   }
 
   function openCard(p, marker) {
-    // autoPan off: opening a card must not shove the map. Lighting a path
-    // fits the whole of it, and a popup panning to make room for itself
-    // undoes that immediately.
-    marker.bindPopup(card(p), { minWidth: 180, autoPan: false }).openPopup();
-    identify(p.id).then(function () {
-      if (marker.isPopupOpen()) marker.setPopupContent(card(p));
-    });
+    function paint() {
+      if (detailPanel.dataset.id !== String(p.id)) return;
+      detailPanel.innerHTML =
+        '<div class="detail-head"><span>Location details</span>'
+        + '<button class="panel-close" id="detailclose" type="button" aria-label="Close details">×</button></div>'
+        + card(p);
+      document.getElementById('detailclose').onclick = closeDetail;
+    }
+    detailPanel.dataset.id = String(p.id);
+    detailPanel.hidden = false;
+    paint();
+    identify(p.id).then(function () { paint(); });
+    if (window.matchMedia && window.matchMedia('(max-width:760px)').matches) setPeopleOpen(false);
   }
 
   // Which path is being looked at. `lit` is pinned by a click or a tap and
@@ -987,13 +1168,14 @@
           weight: focus ? 4 : 2,
           // Solid when lit: a dashed line reads as provisional, and this is
           // the one thing being asserted.
-          dashArray: focus ? null : '4 4',
+          dashArray: focus ? null : (mine(e.data) ? null : '4 5'),
+          color: focus ? colourOf(e.data) : trailColourOf(e.data),
         });
       }
 
       // A wider, softer line underneath is what makes it look lit rather than
       // merely thicker.
-      if (focus && e.path) {
+      if (layerPrefs.trails && focus && e.path) {
         var pts = e.path.getLatLngs();
         if (!e.glow) {
           e.glow = L.polyline(pts, {
@@ -1046,6 +1228,7 @@
   // Only the lit one while something is pinned, so moving across the map
   // does not flick between people.
   function pathHit(pt) {
+    if (!layerPrefs.trails) return null;
     var best = null;
     var ids = lit ? [lit] : Array.from(people.keys());
     ids.forEach(function (id) {
@@ -1136,6 +1319,7 @@
     }
     lit = null; hovered = null; pathHover = null;
     hideTime();
+    closeDetail();
     shine();
   });
 
@@ -1206,9 +1390,15 @@
   // An SOS is red whoever it is. Otherwise you are blue, so you can find
   // yourself among everyone else, and the rest are green while they share.
   function colourOf(p) {
-    if (p.sos) return '#d93025';
-    if (mine(p)) return live(p) ? cssVar('--me', '#1a73e8') : cssVar('--me-stale', '#6f8fc2');
-    return live(p) ? cssVar('--live', '#0a7d33') : '#8a929b';
+    if (p.sos) return cssVar('--danger', '#ff5a62');
+    if (mine(p)) return live(p) ? cssVar('--me', '#4cb5ff') : cssVar('--me-stale', '#7499b4');
+    return live(p) ? cssVar('--live', '#40e38f') : '#78868c';
+  }
+
+  function trailColourOf(p) {
+    if (p.sos) return cssVar('--danger', '#ff5a62');
+    if (mine(p)) return cssVar('--me', '#4cb5ff');
+    return live(p) ? '#78958c' : '#5f7077';
   }
 
   function draw(p) {
@@ -1255,11 +1445,11 @@
       if (entry.chip) { map.removeLayer(entry.chip); entry.chip = null; }
       var fresh = !entry.marker;
       if (fresh) {
-        entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
+        entry.marker = L.circleMarker(here, { radius: 6.5, weight: 2, color: '#071318', fillColor: colour, fillOpacity: 1 }).addTo(map);
         entry.marker.bindTooltip(tipOf(p), { permanent: false });
         wire(entry.marker, entry);
       }
-      entry.marker.setStyle({ color: colour });
+      entry.marker.setStyle({ color: '#071318', fillColor: colour });
       relabel(entry);
       if (p.accuracy) {
         if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour, interactive: false }).addTo(map);
@@ -1281,8 +1471,13 @@
     var lines = runs.filter(function (r) { return r.length > 1; })
       .map(function (r) { return r.map(function (t) { return [t.latitude, t.longitude]; }); });
     if (lines.length) {
-      if (!entry.path) entry.path = L.polyline(lines, { weight: 2, opacity: .45, dashArray: '4 4', color: colour }).addTo(map);
-      else entry.path.setLatLngs(lines).setStyle({ color: colour });
+      var trailColour = trailColourOf(p);
+      if (!entry.path) {
+        entry.path = L.polyline(lines, { weight: mine(p) ? 2.6 : 1.8, opacity: mine(p) ? .72 : .34, dashArray: mine(p) ? null : '4 5', color: trailColour });
+        if (layerPrefs.trails) entry.path.addTo(map);
+      } else {
+        entry.path.setLatLngs(lines).setStyle({ color: trailColour });
+      }
       if (entry.glow) entry.glow.setLatLngs(lines);
     }
     fadeEnds(entry, runs, colour, p.hidden);
@@ -1320,7 +1515,10 @@
   // A soft spot where a path goes out of view into a private place, and
   // where it comes back out.
   function fadeEnds(entry, runs, colour, hidden) {
-    if (!entry.fades) entry.fades = L.layerGroup().addTo(map);
+    if (!entry.fades) {
+      entry.fades = L.layerGroup();
+      if (layerPrefs.trails) entry.fades.addTo(map);
+    }
     entry.fades.clearLayers();
     var at = function (q) {
       L.marker([q.latitude, q.longitude], {
@@ -1354,8 +1552,10 @@
     var rows = Array.from(people.values()).map(function (e) { return e.data; })
       .sort(function (a, b) { return b.at - a.at; });
 
-    document.getElementById('count').textContent =
-      rows.length ? rows.length + (rows.length === 1 ? ' person' : ' people') : '';
+    var countText = rows.length ? rows.length + (rows.length === 1 ? ' person' : ' people') : '';
+    document.getElementById('count').textContent = countText;
+    document.getElementById('panelcount').textContent = countText;
+    document.getElementById('peoplebadge').textContent = rows.length ? String(rows.length) : '';
     document.getElementById('recentre').hidden = !rows.length;
 
     if (lit && !people.has(lit)) { lit = null; shine(); }
@@ -1514,6 +1714,41 @@
   // with its edge marked, so you know where they stop seeing you.
   var myZones = [];
   var zoneLayer = L.layerGroup().addTo(map);
+
+  function syncTrails() {
+    people.forEach(function (e) {
+      ['path', 'glow', 'fades'].forEach(function (key) {
+        var layer = e[key];
+        if (!layer) return;
+        if (layerPrefs.trails) {
+          if (!map.hasLayer(layer)) layer.addTo(map);
+        } else if (map.hasLayer(layer)) {
+          map.removeLayer(layer);
+        }
+      });
+    });
+    if (!layerPrefs.trails) hideTime();
+  }
+
+  function applyLayerPreference(name, on) {
+    layerPrefs[name] = on;
+    var layer = name === 'raster' ? rasterBase
+      : name === 'cartography' ? cartography
+      : name === 'fences' ? fenceLayer
+      : name === 'zones' ? zoneLayer
+      : null;
+    if (layer) {
+      if (on && !map.hasLayer(layer)) layer.addTo(map);
+      if (!on && map.hasLayer(layer)) map.removeLayer(layer);
+    }
+    if (name === 'trails') syncTrails();
+  }
+
+  layersPanel.addEventListener('change', function (e) {
+    var box = e.target.closest && e.target.closest('input[data-layer]');
+    if (!box) return;
+    applyLayerPreference(box.getAttribute('data-layer'), box.checked);
+  });
 
   function loadZones() {
     return fetch('/api/zones', { cache: 'no-store' })
