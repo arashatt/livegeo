@@ -50,6 +50,18 @@ export function makeGeo({ url, log = console } = {}) {
   // tried, and given up on. /healthz says which.
   let state = url ? 'unreachable' : 'off';
 
+  // OSM geometry changes much more slowly than live positions. Keep a modest
+  // in-process cache of rendered SVG tiles so panning back does not repeat the
+  // same PostGIS work. It is deliberately bounded rather than a second tile
+  // database.
+  const cartoCache = new Map();
+  let cartographyUnavailable = false;
+  const rememberCarto = (key, value) => {
+    if (cartoCache.size >= 512) cartoCache.delete(cartoCache.keys().next().value);
+    cartoCache.set(key, value);
+    return value;
+  };
+
   // Queries run against whatever osm2pgsql produced. If the extract was never
   // imported the tables are missing, which is a perfectly ordinary state —
   // recording still works, describing just comes back empty.
@@ -159,6 +171,107 @@ export function makeGeo({ url, log = console } = {}) {
         // call rather than failing the request the dashboard is waiting on.
         log.error('geo: cannot describe a point —', e && e.message ? e.message : e);
         return '';
+      }
+    },
+
+    // A transparent SVG tile made from the local osm2pgsql extract. The raster
+    // OSM tile remains underneath for labels while these geometries give the
+    // product independent control of roads, buildings, water, parks and rail.
+    //
+    // ST_AsMVTGeom is useful even though the result is not MVT: it clips and
+    // scales Web Mercator geometry into a 256×256 tile coordinate system, and
+    // ST_AsSVG then turns that geometry into compact path data the browser can
+    // draw natively.
+    async cartographyTile(z, x, y) {
+      z = Number(z); x = Number(x); y = Number(y);
+      if (!pool || cartographyUnavailable || !Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)) return null;
+      const key = z + '/' + x + '/' + y;
+      if (cartoCache.has(key)) return cartoCache.get(key);
+
+      try {
+        const { rows } = await pool.query(
+          `WITH bounds AS (
+             SELECT ST_TileEnvelope($1, $2, $3) AS geom
+           ),
+           features AS (
+             SELECT 10 AS ord, 'water' AS layer, '' AS subtype,
+                    ST_AsSVG(ST_AsMVTGeom(way, bounds.geom, 256, 8, true), 0, 1) AS d
+               FROM planet_osm_polygon, bounds
+              WHERE way && bounds.geom
+                AND (natural = 'water' OR landuse IN ('reservoir','basin') OR waterway = 'riverbank')
+             UNION ALL
+             SELECT 20, 'park', '',
+                    ST_AsSVG(ST_AsMVTGeom(way, bounds.geom, 256, 8, true), 0, 1)
+               FROM planet_osm_polygon, bounds
+              WHERE way && bounds.geom
+                AND (leisure IN ('park','garden','nature_reserve')
+                     OR landuse IN ('forest','grass','meadow','recreation_ground')
+                     OR natural IN ('wood','scrub','heath'))
+             UNION ALL
+             SELECT 30, 'building', '',
+                    ST_AsSVG(ST_AsMVTGeom(way, bounds.geom, 256, 4, true), 0, 1)
+               FROM planet_osm_polygon, bounds
+              WHERE $1 >= 14 AND way && bounds.geom AND building IS NOT NULL
+             UNION ALL
+             SELECT 40, 'rail', coalesce(railway, ''),
+                    ST_AsSVG(ST_AsMVTGeom(way, bounds.geom, 256, 10, true), 0, 1)
+               FROM planet_osm_line, bounds
+              WHERE $1 >= 10 AND way && bounds.geom
+                AND railway IN ('rail','light_rail','tram','subway')
+             UNION ALL
+             SELECT 50, 'road', coalesce(highway, ''),
+                    ST_AsSVG(ST_AsMVTGeom(way, bounds.geom, 256, 12, true), 0, 1)
+               FROM planet_osm_line, bounds
+              WHERE way && bounds.geom AND highway IS NOT NULL
+                AND (
+                  highway IN ('motorway','trunk','primary')
+                  OR ($1 >= 10 AND highway IN ('secondary','tertiary'))
+                  OR ($1 >= 12 AND highway IN ('residential','unclassified','living_street','service'))
+                  OR ($1 >= 14 AND highway IN ('pedestrian','track','path','footway','cycleway'))
+                )
+           )
+           SELECT layer, subtype, d
+             FROM features
+            WHERE d IS NOT NULL
+            ORDER BY ord
+            LIMIT 5500`,
+          [z, x, y],
+        );
+
+        const roadStyle = (kind) => {
+          if (kind === 'motorway' || kind === 'trunk') return ['#df4f92', 3.2, .95];
+          if (kind === 'primary') return ['#d89bad', 2.7, .92];
+          if (kind === 'secondary') return ['#8f7782', 2.0, .88];
+          if (kind === 'tertiary') return ['#657681', 1.6, .82];
+          return ['#506570', 1.1, .70];
+        };
+
+        const parts = [];
+        for (const row of rows) {
+          if (!row.d) continue;
+          if (row.layer === 'water') {
+            parts.push(`<path d="${row.d}" fill="#2598ba" fill-opacity=".58" stroke="#3cb5d2" stroke-opacity=".28" stroke-width=".45"/>`);
+          } else if (row.layer === 'park') {
+            parts.push(`<path d="${row.d}" fill="#477d68" fill-opacity=".52" stroke="#67947f" stroke-opacity=".18" stroke-width=".4"/>`);
+          } else if (row.layer === 'building') {
+            parts.push(`<path d="${row.d}" fill="#263b44" fill-opacity=".76" stroke="#50616a" stroke-opacity=".28" stroke-width=".35"/>`);
+          } else if (row.layer === 'rail') {
+            parts.push(`<path d="${row.d}" fill="none" stroke="#8f9aa0" stroke-opacity=".70" stroke-width="1.15" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>`);
+          } else if (row.layer === 'road') {
+            const [stroke, width, opacity] = roadStyle(row.subtype);
+            parts.push(`<path d="${row.d}" fill="none" stroke="${stroke}" stroke-opacity="${opacity}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
+          }
+        }
+
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">${parts.join('')}</svg>`;
+        return rememberCarto(key, svg);
+      } catch (e) {
+        // A database without an osm2pgsql import is a supported deployment.
+        // Stop retrying on every visible tile in that case; the raster map
+        // remains underneath and the app continues to work normally.
+        if (e && (e.code === '42P01' || /planet_osm_/.test(e.message || ''))) cartographyUnavailable = true;
+        log.error('geo: cannot render cartography —', e && e.message ? e.message : e);
+        return null;
       }
     },
 
