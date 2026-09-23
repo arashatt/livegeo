@@ -41,7 +41,8 @@ export const everyoneWhoSees = (circles, admins, id) => [...new Set([
 export function makeSos({
   live, circles, positions,
   admins = [],
-  publicUrl = '',
+  // Where the map is, for the link in the message: address.js's get().
+  address = async () => '',
   call = '110 (police) or 115 (ambulance)',
   placeOf = null,
   // Telegram, once connected: a message, and a pin. Either may be absent —
@@ -94,7 +95,8 @@ export function makeSos({
       const link = had || await live.create({ person: key, minutes, reason: 'sos' });
       running.add(key);
       if (!had) resend(key);
-      const url = publicUrl ? `${publicUrl}/live/${link.token}` : '';
+      const base = await address().catch(() => '');
+      const url = base ? `${base}/live/${link.token}` : '';
       const ids = whoSees(key);
       if (had && clock() - (lastSent.get(key) ?? -Infinity) < AGAIN_AFTER) {
         return { link, url, told: 0, circle: ids.length, again: true, recent: true, call };

@@ -79,7 +79,9 @@ PUBLIC_URL=https://livegeo.<you>.workers.dev
 ```
 
 `PUBLIC_URL` is where the dashboard answers, so the bot can send a link that
-works. Without it `/login` has nothing to point at and says so at startup.
+works. Behind a quick tunnel, leave it unset: the tunnel's current address is
+used instead (see «First, the way in that opens no way in»). With neither,
+`/login` has nothing to point at, and says so — at startup, and to whoever asks.
 
 **③ Share.** Whoever should appear on the map opens the bot, presses start,
 then **Attach (📎) → Location → Share Live Location**. Telegram stops when the
@@ -416,6 +418,17 @@ is the right tool for reaching the dashboard today and the wrong one to build a
 habit on. Any domain on Cloudflare's nameservers turns it into a named tunnel
 with a hostname you keep — set `TUNNEL_TOKEN` from the Zero Trust dashboard and
 `TUNNEL_ARGS=run` in `.env`, beside `compose.yml`.
+
+With a quick tunnel, **leave `PUBLIC_URL` unset**. The service asks cloudflared
+for the tunnel's current address — `http://tunnel:20241/quicktunnel`, on the
+compose network only (`TUNNEL_METRICS_URL` to point it elsewhere) — and puts
+that in whatever the bot sends: `/login` always answers with a link that works
+today, so it is also the way to find the dashboard after the address changed.
+Links already handed out go with the old address, though: a live link or an
+SOS sent before cloudflared restarted stops working. A named tunnel or the
+Worker is what gives links that outlast a restart. `/healthz` says which the
+links are using — `"address": "PUBLIC_URL"`, `"quick tunnel"` or `"none"` —
+and never the address itself.
 
 If UDP is filtered where this runs, `TUNNEL_PROTOCOL=http2` moves the same
 connection to TCP on the same port.

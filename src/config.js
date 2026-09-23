@@ -114,6 +114,9 @@ export function load() {
       .split(',').map((s) => s.trim()).filter(Boolean),
     // Where the dashboard is reachable, so the bot can send a working link.
     publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
+    // Without PUBLIC_URL, a quick tunnel's current address is asked for here
+    // (see address.js); the tunnel service in compose.yml answers at this name.
+    tunnelMetricsUrl: process.env.TUNNEL_METRICS_URL || 'http://tunnel:20241',
     // "Sign in with Telegram" through Telegram's OpenID provider. The secret
     // switches it on; the client id is the bot's own id (the digits before the
     // colon in BOT_TOKEN) unless given; the redirect must be on the domain set

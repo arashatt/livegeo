@@ -19,6 +19,7 @@ import { connect as connectBot, commandIn, liveMinutes, liveFor, sosReply, check
 import { makeLive } from '../src/live.js';
 import { makeSos, sosMessage } from '../src/sos.js';
 import { makeChecks, decide, checkAsk, checkTell } from '../src/checks.js';
+import { makeAddress } from '../src/address.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
@@ -838,6 +839,80 @@ head('the bot loop, without Telegram');
   t('the offset advances past what was handled',
     calls.filter((c) => c.method === 'getUpdates').at(-1).body.offset === 102,
     calls.filter((c) => c.method === 'getUpdates').at(-1).body.offset);
+}
+
+head('what /login says, and why');
+{
+  const said = [];
+  const who = (id, text, update) => ({ update_id: update, message: { message_id: update, date: 1, chat: { id }, from: { id, is_bot: false, first_name: 'X' }, text } });
+  let served = [[who(1, '/login', 200), who(2, '/login', 201), who(3, '/login', 202), who(4, '/login', 203)]];
+  const stub = async (url, init) => {
+    const method = String(url).split('/').pop();
+    const body = init?.body ? JSON.parse(init.body) : {};
+    if (method === 'getMe') return new Response(JSON.stringify({ ok: true, result: { id: 1, username: 'livegeobot' } }));
+    if (method === 'sendMessage') { said.push({ to: body.chat_id, text: body.text }); return new Response(JSON.stringify({ ok: true, result: {} })); }
+    if (method === 'getUpdates') return new Response(JSON.stringify({ ok: true, result: served.shift() || [] }));
+    return new Response(JSON.stringify({ ok: true, result: {} }));
+  };
+  const answers = {
+    1: { link: 'https://a-b.trycloudflare.com/auth/one' },
+    2: { error: 'The map has no address to send you to yet: PUBLIC_URL is not set, and the tunnel is not answering.' },
+    3: 'https://old.example/auth/three',
+    4: { error: 'Your account is not on the list of who may see the map.' },
+  };
+  const bot = await connectBot({ botToken: 'T', chats: [] }, {
+    fetch: stub, poll: 0, log: { info() {}, error() {} },
+    onPosition() {}, onLogin: async (id) => answers[id],
+  });
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && said.length < 4) await new Promise((r) => setTimeout(r, 5));
+  await bot.stop();
+  const to = (id) => said.find((m) => m.to === id)?.text || '';
+  t('somebody allowed gets a link', /^https:\/\/a-b\.trycloudflare\.com\/auth\/one\n\nOpens once/.test(to(1)), to(1));
+  t('somebody allowed with no address is told that, not that they are not allowed', /no address to send you to/.test(to(2)) && !/not on the list/.test(to(2)), to(2));
+  t('a plain link still works', to(3).startsWith('https://old.example/auth/three'));
+  t('somebody not allowed is told so', to(4) === 'Your account is not on the list of who may see the map.');
+}
+
+head('where the links point');
+{
+  let now = 1_000_000;
+  let asked = 0;
+  let hostname = 'bright-river-3fx.trycloudflare.com';
+  let up = true;
+  const tunnel = async (url) => {
+    asked += 1;
+    if (!up) throw new Error('connect ECONNREFUSED');
+    t('the tunnel is asked at /quicktunnel', String(url) === 'http://tunnel:20241/quicktunnel', url);
+    return new Response(JSON.stringify({ hostname }), { status: 200 });
+  };
+
+  const fixed = makeAddress({ publicUrl: 'https://livegeo.example.workers.dev/', fetch: tunnel, clock: () => now });
+  t('PUBLIC_URL wins, and the tunnel is not asked', (await fixed.get()) === 'https://livegeo.example.workers.dev' && asked === 0);
+  t('and says so', fixed.source() === 'PUBLIC_URL');
+
+  const quick = makeAddress({ fetch: tunnel, clock: () => now });
+  t('without it, the quick tunnel\'s address', (await quick.get()) === 'https://bright-river-3fx.trycloudflare.com' && quick.source() === 'quick tunnel');
+  hostname = 'calm-hill-9q.trycloudflare.com';
+  now += 30_000;
+  t('remembered for a minute', (await quick.get()) === 'https://bright-river-3fx.trycloudflare.com' && asked === 1);
+  now += 31_000;
+  t('then asked again, so a restarted tunnel\'s new address is picked up', (await quick.get()) === 'https://calm-hill-9q.trycloudflare.com' && asked === 2);
+
+  hostname = 'evil.example.com';
+  now += 61_000;
+  t('an address that is not a quick tunnel\'s is not believed', (await quick.get()) === '' && quick.source() === 'none');
+  up = false;
+  now += 61_000;
+  t('a tunnel that is down is no address, not an error', (await quick.get()) === '');
+  const before = asked;
+  now += 5_000;
+  await quick.get();
+  t('and is not asked again straight away', asked === before);
+  up = true;
+  hostname = 'calm-hill-9q.trycloudflare.com';
+  now += 6_000;
+  t('but is after a few seconds', (await quick.get()) === 'https://calm-hill-9q.trycloudflare.com');
 }
 
 head('who may look');
@@ -2038,7 +2113,7 @@ head('SOS: found, for an hour, by everybody who can see you');
   let wired = null;
   let skew = 0;   // how far this test has moved the SOS's clock on
   const sos = makeSos({
-    live, circles, positions: store, admins: ['1'], publicUrl: 'https://map.example', call: '110 (police)',
+    live, circles, positions: store, admins: ['1'], address: async () => 'https://map.example', call: '110 (police)',
     clock: () => Date.now() + skew,
     placeOf: async () => 'Vakilabad Blvd, Mashhad',
     notify: async (to, text) => { sent.push({ to: String(to), text }); return true; },

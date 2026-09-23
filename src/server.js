@@ -114,6 +114,9 @@ export function serve(positions, config, {
   sos = null,
   // Check on me (checks.js). Absent, likewise.
   checks = null,
+  // Where links sent from here point (address.js). Only its source is ever
+  // said out loud, in /healthz.
+  address = null,
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -499,8 +502,12 @@ export function serve(positions, config, {
       // the rollout should be able to tell that from a healthy one.
       const database = typeof geo?.state === 'function' ? geo.state()
         : (geo && geo.enabled && geo.enabled() ? 'connected' : 'off');
+      // And where the bot's links point: PUBLIC_URL, the quick tunnel, or
+      // nowhere — the source, never the address, since this answers anybody.
+      if (address) await address.get();
+      const linksTo = address ? address.source() : (config.publicUrl ? 'PUBLIC_URL' : 'none');
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, watching: watchers.size, people: positions.list().length, database }));
+      res.end(JSON.stringify({ ok: true, watching: watchers.size, people: positions.list().length, database, address: linksTo }));
       return;
     }
 

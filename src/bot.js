@@ -412,12 +412,14 @@ export async function connect(config, {
         return;
       }
       if (command.name === '/login') {
-        const link = onLogin ? await onLogin(String(command.from?.id ?? '')) : null;
-        // Somebody not on the list is told no, rather than being given a link
-        // that fails when they open it.
+        const got = onLogin ? await onLogin(String(command.from?.id ?? '')) : null;
+        // A link, or the reason there is none. Somebody not on the list is
+        // told no, rather than being given a link that fails when they open
+        // it; somebody on it who cannot be sent anywhere is told why.
+        const link = typeof got === 'string' ? got : got?.link;
         await say(command.chat, link
           ? `${link}\n\nOpens once, and only for the next few minutes.`
-          : 'Your account is not on the list of who may see the map.');
+          : (got?.error || 'Your account is not on the list of who may see the map.'));
         return;
       }
       if (command.name === '/stop') {

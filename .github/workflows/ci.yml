@@ -48,6 +48,7 @@ jobs:
             await import('./src/live.js');
             await import('./src/sos.js');
             await import('./src/checks.js');
+            await import('./src/address.js');
             console.log('all modules load');
           "
 

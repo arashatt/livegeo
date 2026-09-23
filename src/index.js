@@ -21,6 +21,7 @@ import { makeZones } from './zones.js';
 import { makeLive, LIVE_EACH } from './live.js';
 import { makeSos } from './sos.js';
 import { makeChecks } from './checks.js';
+import { makeAddress } from './address.js';
 
 const config = load();
 const positions = new Positions({
@@ -80,13 +81,17 @@ async function makeInvite(owner) {
 let notify = null;
 let locate = null;
 
+// Where the map is, for links the bot sends: PUBLIC_URL, or else whatever
+// address the quick tunnel has this time (address.js).
+const address = makeAddress({ publicUrl: config.publicUrl, metrics: config.tunnelMetricsUrl });
+
 // Somebody asking for help (sos.js). Built before the server, which offers
 // it on the map, and handed the server's own resend and stopLink, which only
 // exist once the server does — so they are reached through closures.
 const sos = makeSos({
   live, circles, positions,
   admins: config.viewers,
-  publicUrl: config.publicUrl,
+  address: () => address.get(),
   call: config.sosCall,
   placeOf: (lat, lon) => geo.placeOf(lat, lon),
   notify: (to, text) => (notify ? notify(to, text) : false),
@@ -115,7 +120,7 @@ if (checking) console.log(`check: still checking on ${checking} ${checking === 1
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
 const { publish, publishFence, forget, setBot, grant, revoke, stopLink, resend } = serve(positions, config, {
-  directory, geo, links, circles, makeInvite, devices, codes, zones, live, sos, checks,
+  directory, geo, links, circles, makeInvite, devices, codes, zones, live, sos, checks, address,
   onFenceDeleted: (id) => fences.dropFence(id),
   onIngest: (fixes) => ingest(fixes),
 });
@@ -223,10 +228,17 @@ async function checkFences(person) {
 const onForget = async (id) => { fences.forget(id); return forget(id); };
 
 // A link is only ever made for somebody who can sign in, so anyone else is
-// told no by the bot rather than handed a link that fails.
-const onLogin = (id) => {
-  if (!config.publicUrl || !circles.viewerFor(id)) return null;
-  return `${config.publicUrl}/auth/${links.issue(id)}`;
+// told no by the bot rather than handed a link that fails. That is asked
+// first: somebody who may not look learns nothing about how the map is run.
+// Somebody who may, and cannot be sent anywhere, is told why — it used to say
+// they were not on the list, which sent people looking in the wrong place.
+const onLogin = async (id) => {
+  if (!circles.viewerFor(id)) return { error: 'Your account is not on the list of who may see the map.' };
+  const base = await address.get();
+  if (!base) {
+    return { error: 'The map has no address to send you to yet: PUBLIC_URL is not set, and the tunnel is not answering. Whoever runs it can set PUBLIC_URL, or start the tunnel.' };
+  }
+  return { link: `${base}/auth/${links.issue(id)}` };
 };
 
 // What the bot needs to run a circle. Absent without a database, and the bot
@@ -255,12 +267,13 @@ const circle = circles.enabled ? {
   // ends every one of them through the server so their pages are told.
   live: {
     make: async (id, minutes) => {
-      if (!config.publicUrl) return { error: 'Live links need PUBLIC_URL, which this service is running without.' };
+      const base = await address.get();
+      if (!base) return { error: 'Live links need the map\'s address: PUBLIC_URL is not set, and the tunnel is not answering.' };
       if (live.of(id).filter((l) => l.reason === 'share').length >= LIVE_EACH) {
         return { error: `${LIVE_EACH} live links at once is the limit. /live stop ends them.` };
       }
       const link = await live.create({ person: id, minutes });
-      return { url: `${config.publicUrl}/live/${link.token}`, expiresAt: link.expiresAt };
+      return { url: `${base}/live/${link.token}`, expiresAt: link.expiresAt };
     },
     stop: async (id) => {
       const mine = live.of(id).filter((l) => l.reason === 'share');
@@ -308,8 +321,13 @@ const seeded = await geo.lastFenceStates()
   .catch((e) => { console.error('fence:', e && e.message ? e.message : e); return 0; });
 if (seeded) console.log(`restored ${seeded} fence states`);
 
+// Which address the bot's links will carry. Checked once here for the log;
+// a tunnel that comes up later is picked up by the first link that needs it.
 if (config.ingest === 'bot' && !config.publicUrl) {
-  console.log('PUBLIC_URL is not set — /login cannot send a working link');
+  await address.get();
+  console.log(address.source() === 'quick tunnel'
+    ? 'PUBLIC_URL is not set — links the bot sends use the quick tunnel\'s address'
+    : 'PUBLIC_URL is not set and no quick tunnel answers — /login cannot send a working link yet');
 }
 
 const bye = async () => { await telegram.stop(); await geo.close(); process.exit(0); };
