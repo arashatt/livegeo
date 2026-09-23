@@ -34,6 +34,8 @@ on:
           - status
           - setup-postgis
           - restart
+          - restart-docker         # the Docker daemon itself; see README «When a deploy says No chain/target/match»
+          - network-check          # reports only
           - clean-history          # reports only
           - clean-history-apply    # deletes
 
@@ -104,6 +106,30 @@ jobs:
 
             restart)
               $SSH "$TARGET" "set -eu; cd '$WORKDIR'; docker compose up -d --force-recreate app"
+              ;;
+
+            restart-docker)
+              # For "iptables: No chain/target/match by that name". Docker
+              # makes the chains it publishes ports through when it starts, so
+              # whatever flushed them is undone by starting it again. Every
+              # container restarts with it, PostGIS included, for a few seconds.
+              $SSH "$TARGET" "set -eu; cd '$WORKDIR'; \
+                if [ \"\$(id -u)\" = 0 ]; then systemctl restart docker; else sudo -n systemctl restart docker; fi; \
+                if iptables -w -t nat -S DOCKER >/dev/null 2>&1 || sudo -n iptables -w -t nat -S DOCKER >/dev/null 2>&1; \
+                  then echo 'nat DOCKER chain: present'; \
+                  else echo 'nat DOCKER chain: still missing — run network-check'; fi; \
+                docker compose up -d; \
+                for _ in \$(seq 1 20); do \
+                  curl -fsS http://127.0.0.1:${PORT:-8080}/healthz && exit 0; \
+                  sleep 3; \
+                done; \
+                echo 'the service did not come back healthy'; exit 1"
+              ;;
+
+            network-check)
+              # Why Docker cannot publish a port, as facts safe for a public
+              # log. Piped like setup-postgis.sh, and it only reads.
+              $SSH "$TARGET" "sh -s" < bin/network-check.sh
               ;;
 
             status)

@@ -1010,6 +1010,45 @@ serving.
 Nothing secret is in the image: it carries only code, and the server reads
 `/etc/telegram-live-location.env` at run time.
 
+The **Server** workflow (Actions → Server → Run workflow) does the one-off jobs
+on the host over the same ssh path, as a fixed list of named actions rather
+than a command box: `status`, `setup-postgis`, `restart`, `restart-docker`,
+`network-check`, and `clean-history` (report) / `clean-history-apply`. Its
+logs are public like every Actions log, so what each prints is counts, states
+and names — never positions, ids, secrets or firewall rules.
+
+### When a deploy says `No chain/target/match by that name`
+
+The whole line reads `failed to set up container networking … iptables: No
+chain/target/match by that name`. Docker publishes a container's port through
+a `DOCKER` chain in the `nat` table, which it creates when it starts, and
+something on the server has deleted it. Usually that is a firewall reload that
+wipes everything — `nftables.service` (a stock `/etc/nftables.conf` begins
+with `flush ruleset`), `firewalld --reload`, `netfilter-persistent reload`, an
+`iptables-restore` script — or an upgrade that switched `iptables` between its
+nf_tables and legacy backends. Containers that are already running carry on,
+so nothing looks wrong until the next deploy has to create one.
+
+A deploy **repairs this itself**: on exactly this error it restarts Docker
+once, which recreates the chain (and restarts PostGIS with it, for a few
+seconds), tries again, and leaves a warning on the run saying so. By hand, the
+Server workflow's `restart-docker` does the same, or on the server:
+
+```sh
+systemctl restart docker && cd /opt/telegram-live-location && docker compose up -d
+```
+
+To find out why it happened — or why a restart did not help — run
+`network-check`. It reports the iptables backend, whether the chain exists
+under each backend, whether the running kernel still has its modules or wants
+a reboot, which firewall services are active and whether `nftables.conf`
+flushes the ruleset, and which firewall, Docker and kernel packages were
+upgraded in the last three days. If the kernel was upgraded under the running
+system, reboot. If the `iptables` alternative was switched, switch it back
+(`update-alternatives --config iptables`) and restart Docker. If it is
+`nftables.service` and you do not use it on purpose,
+`systemctl disable --now nftables` stops it happening again.
+
 ### Without CI
 
 The image is ordinary, so this is all the rollout does:

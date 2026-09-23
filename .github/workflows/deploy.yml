@@ -103,6 +103,14 @@ jobs:
           # hand, so every change to it here — a new service, a new volume —
           # silently never took effect. It is deployed from the commit being
           # rolled out, so a rollback rolls the file back with it.
+          #
+          # One failure is repaired rather than reported: "iptables: No
+          # chain/target/match by that name". Docker publishes ports through
+          # a chain it makes when it starts, and a firewall reload on the host
+          # can delete it; running containers carry on, so nothing looks wrong
+          # until a deploy creates one, and then the service is down until
+          # somebody logs in. Starting Docker again recreates the chain. Once,
+          # with a warning on the run, and only for exactly that error.
           ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
             -p "${SSH_PORT:-22}" "${USER:-root}@${HOST}" \
@@ -112,7 +120,15 @@ jobs:
              touch .env; sed -i '/^IMAGE=/d' .env; echo 'IMAGE=${IMAGE}' >> .env; \
              export IMAGE='${IMAGE}' PORT='${PORT:-8080}'; \
              docker compose pull; \
-             docker compose up -d --remove-orphans; \
+             if docker compose up -d --remove-orphans > up.log 2>&1; then cat up.log; \
+             else \
+               cat up.log; \
+               grep -q 'No chain/target/match by that name' up.log || { rm -f up.log; exit 1; }; \
+               echo '::warning::The firewall chain Docker publishes ports through had been deleted on the server, most likely by a firewall reload. Restarted Docker once to recreate it. To find the cause, run the Server workflow with network-check; see README, When a deploy says No chain/target/match.'; \
+               if [ \"\$(id -u)\" = 0 ]; then systemctl restart docker; else sudo -n systemctl restart docker; fi; \
+               docker compose up -d --remove-orphans; \
+             fi; \
+             rm -f up.log; \
              docker image prune -f"
 
       - name: Check it came back
