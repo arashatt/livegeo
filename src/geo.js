@@ -493,6 +493,40 @@ export function makeGeo({ url, log = console } = {}) {
       return res.rowCount;
     },
 
+    // ---------------------------------------------------------- live links
+
+    async listLiveLinks() {
+      if (!pool) return [];
+      const { rows } = await pool.query(
+        `SELECT token, person, reason,
+                extract(epoch FROM created_at)::bigint AS created,
+                extract(epoch FROM expires_at)::bigint AS expires
+           FROM live_links
+          WHERE expires_at > now()`,
+      );
+      return rows.map((r) => ({
+        token: r.token, person: String(r.person), reason: r.reason,
+        createdAt: Number(r.created), expiresAt: Number(r.expires),
+      }));
+    },
+
+    // Links that ran out are cleared as new ones are made; nothing reads them.
+    async createLiveLink({ token, person, reason, createdAt, expiresAt }) {
+      await pool.query('DELETE FROM live_links WHERE expires_at < now()');
+      await pool.query(
+        `INSERT INTO live_links (token, person, reason, created_at, expires_at)
+         VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5))`,
+        [String(token), String(person), String(reason), Number(createdAt), Number(expiresAt)],
+      );
+      return true;
+    },
+
+    async revokeLiveLink(token) {
+      if (!pool) return 0;
+      const res = await pool.query('DELETE FROM live_links WHERE token = $1', [String(token)]);
+      return res.rowCount;
+    },
+
     async historyOf(person, { limit = 500, since = null, until = null } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(
@@ -522,11 +556,13 @@ export function makeGeo({ url, log = console } = {}) {
         `WITH gone AS (DELETE FROM positions WHERE person = $1 RETURNING 1),
               ev   AS (DELETE FROM fence_events WHERE person = $1 RETURNING 1),
               sh   AS (DELETE FROM shares WHERE person = $1 RETURNING 1),
+              ll   AS (DELETE FROM live_links WHERE person = $1 RETURNING 1),
               -- Grants, invites, devices, their fences and private places
               -- go with the user row, on the foreign keys' cascade.
               us   AS (DELETE FROM users WHERE id = $1 RETURNING 1)
          SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM ev)
-              + (SELECT count(*) FROM sh) + (SELECT count(*) FROM us) AS n`,
+              + (SELECT count(*) FROM sh) + (SELECT count(*) FROM ll)
+              + (SELECT count(*) FROM us) AS n`,
         [String(person)],
       );
       return Number(rows[0]?.n ?? 0);

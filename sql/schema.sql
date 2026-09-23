@@ -126,3 +126,16 @@ CREATE INDEX IF NOT EXISTS zones_owner_idx ON zones (owner);
 -- LineString has no way to say "and then a jump", so the jumps sit beside it,
 -- the same way the times do.
 ALTER TABLE shares ADD COLUMN IF NOT EXISTS breaks int[];
+
+-- A link that lets whoever holds it follow one person live, for a while (see
+-- live.js). Kept here so a restart does not end every link early — and an SOS
+-- is one of these with reason 'sos', which is how an emergency outlasts a
+-- deploy. Nothing about where anybody went is stored with it.
+CREATE TABLE IF NOT EXISTS live_links (
+  token      text PRIMARY KEY,
+  person     text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason     text NOT NULL DEFAULT 'share',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS live_links_person_idx ON live_links (person);

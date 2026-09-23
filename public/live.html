@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Following somebody</title>
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+<link rel="stylesheet" href="/lib/people-map.css" />
+<style>
+  :root{ --ink:#14181d; --paper:#fff; --quiet:#6b7480; --hairline:#e3e6ea; --live:#0a7d33 }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e8eaed; --paper:#14181d; --quiet:#9aa3ad; --hairline:#2a2f36 }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    color:var(--ink);background:var(--paper);
+    height:100svh;display:grid;grid-template-rows:auto 1fr;
+  }
+  header{display:flex;align-items:center;gap:.4rem .75rem;flex-wrap:wrap;
+         padding:.7rem 1rem;border-bottom:1px solid var(--hairline)}
+  h1{font-size:1rem;font-weight:600;letter-spacing:-.01em}
+  .meta{color:var(--quiet);font-size:.85rem;font-variant-numeric:tabular-nums}
+  .spacer{flex:1}
+  .ghost{font:inherit;font-size:.8rem;color:var(--quiet);background:none;cursor:pointer;
+         border:1px solid var(--hairline);border-radius:999px;padding:.15rem .6rem}
+  .ghost:hover{border-color:var(--quiet);color:var(--ink)}
+  #map{height:100%;width:100%;background:var(--paper)}
+  @media (prefers-color-scheme: dark){
+    .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92)}
+  }
+  /* Where the path goes out of view: it starts when the link was made, and
+     nothing inside a private place is in it. */
+  .fade-end{width:26px;height:26px;border-radius:50%;filter:blur(2px);opacity:.7}
+  /* Over: the map stays as a place, and the person leaves it. */
+  .leaflet-tile-pane{transition:filter .4s ease}
+  body.over .leaflet-tile-pane{filter:grayscale(1) opacity(.45)}
+  @media (prefers-color-scheme: dark){
+    body.over .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.92) grayscale(1) opacity(.45)}
+  }
+  #notice{position:fixed;left:50%;bottom:1.5rem;transform:translateX(-50%);z-index:1000;
+          width:min(24rem,calc(100vw - 2rem));background:var(--paper);color:var(--ink);
+          border:1px solid var(--hairline);border-radius:.6rem;box-shadow:0 8px 30px rgba(0,0,0,.15);
+          padding:.8rem 1rem;text-align:center}
+  #notice .quiet{color:var(--quiet);font-size:.85rem}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="who">Following somebody</h1>
+  <span class="meta" id="when"></span>
+  <span class="meta" id="state"></span>
+  <span class="spacer"></span>
+  <button class="ghost" id="follow" type="button" hidden>Follow</button>
+</header>
+<div id="map"></div>
+<div id="notice" hidden></div>
+
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/lib/path-time.js"></script>
+<script src="/lib/people-map.js"></script>
+<script>
+(function () {
+  // The token is the last segment of this page's path. It is the only key
+  // this page has: to one stream, and to the tiles below.
+  var token = location.pathname.split('/').filter(Boolean).pop() || '';
+
+  var map = L.map('map', { zoomControl: true, worldCopyJump: true, minZoom: 3 }).setView([35.6892, 51.389], 13);
+  L.tileLayer('/tiles/{z}/{x}/{y}.png?s=' + encodeURIComponent(token), {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+  function resize() { map.invalidateSize({ animate: false }); }
+  window.addEventListener('resize', resize);
+  setTimeout(resize, 0);
+  setTimeout(resize, 250);
+
+  // The same drawing as the dashboard: a dot that travels, a beam for the way
+  // they are heading, a blur while they are somewhere private.
+  var drawing = PeopleMap.on(map);
+
+  var entry = {};          // marker, halo, beam, veil, chip, path, glow, fades
+  var person = null;       // what was last sent about them
+  var name = '';
+  var until = 0;           // when the link ends, in seconds
+  var ended = false;
+  var placed = false;      // the view has been set once
+  var following = true;    // the map keeps them in view until somebody pans it
+
+  var el = function (id) { return document.getElementById(id); };
+  var esc = function (v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  function live(p) { return p.live || (p.liveUntil && p.liveUntil * 1000 > Date.now()); }
+  function colourOf(p) {
+    return live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33' : '#8a929b';
+  }
+  function called() { return name || 'Somebody'; }
+
+  map.on('dragstart', function () { if (ended) return; following = false; el('follow').hidden = false; });
+  el('follow').onclick = function () { following = true; el('follow').hidden = true; keepInView(); };
+
+  function draw(p) {
+    var before = person;
+    person = p;
+    if (p.latitude === null || p.longitude === null) { status(); return; }
+    var here = L.latLng(p.latitude, p.longitude);
+    var colour = colourOf(p);
+
+    if (p.hidden) {
+      // Inside a private place: what arrived is the place, not a point, and
+      // there is nothing more exact behind it for this page to show.
+      if (entry.marker) {
+        drawing.halt(entry);
+        drawing.puff(entry.marker.getLatLng(), colour, 'dissolve');
+        map.removeLayer(entry.marker);
+        entry.marker = null;
+      }
+      if (entry.halo) { map.removeLayer(entry.halo); entry.halo = null; }
+      var area = here.toBounds(Math.max(50, p.accuracy || 0) * 2);
+      if (!entry.veil) entry.veil = drawing.veil(area, 'in').addTo(map);
+      else entry.veil.setBounds(area);
+      drawing.tint(entry.veil, colour);
+      drawing.size();
+      var chip = L.divIcon({ className: 'veil-chip', html: '<span>' + esc(called()) + ' · somewhere private</span>', iconSize: [0, 0] });
+      if (!entry.chip) entry.chip = L.marker(here, { icon: chip, keyboard: false, interactive: false }).addTo(map);
+      else entry.chip.setLatLng(here).setIcon(chip);
+    } else {
+      if (entry.veil) {
+        drawing.fadeOut(entry.veil);
+        entry.veil = null;
+        drawing.puff(here, colour, 'condense');
+      }
+      if (entry.chip) { map.removeLayer(entry.chip); entry.chip = null; }
+      var fresh = !entry.marker;
+      if (fresh) {
+        entry.marker = L.circleMarker(here, { radius: 8, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
+        entry.marker.bindTooltip(called(), { direction: 'top', offset: [0, -8] });
+      }
+      entry.marker.setStyle({ color: colour });
+      if (p.accuracy) {
+        if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
+        entry.halo.setRadius(p.accuracy).setStyle({ color: colour });
+      }
+      var from = entry.marker.getLatLng();
+      drawing.glide(entry, here, fresh || !before ? 0
+        : PathTime.glideFor({ latitude: from.lat, longitude: from.lng }, p, p.at - before.at));
+    }
+
+    // The path since the link was made — the server sends no more than that
+    // — broken wherever a stretch was hidden, each end fading out.
+    entry.pts = PathTime.merge([], p.trail);
+    var runs = PathTime.runs(entry.pts);
+    var lines = runs.filter(function (r) { return r.length > 1; })
+      .map(function (r) { return r.map(function (q) { return [q.latitude, q.longitude]; }); });
+    if (lines.length) {
+      if (!entry.glow) entry.glow = L.polyline(lines, { weight: 12, opacity: .18, lineCap: 'round', lineJoin: 'round', color: colour }).addTo(map);
+      else entry.glow.setLatLngs(lines).setStyle({ color: colour });
+      if (!entry.path) entry.path = L.polyline(lines, { weight: 4, opacity: .9, color: colour }).addTo(map);
+      else entry.path.setLatLngs(lines).setStyle({ color: colour });
+    }
+    if (!entry.fades) entry.fades = L.layerGroup().addTo(map);
+    entry.fades.clearLayers();
+    runs.forEach(function (run, k) {
+      var fade = function (q) {
+        L.marker([q.latitude, q.longitude], {
+          icon: L.divIcon({ className: '', iconSize: [26, 26], iconAnchor: [13, 13],
+            html: '<div class="fade-end" style="background:radial-gradient(closest-side,' + colour + ',transparent)"></div>' }),
+          interactive: false, keyboard: false,
+        }).addTo(entry.fades);
+      };
+      if (k > 0) fade(run[0]);
+      if (k < runs.length - 1 || p.hidden) fade(run[run.length - 1]);
+    });
+
+    aim();
+    keepInView();
+    status();
+  }
+
+  function aim() {
+    var p = person;
+    drawing.aim(entry, p && !p.hidden ? PathTime.headingOf(p.heading, entry.pts, Date.now() / 1000) : null, p ? colourOf(p) : '#8a929b');
+  }
+
+  function clear() {
+    drawing.halt(entry);
+    ['marker', 'halo', 'beam', 'veil', 'chip', 'path', 'glow', 'fades'].forEach(function (k) {
+      if (entry[k]) { map.removeLayer(entry[k]); entry[k] = null; }
+    });
+    person = null;
+  }
+
+  // Set once to them, then kept: panned only when they near the edge, since
+  // a map that recentres on every fix cannot be read — and not at all once
+  // somebody has moved it themselves, until they ask with Follow.
+  function keepInView() {
+    if (!person || person.latitude === null) return;
+    var here = L.latLng(person.latitude, person.longitude);
+    if (!placed) {
+      placed = true;
+      if (entry.veil) map.fitBounds(entry.veil.getBounds().pad(0.3));
+      else map.setView(here, 16);
+      return;
+    }
+    if (!following) return;
+    if (entry.veil) {
+      if (!map.getBounds().contains(entry.veil.getBounds())) map.fitBounds(entry.veil.getBounds().pad(0.3));
+    } else if (!map.getBounds().pad(-0.2).contains(here)) {
+      map.panTo(here);
+    }
+  }
+
+  function clock(at) {
+    return new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  function ago(at) {
+    var s = Math.max(0, Math.round(Date.now() / 1000 - at));
+    if (s < 60) return s + ' s ago';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    return Math.round(s / 3600) + ' h ago';
+  }
+
+  // The header says for how long, and how things stand now.
+  function status() {
+    if (ended) return;
+    var left = Math.max(0, until - Math.floor(Date.now() / 1000));
+    el('when').textContent = until
+      ? 'until ' + clock(until) + ' · ' + (left >= 3600
+        ? Math.floor(left / 3600) + ' h ' + Math.floor((left % 3600) / 60) + ' min left'
+        : Math.max(1, Math.ceil(left / 60)) + ' min left')
+      : '';
+    var p = person;
+    var line;
+    if (!p || p.latitude === null) line = 'waiting for ' + called() + '’s location…';
+    else if (p.stopped) line = called() + ' stopped sharing their location · ' + ago(p.at);
+    else if (p.hidden) line = 'somewhere private · ' + ago(p.at);
+    else {
+      var n = (entry.pts || []).length;
+      var speed = n > 1 ? PathTime.speedLabel(PathTime.speedBetween(entry.pts[n - 2], entry.pts[n - 1])) : '';
+      line = 'updated ' + ago(p.at) + (speed && speed !== 'still' && PathTime.headingOf(null, entry.pts, Date.now() / 1000) !== null ? ' · ' + speed : '');
+    }
+    el('state').textContent = line;
+    if (until && left <= 0) end('ended');
+  }
+
+  // Over, for whatever reason. The person leaves the map — the time they
+  // agreed to be followed for is up — and the page says why.
+  function end(why) {
+    if (ended) return;
+    ended = true;
+    if (attempt) attempt.abort();
+    clear();
+    document.body.classList.add('over');
+    el('follow').hidden = true;
+    el('when').textContent = '';
+    el('state').textContent = '';
+    var notice = el('notice');
+    notice.innerHTML = '<strong>' + (why === 'stopped' ? esc(called()) + ' stopped this link.' : 'This link has ended.') + '</strong>'
+      + '<div class="quiet">' + esc(called()) + ' is no longer shown here. Ask them for a new link to follow them again.</div>';
+    notice.hidden = false;
+  }
+
+  function event(chunk) {
+    var kind = '', data = '';
+    chunk.split('\n').forEach(function (line) {
+      if (line.slice(0, 6) === 'event:') kind = line.slice(6).trim();
+      else if (line.slice(0, 5) === 'data:') data += line.slice(5).trim();
+    });
+    if (!kind || kind === 'beat') return;
+    var d = data ? JSON.parse(data) : {};
+    if (kind === 'hello') {
+      name = d.name || '';
+      until = d.until || 0;
+      document.title = 'Following ' + called();
+      el('who').textContent = 'Following ' + called();
+      clear();
+      if (d.people && d.people[0]) draw(d.people[0]); else status();
+    } else if (kind === 'position') {
+      draw(d);
+    } else if (kind === 'forget') {
+      // Sent before them afresh — a private place changed — or on the way out.
+      clear();
+      status();
+    } else if (kind === 'ended') {
+      end(d.why);
+    }
+  }
+
+  // Read by hand over POST, as the dashboard does, so a tunnel that buffers
+  // a GET stream cannot hold this one.
+  var attempt = null;
+  function stream() {
+    if (ended) return;
+    var ctl = new AbortController();
+    attempt = ctl;
+    var last = Date.now();
+    var watch = setInterval(function () {
+      if (attempt !== ctl) { clearInterval(watch); return; }
+      if (Date.now() - last > 70000) { clearInterval(watch); ctl.abort(); }
+    }, 5000);
+    fetch('/api/live-stream/' + encodeURIComponent(token), { method: 'POST', cache: 'no-store', signal: ctl.signal })
+      .then(function (r) {
+        if (r.status === 404) { end('ended'); return; }
+        if (!r.ok || !r.body) throw new Error('no stream');
+        var reader = r.body.getReader();
+        var dec = new TextDecoder();
+        var buf = '';
+        return (function pump() {
+          return reader.read().then(function (step) {
+            if (step.done) throw new Error('closed');
+            last = Date.now();
+            buf += dec.decode(step.value, { stream: true });
+            var parts = buf.split('\n\n');
+            buf = parts.pop();
+            parts.forEach(event);
+            return pump();
+          });
+        })();
+      })
+      .catch(function () {
+        clearInterval(watch);
+        if (ended || attempt !== ctl) return;
+        el('state').textContent = 'reconnecting…';
+        setTimeout(stream, 3000);
+      });
+  }
+
+  stream();
+  setInterval(status, 1000);
+  // Somebody who stopped a few minutes ago is not heading anywhere now.
+  setInterval(function () { if (!ended) aim(); }, 5000);
+})();
+</script>
+</body>
+</html>

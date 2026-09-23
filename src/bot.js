@@ -40,6 +40,7 @@ const HELP = [
   '',
   '/login — a link to the map',
   '/invite — a link that lets one person see you',
+  '/live — a link anyone can follow you on, for an hour (/live 15m, /live 4h, /live stop)',
   '/circle — who can see you, and whom you can see',
   '/pair — a code to connect a watch',
   '/stop — stop being shown, and delete the path held about you',
@@ -66,6 +67,23 @@ export function invitePayload(command) {
 
 export function inviteLink(botUsername, token) {
   return `https://t.me/${botUsername}?start=${INVITE_PREFIX}${token}`;
+}
+
+// How long `/live` should last, from what followed it: nothing is an hour,
+// and otherwise one of the lengths a live link comes in, written the way
+// people write them — `15`, `15m`, `1h`, `4h`, `240`. Anything else is null,
+// so the bot can say what it takes rather than guess.
+export function liveMinutes(args) {
+  const arg = String(args || '').trim().toLowerCase();
+  if (!arg) return 60;
+  const m = /^(\d+)\s*(m|min|mins|minutes|h|hr|hrs|hour|hours)?$/.exec(arg);
+  if (!m) return null;
+  const minutes = Number(m[1]) * (m[2] && m[2].startsWith('h') ? 60 : 1);
+  return [15, 60, 240].includes(minutes) ? minutes : null;
+}
+
+export function liveFor(minutes) {
+  return minutes >= 60 ? `${minutes / 60} hour${minutes === 60 ? '' : 's'}` : `${minutes} minutes`;
 }
 
 // A button's callback data: `rm:<id>` takes back what you gave, `leave:<id>`
@@ -273,6 +291,29 @@ export async function connect(config, {
           inviteLink(me.username, t),
           '',
           'They can see you until you take it back with /circle.',
+        ].join('\n'));
+        return;
+      }
+      if (command.name === '/live') {
+        const id = String(command.from.id);
+        if (!circle?.live) { await say(command.chat, 'Live links need the database this service is running without.'); return; }
+        if (command.args.trim().toLowerCase() === 'stop') {
+          const n = await circle.live.stop(id);
+          await say(command.chat, n ? `Stopped ${n === 1 ? 'your live link' : `all ${n} of your live links`}. Nobody is following you by one now.`
+            : 'You have no live links running.');
+          return;
+        }
+        const minutes = liveMinutes(command.args);
+        if (!minutes) { await say(command.chat, 'A live link lasts 15 minutes, an hour or four hours: /live 15m, /live, /live 4h.'); return; }
+        const made = await circle.live.make(id, minutes);
+        if (!made || made.error) { await say(command.chat, made?.error || 'Could not make a live link.'); return; }
+        await say(command.chat, [
+          `Anyone with this link can follow you live for the next ${liveFor(minutes)} — no Telegram needed:`,
+          '',
+          made.url,
+          '',
+          'It starts from now: where you were before is not shown, and neither is anywhere inside your private places.',
+          '/live stop ends it early.',
         ].join('\n'));
         return;
       }

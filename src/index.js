@@ -18,6 +18,7 @@ import { makeWatcher, announce } from './fences.js';
 import { makeCircles, canActFor } from './circles.js';
 import { makeDevices, makeCodes } from './devices.js';
 import { makeZones } from './zones.js';
+import { makeLive, LIVE_EACH } from './live.js';
 
 const config = load();
 const positions = new Positions({
@@ -50,6 +51,12 @@ if (await zones.load().catch((e) => { console.error('zones:', e.message); return
   console.log('zones: private places are on');
 }
 
+// Live links: somebody followed as they move, by whoever holds the link, for
+// a while. Loaded before anything is published, like private places.
+const live = makeLive({ geo });
+const running = await live.load().catch((e) => { console.error('live:', e.message); return 0; });
+if (running) console.log(`live: ${running} link${running === 1 ? '' : 's'} still running`);
+
 // Watches. Paired with a code from /pair or the map, known by a token after.
 const devices = makeDevices({ geo });
 const codes = makeCodes();
@@ -74,8 +81,8 @@ let notify = null;
 // the state survives for as long as the process does.
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
-const { publish, publishFence, forget, setBot, grant, revoke } = serve(positions, config, {
-  directory, geo, links, circles, makeInvite, devices, codes, zones,
+const { publish, publishFence, forget, setBot, grant, revoke, stopLink } = serve(positions, config, {
+  directory, geo, links, circles, makeInvite, devices, codes, zones, live,
   onFenceDeleted: (id) => fences.dropFence(id),
   onIngest: (fixes) => ingest(fixes),
 });
@@ -211,6 +218,23 @@ const circle = circles.enabled ? {
   pair: (id) => (devices.enabled && circles.viewerFor(id) ? codes.issue(id) : null),
   // Through the server, so open maps are told as well as the database.
   revoke: (owner, viewer) => revoke(owner, viewer),
+  // /live: the same link the map's Follow me makes, and /live stop, which
+  // ends every one of them through the server so their pages are told.
+  live: {
+    make: async (id, minutes) => {
+      if (!config.publicUrl) return { error: 'Live links need PUBLIC_URL, which this service is running without.' };
+      if (live.of(id).filter((l) => l.reason === 'share').length >= LIVE_EACH) {
+        return { error: `${LIVE_EACH} live links at once is the limit. /live stop ends them.` };
+      }
+      const link = await live.create({ person: id, minutes });
+      return { url: `${config.publicUrl}/live/${link.token}`, expiresAt: link.expiresAt };
+    },
+    stop: async (id) => {
+      const mine = live.of(id).filter((l) => l.reason === 'share');
+      for (const link of mine) await stopLink(link);
+      return mine.length;
+    },
+  },
 } : null;
 
 const telegram = config.ingest === 'bot'

@@ -15,7 +15,8 @@ import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
 import worker from '../worker/src/index.js';
 import { fromUpdate } from '../src/positions.js';
-import { connect as connectBot, commandIn } from '../src/bot.js';
+import { connect as connectBot, commandIn, liveMinutes, liveFor } from '../src/bot.js';
+import { makeLive } from '../src/live.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
@@ -1121,6 +1122,9 @@ head('the leak matrix: every route, as every kind of viewer');
     createDevice: async ({ owner, name, platform, tokenHash }) => { const id = geo.nextDevice++; geo.devices.push({ id, owner, name, platform, token_hash: tokenHash }); return id; },
     deleteDevice: async (id) => { geo.devices = geo.devices.filter((d) => d.id !== id); return 1; },
     touchDevice: async () => {},
+    listLiveLinks: async () => [],
+    createLiveLink: async () => true,
+    revokeLiveLink: async () => 1,
   };
   const botToken = '123:leakmatrix';
   const circles = makeCircles({ geo, admins: ['1'] });
@@ -1142,7 +1146,7 @@ head('the leak matrix: every route, as every kind of viewer');
   const { server, publish } = serve(store, {
     dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60,
   }, {
-    geo, circles, devices, codes, links: makeLinks(), log: { info() {}, error() {} },
+    geo, circles, devices, codes, links: makeLinks(), log: { info() {}, error() {} }, live: makeLive({ geo }),
     onIngest: async (fixes, device) => { ingested.push(...fixes.map((f) => ({ ...f, device: device.id }))); },
   });
   await new Promise((r) => server.once('listening', r));
@@ -1167,10 +1171,11 @@ head('the leak matrix: every route, as every kind of viewer');
     public: ['/healthz', '/vendor/', '/lib/', '/auth/logout', '/auth/', '/auth/widget',
       '/auth/telegram/start', '/auth/telegram/callback'],
     shareToken: ['/share/', '/api/shared/'],
+    liveToken: ['/live/', '/api/live-stream/'],
     signedIn: ['/', '/index.html', '/api/me', '/api/place'],
     filtered: ['/api/positions', '/api/stream'],
     canSee: ['/api/history/', '/api/person/', '/api/photo/'],
-    selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/'],
+    selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/', '/api/live', '/api/live/'],
     owned: ['/api/fences', '/api/fences/'],
     ownCircle: ['/api/circle', '/api/circle/', '/api/circle/invite', '/api/circle/viewer/', '/api/circle/owner/'],
     pairing: ['/api/devices/pair'],
@@ -1290,6 +1295,8 @@ head('the leak matrix: every route, as every kind of viewer');
     ['list or remove devices', '/api/devices', 'GET'],
     ['hide a place', '/api/zones?lat=1&lon=1&radius=500', 'POST'],
     ['take a GPX of its owner', '/api/gpx/3', 'GET'],
+    ['hand out a live link to its owner', '/api/live?minutes=60', 'POST'],
+    ['list its owner’s live links', '/api/live', 'GET'],
   ]) {
     t(`a watch cannot ${what}`, (await watch(path, method)).status === 404, path);
   }
@@ -1792,6 +1799,175 @@ head('private places, on the wire');
 
   [early, late, adminStream].forEach((s) => s.close());
   server.close();
+}
+
+head('live links: one person, from now, for a while');
+{
+  const db = {
+    users: [{ id: '1', name: 'Admin', username: '' }, { id: '2', name: 'Ada', username: '' }, { id: '3', name: 'Grace', username: '' }],
+    grants: [{ owner: '3', viewer: '2' }],   // Grace lets Ada see her
+    zones: [], next: 1, links: [],
+  };
+  const geo = {
+    enabled: () => true,
+    listUsers: async () => db.users,
+    listGrants: async () => db.grants,
+    upsertUser: async () => true,
+    addGrant: async () => true,
+    removeGrant: async () => 1,
+    historyOf: async () => [],
+    listFences: async () => [],
+    placeOf: async () => '',
+    forget: async (id) => { db.links = db.links.filter((l) => l.person !== id); return 1; },
+    listZones: async () => db.zones,
+    createZone: async (z) => { const id = db.next++; db.zones.push({ id, ...z }); return id; },
+    deleteZone: async (id) => { db.zones = db.zones.filter((z) => z.id !== id); return 1; },
+    readShare: async () => null,
+    listLiveLinks: async () => db.links,
+    createLiveLink: async (l) => { db.links.push({ ...l }); return true; },
+    revokeLiveLink: async (token) => { const n = db.links.length; db.links = db.links.filter((l) => l.token !== token); return n - db.links.length; },
+  };
+  const botToken = '123:live';
+  const circles = makeCircles({ geo, admins: ['1'] });
+  await circles.load();
+  const zones = makeZones({ geo, random: () => 0 });   // centred on the very spot, to keep the arithmetic plain
+  await zones.load();
+  const live = makeLive({ geo });
+  await live.load();
+  const store = new Positions({ minMove: 1 });
+  const now = Math.floor(Date.now() / 1000);
+  // Grace walked out of her door and up the road before sending anybody
+  // anything. None of that is what she is about to share.
+  for (let i = 0; i < 10; i++) {
+    store.update({ id: '3', name: 'Grace', latitude: +(36.3 + i * 0.0005).toFixed(4), longitude: 59.6, accuracy: 5, at: now - 300 + i * 10, liveUntil: now + 3600 });
+  }
+  store.update({ id: '2', name: 'Ada', latitude: 36.4, longitude: 59.6, accuracy: 5, at: now - 5, liveUntil: now + 3600 });
+
+  const { server, publish, forget } = serve(store, {
+    dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60,
+  }, { geo, circles, zones, live, links: makeLinks(), log: { info() {}, error() {} } });
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = {
+    none: {},
+    token: { cookie: 'tll_token=tok' },
+    ada: { cookie: `tll_session=${encodeURIComponent(mint('2', { botToken }))}` },
+    grace: { cookie: `tll_session=${encodeURIComponent(mint('3', { botToken }))}` },
+  };
+  const hit = (who, path, method = 'GET') => fetch(base + path, { method, headers: as[who] });
+  const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+  const follow = async (token) => {
+    const res = await fetch(`${base}/api/live-stream/${token}`, { method: 'POST' });
+    const seen = [];
+    const raw = [];
+    if (res.status === 200) {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      (async () => {
+        for (;;) {
+          const step = await reader.read().catch(() => ({ done: true }));
+          if (step.done) { seen.push({ ev: '(closed)' }); return; }
+          buf += dec.decode(step.value, { stream: true });
+          const parts = buf.split('\n\n'); buf = parts.pop();
+          for (const c of parts) {
+            raw.push(c);
+            seen.push({ ev: /event: (\w+)/.exec(c)?.[1], data: JSON.parse(/data: (.*)/.exec(c)?.[1] || '{}') });
+          }
+        }
+      })();
+    }
+    return { status: res.status, seen, raw };
+  };
+
+  t('a live link lasts one of a few set lengths', (await hit('grace', '/api/live?minutes=7', 'POST')).status === 400);
+  const madeRes = await hit('grace', '/api/live?minutes=15', 'POST');
+  const made = await madeRes.json();
+  t('Grace makes one for a quarter of an hour', madeRes.status === 200 && made.path === `/live/${made.token}`
+    && made.expiresAt - made.createdAt === 900, made);
+  t('the shared token cannot make one — it is nobody', (await hit('token', '/api/live?minutes=15', 'POST')).status === 404);
+  t('Grace’s list has it', (await (await hit('grace', '/api/live')).json()).links.length === 1);
+  t('Ada’s has nothing of Grace’s', (await (await hit('ada', '/api/live')).json()).links.length === 0);
+
+  const pageRes = await hit('none', `/live/${made.token}`);
+  t('the page opens for anybody holding the link', pageRes.status === 200 && (await pageRes.text()).includes('/api/live-stream/'));
+  t('a made-up link is a page saying it has ended', (await hit('none', '/live/notarealtoken123')).status === 404);
+
+  const watching = await follow(made.token);
+  await settle();
+  const hello = watching.seen.find((e) => e.ev === 'hello')?.data;
+  t('the follower is told whose link it is, and until when', hello?.name === 'Grace' && hello.until === made.expiresAt, hello);
+  t('and is shown Grace, where she is', hello?.people.length === 1 && hello.people[0].id === '3' && hello.people[0].latitude === 36.3045);
+  t('but none of the path from before the link', hello?.people[0].trail.length === 0, hello?.people[0].trail);
+
+  publish(store.update({ id: '3', name: 'Grace', latitude: 36.306, longitude: 59.6, accuracy: 5, heading: 0, at: now + 5, liveUntil: now + 3600 }));
+  publish(store.update({ id: '2', name: 'Ada', latitude: 36.41, longitude: 59.6, accuracy: 5, at: now + 5, liveUntil: now + 3600 }));
+  await settle();
+  const moved = watching.seen.filter((e) => e.ev === 'position');
+  t('Grace moving reaches the follower', moved.length === 1 && moved[0].data.latitude === 36.306, moved.map((e) => e.data.id));
+  t('with the path from the link on, and nothing earlier', moved[0]?.data.trail.every((q) => q.at >= made.createdAt) && moved[0]?.data.trail.length >= 1);
+  t('and nobody else ever does', !watching.raw.some((c) => c.includes('"id":"2"') || c.includes('36.41')));
+  // Where she stood when she made it is where she is, and is shown; the nine
+  // fixes before it are the way from her door, and are not.
+  const sentLatitudes = watching.raw.flatMap((c) => [...c.matchAll(/"latitude":(-?[\d.]+)/g)].map((m) => Number(m[1])));
+  const before = Array.from({ length: 9 }, (_, i) => +(36.3 + i * 0.0005).toFixed(4));
+  t('no fix from before the link is anywhere in what was sent',
+    sentLatitudes.length >= 3 && !sentLatitudes.some((lat) => before.includes(lat)), sentLatitudes);
+
+  // A private place applies to a follower as to the circle.
+  await hit('grace', '/api/zones?name=Cafe&lat=36.306&lon=59.6&radius=300', 'POST');
+  await settle();
+  const veiled = watching.seen.filter((e) => e.ev === 'position').pop()?.data;
+  t('a place Grace hides now shows as a blur on the link too', veiled?.hidden === true && veiled.accuracy === 300 && veiled.heading === null, veiled);
+
+  // The link is a key to its tiles and its stream, and to nothing else.
+  const tile = await fetch(`${base}/tiles/15/21809/12850.png?s=${made.token}`);
+  t('the page may ask for tiles by its link', tile.status === 200 || tile.status === 502, tile.status);
+  t('the link opens nothing else', (await fetch(`${base}/api/positions?s=${made.token}`)).status === 401
+    && (await fetch(`${base}/api/history/3?s=${made.token}`)).status === 401
+    && (await fetch(`${base}/api/stream?s=${made.token}`, { method: 'POST' })).status === 401);
+
+  // Only its owner stops it — and the follower is told at once.
+  t('Ada, who can see Grace, cannot stop Grace’s link', (await hit('ada', `/api/live/${made.token}`, 'DELETE')).status === 404);
+  const stopped = await hit('grace', `/api/live/${made.token}`, 'DELETE');
+  await settle();
+  t('Grace can', stopped.status === 200 && (await stopped.json()).links.length === 0);
+  const ended = watching.seen.find((e) => e.ev === 'ended');
+  t('the follower hears that she stopped it, and the stream closes',
+    ended?.data.why === 'stopped' && watching.seen.at(-1).ev === '(closed)', watching.seen.map((e) => e.ev));
+  t('after which the page says so', (await hit('none', `/live/${made.token}`)).status === 404);
+  t('the stream is refused', (await follow(made.token)).status === 404);
+  t('and so are the tiles', (await fetch(`${base}/tiles/15/21809/12850.png?s=${made.token}`)).status === 401);
+
+  // A link runs out by itself.
+  const brief = await live.create({ person: '3', minutes: 1 / 60 });
+  const briefly = await follow(brief.token);
+  await settle(1600);
+  t('a link that runs out ends its stream', briefly.seen.some((e) => e.ev === 'ended' && e.data.why === 'ended'),
+    briefly.seen.map((e) => e.ev));
+  t('and is gone', live.get(brief.token) === null && (await hit('none', `/live/${brief.token}`)).status === 404);
+
+  // /stop ends every link its person had, and whoever was following.
+  const last = await (await hit('grace', '/api/live?minutes=60', 'POST')).json();
+  const lastly = await follow(last.token);
+  await settle();
+  await forget('3');
+  await settle();
+  t('asking to be forgotten ends the links, and tells the follower',
+    lastly.seen.some((e) => e.ev === 'forget') && lastly.seen.some((e) => e.ev === 'ended') && live.get(last.token) === null,
+    lastly.seen.map((e) => e.ev));
+
+  server.close();
+}
+
+head('what /live takes');
+{
+  t('nothing is an hour', liveMinutes('') === 60);
+  t('fifteen minutes, written either way', liveMinutes('15') === 15 && liveMinutes('15m') === 15 && liveMinutes('15 min') === 15);
+  t('four hours, written either way', liveMinutes('4h') === 240 && liveMinutes('240') === 240 && liveMinutes('4 hours') === 240);
+  t('an hour as 1h', liveMinutes('1h') === 60);
+  t('anything else is refused, not rounded', liveMinutes('20') === null && liveMinutes('2h') === null && liveMinutes('soon') === null);
+  t('and said back plainly', liveFor(15) === '15 minutes' && liveFor(60) === '1 hour' && liveFor(240) === '4 hours');
 }
 
 head('what a watch may report');

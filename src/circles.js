@@ -18,10 +18,16 @@
 // A viewer is { id, admin }. id is a Telegram user id, or null for a request
 // that came in with the shared DASHBOARD_TOKEN, which has no person behind it
 // and is treated as an admin for exactly as long as that token exists.
+//
+// Or it is somebody holding a live link (live.js): nobody in particular, who
+// `sees` exactly one person, for as long as the link lasts. That viewer is
+// only ever made by the stream a live link opens, so it reaches nothing else.
 export function canSee(viewer, person, grants) {
   if (!viewer) return false;
   if (viewer.admin) return true;
-  if (!viewer.id || person === null || person === undefined) return false;
+  if (person === null || person === undefined) return false;
+  if (viewer.sees !== undefined) return String(viewer.sees) === String(person);
+  if (!viewer.id) return false;
   const p = String(person);
   if (String(viewer.id) === p) return true;
   return Boolean(grants?.get(String(viewer.id))?.has(p));

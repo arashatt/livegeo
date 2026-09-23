@@ -20,11 +20,13 @@ import {
   makeZones, ZONE_MIN, ZONE_MAX, ZONES_EACH, trimEnds, trimLengths, breaksOf, withBreaks,
 } from './zones.js';
 import { toGpx, splitAtPauses, dayOf, contentDisposition } from './gpx.js';
+import { makeLive, describeLink, LIVE_MINUTES, LIVE_EACH } from './live.js';
 import { randomBytes, createHash } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 const PAGE = resolve(PUBLIC, 'index.html');
 const SHARE_PAGE = resolve(PUBLIC, 'share.html');
+const LIVE_PAGE = resolve(PUBLIC, 'live.html');
 const LOGIN_PAGE = resolve(PUBLIC, 'login.html');
 
 const STATIC_TYPES = {
@@ -105,6 +107,8 @@ export function serve(positions, config, {
   // Private places. Without a database there are none, and everybody is
   // shown exactly as before.
   zones = makeZones(),
+  // Live links. Without a database there are none to make.
+  live = makeLive(),
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -195,16 +199,49 @@ export function serve(positions, config, {
     circles.forget(id);
     devices.forget(id);
     zones.forget(id);
+    live.forget(id);
     for (const res of told) { try { send(res, 'forget', { id }); } catch { watchers.delete(res); } }
+    // Whoever was following them by a link is not left holding an open
+    // stream that would carry them again if they ever came back.
+    endLive((v) => v.sees === String(id));
     return erased;
   }
 
-  // What one viewer is shown of one person. Everything, to themselves and to
-  // admins — the same line canActFor draws for erasing or publishing a path.
-  // To anybody else who may see them, what their private places leave: the
-  // exact point inside one is never sent, so there is nothing under the blur
-  // for a curious viewer to find.
-  const viewOf = (viewer, p) => (canActFor(viewer, p.id) ? p : zones.veil(p));
+  // A live link stopped by its owner: gone from the store, and whoever is
+  // following it is told at once rather than at the next reconnect.
+  async function stopLink(link) {
+    await live.revoke(link.token);
+    endLive((v) => v.token === link.token, 'stopped');
+  }
+
+  // A live link's stream, closed: told why first, so the page can say so
+  // rather than trying to reconnect to something that is gone.
+  function endLive(which, why = 'ended') {
+    for (const [res, v] of watchers) {
+      if (v.via !== 'live' || !which(v)) continue;
+      watchers.delete(res);
+      try { send(res, 'ended', { why }); res.end(); } catch { /* already gone */ }
+    }
+  }
+
+  // What one viewer is shown of one person.
+  //
+  // Everything, to themselves and to admins — the same line canActFor draws
+  // for erasing or publishing a path. To anybody else who may see them, what
+  // their private places leave: the exact point inside one is never sent, so
+  // there is nothing under the blur for a curious viewer to find. `veil`
+  // works that out, and is passed in when one veiled copy serves many.
+  //
+  // Somebody following a live link sees the person from the moment the link
+  // was made and no earlier: the path before it — usually from a front door
+  // — was not what was sent.
+  function shown(viewer, p, veil = () => zones.veil(p)) {
+    let view = canActFor(viewer, p.id) ? p : veil();
+    if (viewer.since !== undefined) {
+      view = { ...view, trail: (view.trail || []).filter((q) => q.at >= viewer.since) };
+    }
+    return view;
+  }
   const isLive = (p) => Boolean(p.liveUntil && p.liveUntil > Date.now() / 1000);
 
   // `about` is the person the event concerns, when there is one. An event
@@ -225,10 +262,10 @@ export function serve(positions, config, {
   const publish = (person) => {
     const exact = { ...person, live: isLive(person) };
     let veiled = null;
+    const veil = () => (veiled ??= zones.veil(exact));
     for (const [res, viewer] of watchers) {
       if (!circles.canSee(viewer, person.id)) continue;
-      const view = canActFor(viewer, person.id) ? exact : (veiled ??= zones.veil(exact));
-      try { send(res, 'position', view); } catch { watchers.delete(res); }
+      try { send(res, 'position', shown(viewer, exact, veil)); } catch { watchers.delete(res); }
     }
   };
 
@@ -242,6 +279,7 @@ export function serve(positions, config, {
     const p = positions.get(key);
     const payload = p ? { ...p, live: isLive(p) } : null;
     let veiled = null;
+    const veil = () => (veiled ??= zones.veil(payload));
     for (const [res, viewer] of watchers) {
       if (!circles.canSee(viewer, key)) continue;
       try {
@@ -250,7 +288,7 @@ export function serve(positions, config, {
           continue;
         }
         send(res, 'forget', { id: key });
-        if (payload) send(res, 'position', veiled ??= zones.veil(payload));
+        if (payload) send(res, 'position', shown(viewer, payload, veil));
       } catch { watchers.delete(res); }
     }
   }
@@ -273,7 +311,7 @@ export function serve(positions, config, {
     if (p) {
       const payload = { ...p, live: isLive(p) };
       for (const [res, v] of watchers) {
-        if (v.id === String(viewer)) { try { send(res, 'position', viewOf(v, payload)); } catch { watchers.delete(res); } }
+        if (v.id === String(viewer)) { try { send(res, 'position', shown(v, payload)); } catch { watchers.delete(res); } }
       }
     }
     return done;
@@ -629,10 +667,53 @@ export function serve(positions, config, {
       return;
     }
 
-    // Tiles for a share page. Checked against the database once and then
-    // remembered, because a map draws dozens of tiles and none of them should
-    // cost a query.
-    const tileForShare = parseTilePath(url.pathname) && shareToken && await validShare(shareToken);
+    // A live link: one person, followed as they move, for as long as the link
+    // lasts. Like a share link it is a key of its own — to this page, to one
+    // stream, and to the tiles the page draws on — and to nothing else. The
+    // viewer it makes exists only inside that stream.
+    if (url.pathname.startsWith('/live/')) {
+      if (!live.get(url.pathname.slice('/live/'.length))) {
+        return page(res, 404, 'This link has ended',
+          '<p>It ran out, or the person who sent it stopped it. Ask them for a new one.</p>');
+      }
+      const html = await readFile(LIVE_PAGE, 'utf8').catch(() => null);
+      if (!html) { res.writeHead(500); res.end('missing page'); return; }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(html);
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/live-stream/')) {
+      const link = live.get(decodeURIComponent(url.pathname.slice('/api/live-stream/'.length)));
+      if (!link) return json(404, { error: 'ended' });
+      const follower = { id: null, admin: false, via: 'live', sees: link.person, since: link.createdAt, token: link.token };
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store, no-transform',
+        'x-accel-buffering': 'no',
+      });
+      watchers.set(res, follower);
+      const p = positions.get(link.person);
+      send(res, 'hello', {
+        name: circles.user(link.person)?.name || p?.name || '',
+        until: link.expiresAt,
+        people: p ? [shown(follower, { ...p, live: isLive(p) })] : [],
+      });
+      const beat = setInterval(() => { try { send(res, 'beat', {}); } catch { /* gone */ } }, 25000);
+      // The link's own deadline, kept by the stream: nothing else would come
+      // along at that moment to close it.
+      const until = setTimeout(() => endLive((v) => v === follower), Math.max(0, link.expiresAt * 1000 - Date.now()));
+      const done = () => { clearInterval(beat); clearTimeout(until); watchers.delete(res); };
+      req.on('close', done);
+      res.on('close', done);
+      return;
+    }
+
+    // Tiles for a share page or a live one. A share is checked against the
+    // database once and then remembered, because a map draws dozens of tiles
+    // and none of them should cost a query; live links are in memory anyway.
+    const tileForShare = parseTilePath(url.pathname) && shareToken
+      && (Boolean(live.get(shareToken)) || await validShare(shareToken));
 
     if (!ok && !tileForShare) return deny();
     // A share page's tiles, admitted by the share token alone, with nobody
@@ -673,7 +754,7 @@ export function serve(positions, config, {
 
     const visible = () => positions.list()
       .filter((p) => circles.canSee(viewer, p.id))
-      .map((p) => viewOf(viewer, p));
+      .map((p) => shown(viewer, p));
 
     // Where a watch says it is. Only a watch may say it, and only as itself.
     if (url.pathname === '/api/ingest' && req.method === 'POST') {
@@ -720,6 +801,8 @@ export function serve(positions, config, {
         admin: viewer.admin,
         name: me?.name || '',
         circles: circles.enabled && Boolean(viewer.id),
+        // Whether Follow me can work: yourself, with somewhere to keep links.
+        live: live.enabled && Boolean(viewer.id) && viewer.via !== 'device',
       });
     }
 
@@ -992,6 +1075,43 @@ export function serve(positions, config, {
       return notFound();
     }
 
+    // --------------------------------------------------------- live links
+    //
+    // Made for yourself, and only by yourself. Being allowed to see somebody
+    // is not their consent to be followed by whoever you pass a link to, and
+    // a watch — a token on a wrist, which can be lost with the wrist — may not
+    // hand out a way to follow its owner.
+    if (url.pathname === '/api/live' || url.pathname.startsWith('/api/live/')) {
+      if (!live.enabled || !viewer.id || viewer.via === 'device') return notFound();
+      const me = viewer.id;
+      // The row references the user, and an admin named in DASHBOARD_USERS
+      // may never have written to the bot.
+      if (!circles.user(me)) await circles.seen({ id: me });
+
+      if (url.pathname === '/api/live' && req.method === 'GET') {
+        return json(200, { links: live.of(me).map(describeLink) });
+      }
+      if (url.pathname === '/api/live' && req.method === 'POST') {
+        const minutes = Number(url.searchParams.get('minutes') || 60);
+        if (!LIVE_MINUTES.includes(minutes)) return json(400, { error: `for ${LIVE_MINUTES.join(', ')} minutes` });
+        if (live.of(me).filter((l) => l.reason === 'share').length >= LIVE_EACH) {
+          return json(409, { error: `${LIVE_EACH} live links at once is the limit — stop one first` });
+        }
+        const link = await live.create({ person: me, minutes })
+          .catch((e) => { log.error('live:', e && e.message ? e.message : e); return null; });
+        if (!link) return json(500, { error: 'could not make a link' });
+        return json(200, describeLink(link));
+      }
+      if (url.pathname.startsWith('/api/live/') && req.method === 'DELETE') {
+        const link = live.get(decodeURIComponent(url.pathname.slice('/api/live/'.length)));
+        // Yours, or an admin's call; anybody else's reads as no such link.
+        if (!link || !canActFor(viewer, link.person)) return notFound();
+        await stopLink(link);
+        return json(200, { links: live.of(me).map(describeLink) });
+      }
+      return notFound();
+    }
+
     // ------------------------------------------------------------ circles
     //
     // Only for a person signed in as themselves: the shared token has nobody
@@ -1041,7 +1161,7 @@ export function serve(positions, config, {
   });
 
   return {
-    server, publish, publishFence, forget, watchers, grant, revoke,
+    server, publish, publishFence, forget, watchers, grant, revoke, stopLink,
     // Told once the bot has connected, so the login page can name it.
     setBot: (username) => { botName = username || ''; },
   };

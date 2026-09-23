@@ -126,6 +126,8 @@
   .card .gpx{display:flex;align-items:center;gap:.35rem;margin-top:.45rem;flex-wrap:wrap}
   .card .gpx input{font:inherit;font-size:.78rem;padding:.12rem .3rem;border:1px solid var(--hairline);
     border-radius:6px;background:var(--paper);color:var(--ink)}
+  /* Follow me: a live link from your own card. */
+  .card .follow{display:flex;align-items:center;gap:.3rem;margin-top:.45rem;flex-wrap:wrap}
   header .hint{font-size:.8rem;color:var(--quiet)}
   header .spacer{flex:1}
   header a.ghost{text-decoration:none;color:inherit}
@@ -223,6 +225,10 @@
       + (rows(c.canSeeMe, 'Remove', '/api/circle/viewer/') || '<p class="none">Nobody yet.</p>')
       + '<button class="ghost" id="mkinvite">Invite someone</button>'
       + '<div id="invitebox"></div>'
+      + (me && me.live
+        ? '<h2>Live links</h2><div id="livelist"><p class="none">…</p></div>'
+          + '<p class="fine">Anyone holding one of these can follow you until it runs out: from when it was made, never inside your private places.</p>'
+        : '')
       + '<h2>You can see</h2>'
       + (rows(c.iCanSee, 'Stop', '/api/circle/owner/') || '<p class="none">Nobody has invited you yet.</p>')
       + '<p class="fine">Seeing is one way: somebody seeing you does not let you see them.</p>'
@@ -234,6 +240,27 @@
       + '<button class="ghost" id="mkcode">Pair a watch</button><div id="codebox"></div>';
     loadDevices();
     fillZones();
+    loadLive();
+  }
+
+  function loadLive() {
+    if (!document.getElementById('livelist')) return;
+    fetch('/api/live', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { fillLive((d && d.links) || []); })
+      .catch(function () {});
+  }
+
+  function fillLive(links) {
+    var box = document.getElementById('livelist');
+    if (!box) return;
+    box.innerHTML = links.length
+      ? links.map(function (l) {
+          return '<div class="row"><span>' + (l.reason === 'sos' ? 'SOS · ' : '') + 'until ' + esc(clock(l.expiresAt)) + '</span>'
+            + '<span><button class="ghost" data-copylive="' + esc(l.path) + '">Copy</button> '
+            + '<button class="ghost" data-unlive="' + esc(l.token) + '">Stop</button></span></div>';
+        }).join('')
+      : '<p class="none">None running. Make one from your own card, or with /live.</p>';
   }
 
   function loadDevices() {
@@ -297,6 +324,15 @@
         .then(function () { e.target.disabled = false; });
       return;
     }
+    var unlive = e.target.closest && e.target.closest('[data-unlive]');
+    if (unlive) {
+      fetch('/api/live/' + encodeURIComponent(unlive.getAttribute('data-unlive')), { method: 'DELETE' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d) fillLive(d.links); else loadLive(); });
+      return;
+    }
+    var copylive = e.target.closest && e.target.closest('[data-copylive]');
+    if (copylive) { copyText(location.origin + copylive.getAttribute('data-copylive'), copylive); return; }
     var unzone = e.target.closest && e.target.closest('[data-unzone]');
     if (unzone) {
       fetch('/api/zones/' + encodeURIComponent(unzone.getAttribute('data-unzone')), { method: 'DELETE' }).then(loadZones);
@@ -424,6 +460,16 @@
       ((p.trail || []).length > 1 && me && (me.admin || me.id === String(p.id))
         ? '<button class="ghost share" data-id="' + esc(p.id) + '">Share this path</button>'
         : '') +
+      // A link anyone can follow you on, for a while — the page it opens needs
+      // no Telegram and no sign-in. Only for yourself: the server makes links
+      // for nobody else, whoever asks.
+      (me && me.live && me.id === String(p.id)
+        ? '<div class="follow"><span class="chandle">Follow me for</span>'
+          + [15, 60, 240].map(function (m) {
+              return '<button class="ghost livebtn" data-min="' + m + '">' + (m < 60 ? m + ' min' : m / 60 + ' h') + '</button>';
+            }).join('')
+          + '</div>'
+        : '') +
       // A day of your own path as a GPX file, for Strava, Garmin or your own
       // records. Yours or an admin's, as the server insists too.
       (me && (me.admin || me.id === String(p.id))
@@ -482,6 +528,39 @@
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+  }
+
+  // A live link: whoever opens it follows you from now until it runs out.
+  // Shown ready to copy, and to hand to the phone's own share sheet where
+  // there is one — the way a ride is shared, to whatever app the other person
+  // actually reads.
+  function makeLive(minutes, button) {
+    var box = button.parentNode;
+    button.disabled = true;
+    fetch('/api/live?minutes=' + minutes, { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d && res.d.error);
+        var link = location.origin + res.d.path;
+        box.outerHTML = '<div class="shared"><input readonly value="' + esc(link) + '" />'
+          + '<span><button class="ghost copylink">Copy</button>'
+          + (navigator.share ? ' <button class="ghost sendlink">Send…</button>' : '') + '</span>'
+          + '<span class="meta">Anyone with this can follow you until ' + esc(clock(res.d.expiresAt))
+          + ' — from now on, and never inside your private places. Stop it under Circle.</span></div>';
+        var input = document.querySelector('.shared input');
+        if (input) { input.focus(); input.select(); }
+        loadLive();
+      })
+      .catch(function (e) {
+        button.disabled = false;
+        window.alert((e && e.message) || 'Could not make a live link.');
+      });
+  }
+
+  function copyText(text, button) {
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+      .then(function () { button.textContent = 'Copied'; })
+      .catch(function () { window.prompt('Copy this link:', text); });
   }
 
   // Opening the card is what pulls the photo — hovering should stay cheap.
@@ -715,6 +794,16 @@
   document.addEventListener('click', function (e) {
     var g = e.target.closest && e.target.closest('button.gpxbtn');
     if (g) { e.preventDefault(); downloadDay(g.getAttribute('data-id'), g); return; }
+    var lv = e.target.closest && e.target.closest('button.livebtn');
+    if (lv) { e.preventDefault(); makeLive(Number(lv.getAttribute('data-min')), lv); return; }
+    var cp = e.target.closest && e.target.closest('button.copylink, button.sendlink');
+    if (cp) {
+      e.preventDefault();
+      var input = cp.closest('.shared').querySelector('input');
+      if (cp.classList.contains('sendlink')) navigator.share({ url: input.value, title: 'Follow me' }).catch(function () {});
+      else copyText(input.value, cp);
+      return;
+    }
     var b = e.target.closest && e.target.closest('button.share');
     if (!b) return;
     e.preventDefault();

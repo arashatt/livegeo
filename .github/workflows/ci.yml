@@ -45,6 +45,7 @@ jobs:
             await import('./src/fences.js');
             await import('./src/zones.js');
             await import('./src/gpx.js');
+            await import('./src/live.js');
             console.log('all modules load');
           "
 
