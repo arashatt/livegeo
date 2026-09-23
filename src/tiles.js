@@ -20,7 +20,7 @@ import { tileUrl } from './tile-path.js';
 
 // Re-exported so existing callers keep importing tiles.js, while the Worker
 // imports tile-path.js directly.
-export { parseTilePath, parseCartoPath, tileUrl } from './tile-path.js';
+export { parseTilePath, parseCartoPath, parseVectorPath, tileUrl } from './tile-path.js';
 
 export function makeTiles({
   cacheDir,

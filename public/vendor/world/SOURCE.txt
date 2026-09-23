@@ -1,0 +1,1 @@
+Natural Earth 1:110m land (public domain, naturalearthdata.com), via world-atlas 2.0.2, converted to GeoJSON by bin/vendor-map.mjs.

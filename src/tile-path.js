@@ -35,6 +35,15 @@ export function parseCartoPath(pathname) {
   return parse(pathname, /^\/carto\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.svg$/);
 }
 
+// The game map's vector tiles (vector.js). No source makes them deeper than
+// this; the map draws closer zooms from the deepest one.
+const VECTOR_MAX_ZOOM = 14;
+
+export function parseVectorPath(pathname) {
+  const t = parse(pathname, /^\/vector\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.pbf$/);
+  return t && t.z <= VECTOR_MAX_ZOOM ? t : null;
+}
+
 export function tileUrl(template, { z, x, y }) {
   return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
 }
