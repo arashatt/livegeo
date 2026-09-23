@@ -472,6 +472,10 @@
       (me && me.live && me.id === String(p.id)
         ? '<div class="sosline">' + sosLine(p) + '</div>'
         : '') +
+      // Check on me: the same, for a stop that should not be happening.
+      (me && me.checks && me.id === String(p.id)
+        ? '<div class="sosline checkline">' + checkLine() + '</div>'
+        : '') +
       // A link anyone can follow you on, for a while — the page it opens needs
       // no Telegram and no sign-in. Only for yourself: the server makes links
       // for nobody else, whoever asks.
@@ -605,6 +609,35 @@
     fetch('/api/sos', { method: 'DELETE', credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function () { button.parentNode.innerHTML = sosLine({}); loadLive(); })
+      .catch(function () { button.disabled = false; });
+  }
+
+  function checkLine() {
+    return me && me.check && me.check * 1000 > Date.now()
+      ? '<span class="chandle">Checking on you until ' + esc(clock(me.check)) + '.</span><button class="ghost uncheckbtn">Stop</button>'
+      : '<button class="ghost checkbtn">Check on me for 2 h</button>';
+  }
+
+  function startCheck(button) {
+    var ok = window.confirm('For the next two hours: if you stop for ' + ((me && me.checkStop) || 15) + ' minutes somewhere that is not one of your places, '
+      + 'or your live location stops, the bot asks whether you are all right. If you do not answer within 5 minutes, '
+      + 'everyone who can see you is told where you are.');
+    if (!ok) return;
+    button.disabled = true;
+    fetch('/api/check?hours=2', { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d && res.d.error);
+        me.check = res.d.until;
+        button.parentNode.innerHTML = checkLine();
+      })
+      .catch(function (e) { button.disabled = false; window.alert((e && e.message) || 'Could not start checking on you.'); });
+  }
+
+  function stopCheck(button) {
+    button.disabled = true;
+    fetch('/api/check', { method: 'DELETE', credentials: 'same-origin' })
+      .then(function () { me.check = null; button.parentNode.innerHTML = checkLine(); })
       .catch(function () { button.disabled = false; });
   }
 
@@ -849,6 +882,8 @@
     if (lv) { e.preventDefault(); makeLive(Number(lv.getAttribute('data-min')), lv); return; }
     var sb = e.target.closest && e.target.closest('button.sosbtn, button.safebtn');
     if (sb) { e.preventDefault(); if (sb.classList.contains('sosbtn')) raiseSos(sb); else endSos(sb); return; }
+    var cb = e.target.closest && e.target.closest('button.checkbtn, button.uncheckbtn');
+    if (cb) { e.preventDefault(); if (cb.classList.contains('checkbtn')) startCheck(cb); else stopCheck(cb); return; }
     var cp = e.target.closest && e.target.closest('button.copylink, button.sendlink');
     if (cp) {
       e.preventDefault();

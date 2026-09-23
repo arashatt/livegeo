@@ -65,6 +65,9 @@ export function defaults() {
     // the circle and never the emergency services, and each message says so
     // and points at them instead. Iran's numbers unless told otherwise.
     sosCall: process.env.SOS_CALL || '110 (police) or 115 (ambulance)',
+    // How long somebody being checked on may stand still somewhere that is
+    // not theirs before they are asked whether they are all right.
+    checkStop: Number(process.env.CHECK_STOP || 900),
   };
 }
 

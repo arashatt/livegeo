@@ -21,6 +21,7 @@ import {
 } from './zones.js';
 import { toGpx, splitAtPauses, dayOf, contentDisposition } from './gpx.js';
 import { makeLive, describeLink, LIVE_MINUTES, LIVE_EACH } from './live.js';
+import { CHECK_HOURS } from './checks.js';
 import { randomBytes, createHash } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
@@ -111,6 +112,8 @@ export function serve(positions, config, {
   live = makeLive(),
   // SOS (sos.js): { raise(id), end(id) }. Absent, the map offers none.
   sos = null,
+  // Check on me (checks.js). Absent, likewise.
+  checks = null,
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -202,6 +205,7 @@ export function serve(positions, config, {
     devices.forget(id);
     zones.forget(id);
     live.forget(id);
+    checks?.forget(id);
     for (const res of told) { try { send(res, 'forget', { id }); } catch { watchers.delete(res); } }
     // Whoever was following them by a link is not left holding an open
     // stream that would carry them again if they ever came back.
@@ -834,6 +838,10 @@ export function serve(positions, config, {
         circles: circles.enabled && Boolean(viewer.id),
         // Whether Follow me can work: yourself, with somewhere to keep links.
         live: live.enabled && Boolean(viewer.id) && viewer.via !== 'device',
+        // Likewise Check on me, and until when one is running.
+        checks: Boolean(checks && checks.enabled) && Boolean(viewer.id) && viewer.via !== 'device',
+        check: (viewer.id && checks?.get(viewer.id)?.until) || null,
+        checkStop: checks?.stopMinutes || 15,
       });
     }
 
@@ -1162,6 +1170,24 @@ export function serve(positions, config, {
         });
       }
       if (req.method === 'DELETE') return json(200, { ended: await sos.end(viewer.id) });
+      return notFound();
+    }
+
+    // Check on me, from the map: the same as /checkon and /checkoff.
+    // Yours only, and not from a watch's token.
+    if (url.pathname === '/api/check') {
+      if (!checks || !checks.enabled || !viewer.id || viewer.via === 'device') return notFound();
+      const me = viewer.id;
+      if (req.method === 'GET') return json(200, { until: checks.get(me)?.until ?? null });
+      if (req.method === 'POST') {
+        const hours = Number(url.searchParams.get('hours') || 2);
+        if (!CHECK_HOURS.includes(hours)) return json(400, { error: `for ${CHECK_HOURS.join(', ')} hours` });
+        const started = await checks.start(me, hours)
+          .catch((e) => { log.error('check:', e && e.message ? e.message : e); return { error: 'could not start checking' }; });
+        if (started.error) return json(409, { error: started.error });
+        return json(200, { until: started.check.until, circle: started.circle });
+      }
+      if (req.method === 'DELETE') return json(200, { ended: await checks.stop(me) });
       return notFound();
     }
 

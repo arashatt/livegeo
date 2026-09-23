@@ -42,6 +42,7 @@ const HELP = [
   '/invite — a link that lets one person see you',
   '/live — a link anyone can follow you on, for an hour (/live 15m, /live 4h, /live stop)',
   '/sos — tell everyone who can see you exactly where you are, for an hour; /safe ends it',
+  '/checkon — for two hours (or /checkon 1h, 4h), ask me to check on you if you stop somewhere unusual; /checkoff ends it',
   '/circle — who can see you, and whom you can see',
   '/pair — a code to connect a watch',
   '/stop — stop being shown, and delete the path held about you',
@@ -85,6 +86,16 @@ export function liveMinutes(args) {
 
 export function liveFor(minutes) {
   return minutes >= 60 ? `${minutes / 60} hour${minutes === 60 ? '' : 's'}` : `${minutes} minutes`;
+}
+
+// How long `/checkon` should run: nothing is two hours, otherwise one, two or
+// four, written `1`, `2h`, `4 hours`. Anything else is null.
+export function checkHours(args) {
+  const arg = String(args || '').trim().toLowerCase();
+  if (!arg) return 2;
+  const m = /^(\d+)\s*(h|hr|hrs|hour|hours)?$/.exec(arg);
+  const hours = m ? Number(m[1]) : NaN;
+  return [1, 2, 4].includes(hours) ? hours : null;
 }
 
 // What the person who sent an SOS is told back: who knows now, how to end it,
@@ -351,6 +362,39 @@ export async function connect(config, {
         await say(command.chat, ended
           ? 'Glad you are safe. Everybody who was told has been told this too, and your private places hide you again.'
           : 'You have no SOS running.');
+        return;
+      }
+      if (command.name === '/checkon') {
+        const id = String(command.from.id);
+        if (!circle?.check) { await say(command.chat, 'Checking on you needs the database this service is running without.'); return; }
+        const hours = checkHours(command.args);
+        if (!hours) { await say(command.chat, 'A check runs for one, two or four hours: /checkon 1h, /checkon, /checkon 4h.'); return; }
+        const started = await circle.check.start(id, hours).catch(() => ({ error: 'Could not start checking on you.' }));
+        if (started.error) { await say(command.chat, started.error); return; }
+        const n = started.circle;
+        await say(command.chat, [
+          `I will check on you for the next ${hours === 1 ? 'hour' : `${hours} hours`}.`,
+          `If you stop for ${started.stopMinutes || 15} minutes somewhere that is not one of your places, or your live location stops,`
+            + ' I will ask whether you are all right.',
+          n ? `If you do not answer within 5 minutes, I will tell the ${n === 1 ? 'person' : `${n} people`} who can see you where you are.`
+            : 'Nobody can see you yet, so nobody would be told — /invite somebody first.',
+          '',
+          '/ok answers me. /checkoff ends it.',
+        ].join('\n'));
+        return;
+      }
+      if (command.name === '/checkoff') {
+        const ended = circle?.check ? await circle.check.stop(String(command.from.id)).catch(() => false) : false;
+        await say(command.chat, ended ? 'Checking on you is off.' : 'No check was running.');
+        return;
+      }
+      if (command.name === '/ok') {
+        const said = circle?.check ? await circle.check.ok(String(command.from.id)).catch(() => 'none') : 'none';
+        await say(command.chat, {
+          cleared: 'Good. I am still checking on you.',
+          ended: 'Good. Your live location has stopped, so checking on you has ended.',
+          none: 'Nothing to answer: no check is running. /checkon starts one.',
+        }[said] || 'Good.');
         return;
       }
       if (command.name === '/pair') {

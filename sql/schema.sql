@@ -139,3 +139,15 @@ CREATE TABLE IF NOT EXISTS live_links (
   expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS live_links_person_idx ON live_links (person);
+
+-- Somebody who asked to be checked on (checks.js): until when, and how far the
+-- conversation about a stop has got — asked, told, answered. Kept so that a
+-- restart does not silently end a check somebody is relying on.
+CREATE TABLE IF NOT EXISTS checks (
+  person     text PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  started_at timestamptz NOT NULL,
+  ends_at    timestamptz NOT NULL,
+  asked_at   timestamptz,
+  told_at    timestamptz,
+  ok_at      timestamptz
+);

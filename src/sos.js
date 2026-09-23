@@ -30,6 +30,14 @@ export function sosMessage({ who, place = '', minutes = null, located = false, u
   ].filter(Boolean).join('\n');
 }
 
+// Everybody who can see somebody: whoever they let, and the admins, who see
+// everyone. Not them — they know. Who an SOS goes to, and who is told when a
+// check on somebody goes unanswered.
+export const everyoneWhoSees = (circles, admins, id) => [...new Set([
+  ...circles.circleOf(id).canSeeMe.map((u) => String(u.id)),
+  ...admins.map(String),
+])].filter((x) => x !== String(id));
+
 export function makeSos({
   live, circles, positions,
   admins = [],
@@ -54,13 +62,7 @@ export function makeSos({
   const running = new Set();
 
   const nameOf = (id) => circles.user(id)?.name || positions.get(id)?.name || 'Somebody';
-
-  // Everybody who can see them: whoever they let, and the admins, who see
-  // everyone. Not them — they know.
-  const everyoneWhoSees = (id) => [...new Set([
-    ...circles.circleOf(id).canSeeMe.map((u) => String(u.id)),
-    ...admins.map(String),
-  ])].filter((x) => x !== String(id));
+  const whoSees = (id) => everyoneWhoSees(circles, admins, id);
 
   async function tell(ids, text, point = null) {
     let told = 0;
@@ -92,7 +94,7 @@ export function makeSos({
       const located = Boolean(p && p.latitude !== null && p.latitude !== undefined);
       const place = located && placeOf ? await placeOf(p.latitude, p.longitude).catch(() => '') : '';
       const url = publicUrl ? `${publicUrl}/live/${link.token}` : '';
-      const ids = everyoneWhoSees(key);
+      const ids = whoSees(key);
       const text = sosMessage({
         who: nameOf(key), place, located, url, call,
         minutes: located ? Math.round((clock() / 1000 - p.at) / 60) : null,
@@ -112,7 +114,7 @@ export function makeSos({
       if (!link) return false;
       await stopLink(link, 'safe');
       resend(key);
-      await tell(everyoneWhoSees(key), `${nameOf(key)} is safe now. Their SOS is over, and their private places hide them again.`);
+      await tell(whoSees(key), `${nameOf(key)} is safe now. Their SOS is over, and their private places hide them again.`);
       log.info('sos: somebody is safe');
       return true;
     },

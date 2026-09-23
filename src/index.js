@@ -20,6 +20,7 @@ import { makeDevices, makeCodes } from './devices.js';
 import { makeZones } from './zones.js';
 import { makeLive, LIVE_EACH } from './live.js';
 import { makeSos } from './sos.js';
+import { makeChecks } from './checks.js';
 
 const config = load();
 const positions = new Positions({
@@ -95,12 +96,26 @@ const sos = makeSos({
 });
 if (sos.load()) console.log('sos: an SOS is still running from before the restart');
 
+// Check on me (checks.js): a stop that should not be happening, noticed.
+const checks = makeChecks({
+  geo, circles, positions, zones,
+  admins: config.viewers,
+  call: config.sosCall,
+  placeOf: (lat, lon) => geo.placeOf(lat, lon),
+  fencesAt: (lat, lon) => geo.fencesAt(lat, lon),
+  notify: (to, text) => (notify ? notify(to, text) : false),
+  locate: (to, lat, lon) => (locate ? locate(to, lat, lon) : false),
+  stop: config.checkStop,
+});
+const checking = await checks.load().catch((e) => { console.error('check:', e.message); return 0; });
+if (checking) console.log(`check: still checking on ${checking} ${checking === 1 ? 'person' : 'people'}`);
+
 // Watches every position against every fence. Pure decisions, kept here so
 // the state survives for as long as the process does.
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
 const { publish, publishFence, forget, setBot, grant, revoke, stopLink, resend } = serve(positions, config, {
-  directory, geo, links, circles, makeInvite, devices, codes, zones, live, sos,
+  directory, geo, links, circles, makeInvite, devices, codes, zones, live, sos, checks,
   onFenceDeleted: (id) => fences.dropFence(id),
   onIngest: (fixes) => ingest(fixes),
 });
@@ -258,6 +273,12 @@ const circle = circles.enabled ? {
     raise: (id) => sos.raise(id),
     end: (id) => sos.end(id),
   },
+  // /checkon, /checkoff and /ok.
+  check: checks.enabled ? {
+    start: (id, hours) => checks.start(id, hours),
+    stop: (id) => checks.stop(id),
+    ok: (id) => checks.ok(id),
+  } : null,
 } : null;
 
 const telegram = config.ingest === 'bot'
@@ -273,6 +294,8 @@ locate = telegram.locate || null;
 // An SOS lasts an hour. One that runs out by itself is noticed here, open
 // maps are put right, and its person is asked whether they still need help.
 setInterval(() => { sos.sweep().catch((e) => console.error('sos:', e && e.message ? e.message : e)); }, 30_000);
+// And every check, once a minute: asked, told, moved on, or over.
+setInterval(() => { checks.sweep().catch((e) => console.error('check:', e && e.message ? e.message : e)); }, 60_000);
 // So the sign-in page can say which bot to open. Only the bot knows its own
 // username, and it only knows it once connected.
 if (telegram.me?.username) setBot(telegram.me.username);

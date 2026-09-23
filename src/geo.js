@@ -527,6 +527,47 @@ export function makeGeo({ url, log = console } = {}) {
       return res.rowCount;
     },
 
+    // -------------------------------------------------------------- checks
+
+    async listChecks() {
+      if (!pool) return [];
+      const { rows } = await pool.query(
+        `SELECT person,
+                extract(epoch FROM started_at)::bigint AS started,
+                extract(epoch FROM ends_at)::bigint AS ends,
+                extract(epoch FROM asked_at)::bigint AS asked,
+                extract(epoch FROM told_at)::bigint AS told,
+                extract(epoch FROM ok_at)::bigint AS ok
+           FROM checks
+          WHERE ends_at > now()`,
+      );
+      const at = (v) => (v === null ? null : Number(v));
+      return rows.map((r) => ({
+        person: String(r.person), startedAt: Number(r.started), until: Number(r.ends),
+        askedAt: at(r.asked), toldAt: at(r.told), okAt: at(r.ok),
+      }));
+    },
+
+    async saveCheck({ person, startedAt, until, askedAt = null, toldAt = null, okAt = null }) {
+      await pool.query(
+        `INSERT INTO checks (person, started_at, ends_at, asked_at, told_at, ok_at)
+         VALUES ($1, to_timestamp($2::double precision), to_timestamp($3::double precision),
+                 to_timestamp($4::double precision), to_timestamp($5::double precision),
+                 to_timestamp($6::double precision))
+         ON CONFLICT (person) DO UPDATE
+           SET started_at = EXCLUDED.started_at, ends_at = EXCLUDED.ends_at,
+               asked_at = EXCLUDED.asked_at, told_at = EXCLUDED.told_at, ok_at = EXCLUDED.ok_at`,
+        [String(person), startedAt, until, askedAt, toldAt, okAt],
+      );
+      return true;
+    },
+
+    async deleteCheck(person) {
+      if (!pool) return 0;
+      const res = await pool.query('DELETE FROM checks WHERE person = $1', [String(person)]);
+      return res.rowCount;
+    },
+
     async historyOf(person, { limit = 500, since = null, until = null } = {}) {
       if (!pool) return [];
       const { rows } = await pool.query(
@@ -557,12 +598,13 @@ export function makeGeo({ url, log = console } = {}) {
               ev   AS (DELETE FROM fence_events WHERE person = $1 RETURNING 1),
               sh   AS (DELETE FROM shares WHERE person = $1 RETURNING 1),
               ll   AS (DELETE FROM live_links WHERE person = $1 RETURNING 1),
+              ck   AS (DELETE FROM checks WHERE person = $1 RETURNING 1),
               -- Grants, invites, devices, their fences and private places
               -- go with the user row, on the foreign keys' cascade.
               us   AS (DELETE FROM users WHERE id = $1 RETURNING 1)
          SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM ev)
               + (SELECT count(*) FROM sh) + (SELECT count(*) FROM ll)
-              + (SELECT count(*) FROM us) AS n`,
+              + (SELECT count(*) FROM ck) + (SELECT count(*) FROM us) AS n`,
         [String(person)],
       );
       return Number(rows[0]?.n ?? 0);

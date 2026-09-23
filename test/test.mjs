@@ -15,9 +15,10 @@ import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
 import worker from '../worker/src/index.js';
 import { fromUpdate } from '../src/positions.js';
-import { connect as connectBot, commandIn, liveMinutes, liveFor, sosReply } from '../src/bot.js';
+import { connect as connectBot, commandIn, liveMinutes, liveFor, sosReply, checkHours } from '../src/bot.js';
 import { makeLive } from '../src/live.js';
 import { makeSos, sosMessage } from '../src/sos.js';
+import { makeChecks, decide, checkAsk, checkTell } from '../src/checks.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
@@ -1149,6 +1150,7 @@ head('the leak matrix: every route, as every kind of viewer');
   }, {
     geo, circles, devices, codes, links: makeLinks(), log: { info() {}, error() {} }, live: makeLive({ geo }),
     sos: { raise: async () => ({ link: { token: 'x', expiresAt: 0 }, told: 0, circle: 0, call: '' }), end: async () => false },
+    checks: { enabled: true, get: () => null, start: async () => ({ check: { until: 0 }, circle: 0 }), stop: async () => false, forget() {} },
     onIngest: async (fixes, device) => { ingested.push(...fixes.map((f) => ({ ...f, device: device.id }))); },
   });
   await new Promise((r) => server.once('listening', r));
@@ -1177,7 +1179,7 @@ head('the leak matrix: every route, as every kind of viewer');
     signedIn: ['/', '/index.html', '/api/me', '/api/place'],
     filtered: ['/api/positions', '/api/stream'],
     canSee: ['/api/history/', '/api/person/', '/api/photo/'],
-    selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/', '/api/live', '/api/live/', '/api/sos'],
+    selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/', '/api/live', '/api/live/', '/api/sos', '/api/check'],
     owned: ['/api/fences', '/api/fences/'],
     ownCircle: ['/api/circle', '/api/circle/', '/api/circle/invite', '/api/circle/viewer/', '/api/circle/owner/'],
     pairing: ['/api/devices/pair'],
@@ -1300,6 +1302,7 @@ head('the leak matrix: every route, as every kind of viewer');
     ['hand out a live link to its owner', '/api/live?minutes=60', 'POST'],
     ['list its owner’s live links', '/api/live', 'GET'],
     ['raise an SOS', '/api/sos', 'POST'],
+    ['start a check on its owner', '/api/check?hours=2', 'POST'],
   ]) {
     t(`a watch cannot ${what}`, (await watch(path, method)).status === 404, path);
   }
@@ -2141,6 +2144,144 @@ head('what an SOS says');
   t('with nobody to tell, it hands over the link',
     /Nobody can see you yet[\s\S]*https:\/\/m\/live\/x/.test(sosReply({ told: 0, circle: 0, url: 'https://m/live/x', call: '110' })));
   t('and always, whom to call', /This called nobody\. If you are in danger, call 110\./.test(sosReply({ told: 0, circle: 0, call: '110' })));
+}
+
+head('check on me: when to ask, and when to tell');
+{
+  const base = { now: 10_000, until: 20_000, startedAt: 5_000, live: true, known: false };
+  t('moving is nothing', decide({ ...base, lastMove: 9_950 }) === null);
+  t('stopped a quarter of an hour somewhere unusual: ask', decide({ ...base, lastMove: 9_100 }) === 'ask');
+  t('not a minute sooner', decide({ ...base, lastMove: 9_101 }) === null);
+  t('stopped somewhere of their own: nothing', decide({ ...base, lastMove: 1_000, known: true }) === null);
+  t('switched on while already sitting still: the quarter hour counts from then',
+    decide({ ...base, lastMove: 1_000, startedAt: 9_500 }) === null);
+  t('an /ok counts as a sign all is well', decide({ ...base, lastMove: 1_000, okAt: 9_500 }) === null);
+  t('asked, and waiting for an answer', decide({ ...base, lastMove: 1_000, askedAt: 9_800 }) === null);
+  t('asked five minutes ago with no answer: tell', decide({ ...base, lastMove: 1_000, askedAt: 9_700 }) === 'tell');
+  t('and only once', decide({ ...base, lastMove: 1_000, askedAt: 9_000, toldAt: 9_300 }) === null);
+  t('asked, then moved on', decide({ ...base, lastMove: 9_900, askedAt: 9_800 }) === 'moved');
+  t('live location gone somewhere unusual: ask', decide({ ...base, live: false, lastMove: 9_990 }) === 'ask');
+  t('live location gone somewhere of their own: they got home', decide({ ...base, live: false, known: true }) === 'home');
+  t('and the check runs out when it says', decide({ ...base, now: 20_000, lastMove: 1_000 }) === 'over');
+
+  t('the question says how long, where, and what happens next',
+    checkAsk({ minutes: 15, place: 'Vakilabad Blvd' }) === 'You have been stopped for 15 min near Vakilabad Blvd. Are you all right? '
+      + 'Send /ok — otherwise in 5 minutes I will tell the people who can see you where you are.');
+  t('or that the live location stopped', /^Your live location stopped near X while I was checking on you\./.test(checkAsk({ place: 'X', stoppedSharing: true })));
+  const told = checkTell({ who: 'Grace', minutes: 20, place: 'Vakilabad Blvd', call: '110' });
+  t('the circle is told who, how long and where', /^⚠️ Grace has been stopped for 20 min near Vakilabad Blvd, while they had asked to be checked on/.test(told));
+  t('that it may be nothing, and whom to call if not', /It may be nothing\..*called nobody; if they may be in danger, call 110\./.test(told));
+  t('without a place name, the pin', /Where: the pin below\./.test(checkTell({ who: 'G', minutes: 20, call: '110' })));
+  t('/checkon takes one, two or four hours', checkHours('') === 2 && checkHours('1h') === 1 && checkHours('4 hours') === 4 && checkHours('3') === null);
+}
+
+head('check on me, as it happens');
+{
+  let T = 1_000_000;
+  const saved = new Map();
+  const db = {
+    users: [{ id: '1', name: 'Admin', username: '' }, { id: '2', name: 'Ada', username: '' },
+      { id: '3', name: 'Grace', username: '' }, { id: '4', name: 'Hal', username: '' }],
+    grants: [{ owner: '3', viewer: '2' }], zones: [], next: 1,
+  };
+  const geo = {
+    enabled: () => true,
+    listUsers: async () => db.users,
+    listGrants: async () => db.grants,
+    listZones: async () => db.zones,
+    createZone: async (z) => { const id = db.next++; db.zones.push({ id, ...z }); return id; },
+    listChecks: async () => [...saved.values()],
+    saveCheck: async (c) => { saved.set(c.person, { ...c }); return true; },
+    deleteCheck: async (person) => (saved.delete(person) ? 1 : 0),
+  };
+  const circles = makeCircles({ geo, admins: ['1'] });
+  await circles.load();
+  const zones = makeZones({ geo, random: () => 0 });
+  await zones.load();
+  await zones.create({ owner: '3', name: 'Home', latitude: 36.30, longitude: 59.6, radius: 300 });
+  const store = new Positions({ minMove: 1 });
+  const sent = [];
+  const checks = makeChecks({
+    geo, circles, positions: store, zones, admins: ['1'], call: '110',
+    placeOf: async () => 'Vakilabad Blvd',
+    // Grace's own fence round her office, at 36.35.
+    fencesAt: async (lat) => [{ fence: 1, name: 'Office', owner: '3', inside: Math.abs(lat - 36.35) < 0.002 }],
+    notify: async (to, text) => { sent.push({ to: String(to), text }); return true; },
+    locate: async (to, latitude, longitude) => { sent.push({ to: String(to), pin: [latitude, longitude] }); return true; },
+    clock: () => T * 1000,
+    log: { info() {}, error() {} },
+  });
+  const at = (lat, extra = {}) => store.update({ id: '3', name: 'Grace', latitude: lat, longitude: 59.6, accuracy: 5, at: T, liveUntil: T + 6 * 3600, ...extra });
+  const minutes = async (n) => { for (let i = 0; i < n; i++) { T += 60; await checks.sweep(); } };
+  const to = (who) => sent.filter((m) => m.to === who);
+  const lastTo = (who) => to(who).filter((m) => m.text).at(-1)?.text || '';
+
+  store.update({ id: '4', name: 'Hal', latitude: 36.5, longitude: 59.6, accuracy: 5, at: T, liveUntil: null });
+  t('a check needs a live location to watch', Boolean((await checks.start('4', 2)).error));
+
+  at(36.33); T += 30; at(36.32);   // walking, then standing on a street corner
+  const started = await checks.start('3', 4);
+  t('Grace starts one, and hears how many would be told', started.check.until === T + 4 * 3600 && started.circle === 2, started);
+  t('it is written down, so a restart keeps it', saved.has('3'));
+
+  await minutes(14);
+  t('fourteen minutes standing still is nothing yet', sent.length === 0);
+  await minutes(1);
+  t('at fifteen she is asked, with where', /^You have been stopped for 15 min near Vakilabad Blvd\. Are you all right\?/.test(lastTo('3')), lastTo('3'));
+  t('and nobody else is told anything', sent.every((m) => m.to === '3'));
+  await minutes(4);
+  t('four minutes without an answer: still only her', sent.every((m) => m.to === '3'));
+  await minutes(1);
+  t('five: Ada and the admin are told, with where', /^⚠️ Grace has been stopped for 20 min near Vakilabad Blvd/.test(lastTo('2')) && /Grace has been stopped/.test(lastTo('1')));
+  t('and a pin where she is', to('2').some((m) => m.pin && m.pin[0] === 36.32));
+  t('Hal is not', to('4').length === 0);
+  const count = sent.length;
+  await minutes(3);
+  t('told once, not every minute', sent.length === count);
+
+  at(36.325);   // she moves on
+  await minutes(1);
+  t('moving again is passed on to those who were told', /Grace is moving again/.test(lastTo('2')));
+
+  await minutes(15);
+  t('stopped again: asked again', /stopped for 15 min/.test(lastTo('3')));
+  t('/ok clears it', (await checks.ok('3')) === 'cleared');
+  const quietFrom = sent.length;
+  await minutes(10);
+  t('and nobody is told', sent.length === quietFrom, sent.slice(quietFrom));
+  await minutes(5);
+  t('the quarter of an hour starts again from the /ok', /stopped for 15 min/.test(lastTo('3')));
+  await checks.ok('3');
+
+  // Somewhere of her own: the office, and home.
+  T += 60; at(36.35);
+  const before = sent.length;
+  await minutes(40);
+  t('standing still at her own office is not unusual', sent.length === before);
+  T += 60; at(36.30);
+  await minutes(40);
+  t('nor at home, inside her private place', sent.length === before);
+  T += 60; at(36.30, { stopped: true, liveUntil: null });
+  await minutes(1);
+  t('her live location ending at home ends the check, quietly', !checks.get('3') && /somewhere of your own/.test(lastTo('3')));
+  t('without telling anybody where home is', !sent.slice(before).some((m) => m.to !== '3'));
+
+  // Her live location ending in the street is a different thing.
+  T += 60; at(36.32);
+  await checks.start('3', 1);
+  T += 60; at(36.32, { stopped: true, liveUntil: null });
+  await minutes(1);
+  t('a live location that stops mid-check gets asked about', /^Your live location stopped near Vakilabad Blvd/.test(lastTo('3')));
+  await minutes(5);
+  t('and, unanswered, told', /^⚠️ Grace’s live location stopped \d+ min ago near Vakilabad Blvd/.test(lastTo('2')), lastTo('2'));
+  t('an /ok then says so to them, and ends the check', (await checks.ok('3')) === 'ended' && /Grace says they are all right/.test(lastTo('2')) && !checks.get('3'));
+
+  // It ends when it said it would.
+  T += 60; at(36.32);
+  await checks.start('3', 1);
+  await minutes(61);
+  t('a check runs out on time', !checks.get('3') && /Checking on you has ended/.test(lastTo('3')));
+  t('/checkoff with none running says so', (await checks.stop('3')) === false);
 }
 
 head('what /live takes');
