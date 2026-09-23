@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Live locations</title>
+<title>LiveGeo — Mashhad</title>
 <!-- Served from this host. Nothing on this page reaches a third party: on a
      network that filters things, a CDN is one more way for the map to vanish. -->
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
@@ -147,73 +147,241 @@
   header .spacer{flex:1}
   header a.ghost{text-decoration:none;color:inherit}
 
-  /* Mashhad Vice City map chrome. The basemap stays OSM-derived and local;
-     this layer changes presentation without weakening any privacy rules. */
-  .vice-map-shell{position:relative;min-width:0;min-height:0;overflow:hidden;background:#0d5662}
-  .vice-map-shell #map{position:absolute;inset:0}
-  .vice-map-shell::after{
-    content:"";pointer-events:none;position:absolute;inset:0;z-index:410;
-    background:
-      radial-gradient(circle at 72% 18%,rgba(255,69,191,.12),transparent 34%),
-      radial-gradient(circle at 12% 82%,rgba(45,210,210,.11),transparent 30%);
-    mix-blend-mode:screen
+  /* Mature cartographic direction: quiet chrome, strong map hierarchy. */
+  :root{
+    --ink:#f1ede7;
+    --paper:#0b1419;
+    --quiet:#92a0a5;
+    --hairline:rgba(255,255,255,.11);
+    --panel:rgba(7,14,18,.90);
+    --panel-solid:#0c171d;
+    --panel-hover:#13242c;
+    --map-bg:#0d1d24;
+    --live:#40e38f;
+    --stale:#78868c;
+    --me:#4cb5ff;
+    --me-stale:#7499b4;
+    --accent:#d85691;
+    --danger:#ff5a62;
   }
+
+  body{
+    color:var(--ink);
+    background:var(--paper);
+    font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+
+  header{
+    min-height:52px;
+    padding:.55rem .8rem;
+    gap:.55rem;
+    background:rgba(6,13,17,.97);
+    border-bottom:1px solid var(--hairline);
+    box-shadow:0 1px 0 rgba(0,0,0,.35);
+    z-index:1200;
+  }
+
+  .brand{
+    display:flex;
+    align-items:baseline;
+    gap:.65rem;
+    min-width:max-content;
+  }
+  .brand h1{
+    font-size:.78rem;
+    font-weight:800;
+    letter-spacing:.18em;
+    color:#f7f4ef;
+  }
+  .brand .city{
+    font-size:.72rem;
+    font-weight:650;
+    letter-spacing:.12em;
+    color:var(--quiet);
+  }
+  .count{font-size:.75rem;color:var(--quiet)}
+
+  .ghost{
+    min-height:30px;
+    padding:.24rem .58rem;
+    border:1px solid var(--hairline);
+    border-radius:6px;
+    background:rgba(255,255,255,.025);
+    color:#aeb9bc;
+    font-size:.76rem;
+    transition:background .15s ease,border-color .15s ease,color .15s ease;
+  }
+  .ghost:hover{
+    background:rgba(255,255,255,.06);
+    border-color:rgba(255,255,255,.22);
+    color:var(--ink);
+  }
+
+  .conn{
+    margin-left:.2rem;
+    padding-left:.35rem;
+    color:var(--quiet);
+    font-size:.74rem;
+  }
+  .conn i{width:.42rem;height:.42rem;box-shadow:0 0 0 3px rgba(255,255,255,.035)}
+  .conn.up i{background:var(--live);box-shadow:0 0 0 3px rgba(64,227,143,.10)}
+
+  main{
+    grid-template-columns:minmax(0,1fr) 17.5rem;
+    background:var(--map-bg);
+  }
+
+  .map-shell{
+    position:relative;
+    min-width:0;
+    min-height:0;
+    overflow:hidden;
+    background:var(--map-bg);
+  }
+  .map-shell #map{position:absolute;inset:0;background:var(--map-bg)}
+
+  .map-context{
+    position:absolute;
+    top:1rem;
+    left:1rem;
+    z-index:760;
+    display:grid;
+    gap:.18rem;
+    padding:.62rem .7rem .58rem;
+    background:rgba(6,14,18,.76);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:6px;
+    backdrop-filter:blur(8px);
+    pointer-events:none;
+  }
+  .map-context .map-city{
+    font-family:"Arial Narrow","Helvetica Neue Condensed",ui-sans-serif,sans-serif;
+    font-size:.92rem;
+    font-weight:800;
+    letter-spacing:.16em;
+    color:#f5f1ec;
+  }
+  .map-context .map-coordinates{
+    font-size:.67rem;
+    letter-spacing:.035em;
+    color:#90a0a5;
+    font-variant-numeric:tabular-nums;
+  }
+
+  aside{
+    background:var(--panel-solid);
+    border-left:1px solid var(--hairline);
+    padding:.55rem;
+    gap:.35rem;
+  }
+
+  .person{
+    border:1px solid rgba(255,255,255,.085);
+    border-radius:6px;
+    padding:.58rem .62rem;
+    background:rgba(255,255,255,.018);
+    transition:background .15s ease,border-color .15s ease,opacity .15s ease;
+  }
+  .person:hover{
+    background:rgba(255,255,255,.045);
+    border-color:rgba(255,255,255,.18);
+  }
+  .person.lit{
+    background:rgba(255,255,255,.065);
+    border-color:rgba(255,255,255,.28);
+  }
+  .person .who{font-size:.82rem;letter-spacing:.005em}
+  .person .meta{font-size:.72rem;color:#849398}
+  .person .you{
+    border-radius:4px;
+    padding:.02rem .32rem;
+    font-size:.61rem;
+    letter-spacing:.04em;
+  }
+  .person.sos{
+    border-color:rgba(255,90,98,.72);
+    box-shadow:inset 2px 0 0 var(--danger);
+  }
+
+  #circle{
+    top:3.6rem;
+    right:.8rem;
+    width:min(22rem,calc(100vw - 1.6rem));
+    background:var(--panel);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:7px;
+    box-shadow:0 14px 42px rgba(0,0,0,.42);
+    backdrop-filter:blur(14px);
+  }
+  #circle h2{color:#9eaaae}
+
   .leaflet-tile-pane{
-    filter:sepia(.2) saturate(1.7) hue-rotate(132deg) brightness(.73) contrast(1.16);
-    transition:filter .18s ease
+    filter:invert(.94) hue-rotate(154deg) saturate(.62) brightness(.62) contrast(1.12);
+    transition:filter .18s ease;
   }
   body.spotlight .leaflet-tile-pane{
-    filter:sepia(.15) saturate(.9) hue-rotate(132deg) brightness(.58) contrast(1.2) grayscale(.45)
+    filter:invert(.94) hue-rotate(154deg) saturate(.45) brightness(.48) contrast(1.12) grayscale(.38) opacity(.72);
   }
-  .vice-logo{
-    position:absolute;left:50%;top:1.1rem;transform:translateX(-50%);z-index:800;
-    text-align:center;pointer-events:none;filter:drop-shadow(0 4px 0 #071528) drop-shadow(0 8px 14px rgba(0,0,0,.35))
+
+  .leaflet-control-zoom a{
+    color:#d6dddf;
+    background:rgba(6,14,18,.90);
+    border-color:rgba(255,255,255,.10);
   }
-  .vice-logo .city{
-    display:block;font:900 clamp(2rem,5vw,4.7rem)/.8 Impact,Haettenschweiler,"Arial Black",sans-serif;
-    letter-spacing:.045em;text-transform:uppercase;color:#f7f8ff;
-    -webkit-text-stroke:2px #071528;text-shadow:0 1px 0 #f2d9ff
+  .leaflet-control-zoom a:hover{background:#13242c;color:#fff}
+  .leaflet-control-attribution{
+    background:rgba(6,14,18,.68)!important;
+    color:#8e9b9f;
+    font-size:10px;
   }
-  .vice-logo .vice{
-    display:block;margin-top:.22rem;transform:rotate(-7deg);
-    font:italic 800 clamp(1.3rem,3.5vw,3rem)/.9 "Trebuchet MS","Segoe UI",sans-serif;
-    letter-spacing:.02em;color:#ff50c9;-webkit-text-stroke:1px #38134b;text-shadow:0 2px 0 #7c1fa8
+  .leaflet-control-attribution a{color:#b9c5c8}
+
+  .leaflet-control-scale{margin:0 0 17px 17px}
+  .leaflet-control-scale-line{
+    min-width:74px;
+    border:0;
+    border-bottom:2px solid rgba(245,241,236,.92);
+    background:transparent;
+    color:#f5f1ec;
+    padding:0 4px 4px;
+    font:600 10px/1 ui-sans-serif,system-ui,sans-serif;
+    text-align:right;
+    text-shadow:0 1px 3px rgba(0,0,0,.9);
+    box-shadow:none;
   }
-  .vice-scale{
-    position:absolute;left:1.1rem;top:1rem;z-index:790;color:#fff;pointer-events:none;
-    font:600 .72rem/1.2 ui-sans-serif,system-ui,sans-serif;text-shadow:0 1px 2px #00131a
+
+  .leaflet-popup-content-wrapper,
+  .leaflet-popup-tip{
+    background:rgba(8,16,21,.96);
+    color:var(--ink);
+    box-shadow:0 12px 28px rgba(0,0,0,.42);
   }
-  .vice-scale-labels{display:flex;justify-content:space-between;width:205px;margin-bottom:.25rem}
-  .vice-scale-line{width:205px;border-top:2px solid #fff;position:relative}
-  .vice-scale-line::before,.vice-scale-line::after,.vice-scale-line span{
-    content:"";position:absolute;top:-5px;width:2px;height:10px;background:#fff
+  .leaflet-popup-content-wrapper{
+    border:1px solid rgba(255,255,255,.11);
+    border-radius:7px;
   }
-  .vice-scale-line::before{left:0}.vice-scale-line::after{right:0}.vice-scale-line span{left:50%}
-  .vice-legend{
-    position:absolute;left:1rem;top:5.6rem;z-index:790;width:132px;padding:.7rem .72rem;
-    background:rgba(4,48,66,.94);border:1px solid rgba(0,0,0,.45);border-radius:9px;
-    color:#f8f8ff;box-shadow:0 7px 18px rgba(0,0,0,.28);font:600 .68rem/1.32 ui-sans-serif,system-ui,sans-serif
-  }
-  .vice-legend-row{display:flex;align-items:center;gap:.48rem;margin:.28rem 0;white-space:nowrap}
-  .vice-line{width:24px;height:0;border-top:3px solid #ff6cab;flex:none}
-  .vice-line.main{border-color:#ff51d0}.vice-line.minor{border-color:#efeff7;border-top-width:2px}
-  .vice-line.highway{border-color:#ff83df;border-top-style:dashed}
-  .vice-line.rail{border-color:#b8bdd1;border-top-style:dashed;border-top-width:2px}
-  .vice-box{width:16px;height:11px;flex:none;border:1px solid rgba(255,255,255,.18)}
-  .vice-box.urban{background:#a9b9c8}.vice-box.green{background:#6ac376}
-  .vice-box.mountain{background:#bc956d}.vice-box.water{background:#37b7dc}
-  .vice-symbol{width:18px;flex:none;text-align:center;color:#fff;font-size:.83rem}
+  .leaflet-popup-close-button{color:#9aa8ac!important}
+
+  .card .cname{font-size:.86rem}
+  .card .chandle,.card .cid{color:#87969b}
+
   @media (max-width:760px){
-    .vice-logo{top:.75rem}.vice-logo .city{font-size:2rem}.vice-logo .vice{font-size:1.25rem}
-    .vice-scale{left:.75rem;top:.65rem;transform:scale(.78);transform-origin:top left}
-    .vice-legend{left:.65rem;top:4.6rem;transform:scale(.88);transform-origin:top left}
+    header{padding:.45rem .55rem}
+    .brand{gap:.45rem}
+    .brand .city{display:none}
+    main{grid-template-columns:1fr;grid-template-rows:1fr auto}
+    aside{max-height:34vh}
+    .map-context{top:.7rem;left:.7rem;padding:.5rem .58rem}
+    .map-context .map-city{font-size:.8rem}
+    .map-context .map-coordinates{font-size:.61rem}
+    .leaflet-control-scale{margin-left:10px;margin-bottom:10px}
   }
 
 </style>
 </head>
 <body>
 <header>
-  <h1>Live locations</h1>
+  <div class="brand"><h1>LIVEGEO</h1><span class="city">MASHHAD</span></div>
   <span class="count" id="count"></span>
   <span class="hint" id="hint" hidden></span>
   <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
@@ -225,33 +393,11 @@
 </header>
 <div id="circle" hidden></div>
 <main>
-  <div class="vice-map-shell">
+  <div class="map-shell">
     <div id="map"></div>
-    <div class="vice-logo" aria-hidden="true">
-      <span class="city">Mashhad</span>
-      <span class="vice">Vice City</span>
-    </div>
-    <div class="vice-scale" aria-hidden="true">
-      <div class="vice-scale-labels"><span>0</span><span>2.5</span><span>5</span><span>10 km</span></div>
-      <div class="vice-scale-line"><span></span></div>
-    </div>
-    <div class="vice-legend" aria-label="Map legend">
-      <div class="vice-legend-row"><span class="vice-line"></span><span>Major Road</span></div>
-      <div class="vice-legend-row"><span class="vice-line main"></span><span>Main Road</span></div>
-      <div class="vice-legend-row"><span class="vice-line minor"></span><span>Minor Road</span></div>
-      <div class="vice-legend-row"><span class="vice-line highway"></span><span>Highway</span></div>
-      <div class="vice-legend-row"><span class="vice-line rail"></span><span>Railway</span></div>
-      <div class="vice-legend-row"><span class="vice-box urban"></span><span>Urban Area</span></div>
-      <div class="vice-legend-row"><span class="vice-box green"></span><span>Green Space / Park</span></div>
-      <div class="vice-legend-row"><span class="vice-box mountain"></span><span>Mountain</span></div>
-      <div class="vice-legend-row"><span class="vice-box water"></span><span>Water</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">✈</span><span>Airport</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">▣</span><span>Train Station</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">▰</span><span>Bus Terminal</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">✚</span><span>Hospital</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">◆</span><span>University</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">♜</span><span>Religious Site</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">★</span><span>Landmark</span></div>
+    <div class="map-context" aria-hidden="true">
+      <span class="map-city">MASHHAD</span>
+      <span class="map-coordinates">36.2605° N · 59.6168° E</span>
     </div>
   </div>
   <aside id="list"><p class="empty">Nobody is sharing a location yet.</p></aside>
@@ -279,6 +425,15 @@
   L.tileLayer('/tiles/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+
+  // A real geographic scale. Leaflet recomputes this from zoom and latitude,
+  // so the number always corresponds to the map instead of being decorative.
+  L.control.scale({
+    position: 'bottomleft',
+    metric: true,
+    imperial: false,
+    maxWidth: 180
   }).addTo(map);
 
   // How a person is drawn — the blur over somebody in a private place, the
