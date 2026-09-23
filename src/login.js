@@ -139,6 +139,15 @@ export function makeLinks({ now = () => Date.now(), life = LINK_LIFE } = {}) {
       out.set(token, { id: String(id), expires: now() + life * 1000 });
       return token;
     },
+    // Whether a link is still good, without using it up. Opening a link is
+    // not using it: a chat app fetches every link it shows to build a
+    // preview, and a preview that spent the link left nothing for the person
+    // who tapped it (see the /auth/ route in server.js).
+    peek(token) {
+      sweep();
+      if (typeof token !== 'string' || !token) return null;
+      return out.get(token)?.id ?? null;
+    },
     // Single use. A link in a chat history is a link somebody else can read.
     redeem(token) {
       sweep();

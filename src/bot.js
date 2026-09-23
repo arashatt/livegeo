@@ -243,8 +243,8 @@ export async function connect(config, {
   let running = true;
   let inFlight = null;
 
-  const say = (chat, text) =>
-    api.call('sendMessage', { chat_id: chat, text, disable_notification: true })
+  const say = (chat, text, extra = {}) =>
+    api.call('sendMessage', { chat_id: chat, text, disable_notification: true, ...extra })
       .catch((e) => log.error('bot: cannot reply —', e.message));
 
   const whoIs = (from) => ({
@@ -417,9 +417,12 @@ export async function connect(config, {
         // told no, rather than being given a link that fails when they open
         // it; somebody on it who cannot be sent anywhere is told why.
         const link = typeof got === 'string' ? got : got?.link;
+        // No preview: the link is single-use, and there is nothing to see in
+        // a preview of it anyway.
         await say(command.chat, link
           ? `${link}\n\nOpens once, and only for the next few minutes.`
-          : (got?.error || 'Your account is not on the list of who may see the map.'));
+          : (got?.error || 'Your account is not on the list of who may see the map.'),
+        { link_preview_options: { is_disabled: true } });
         return;
       }
       if (command.name === '/stop') {

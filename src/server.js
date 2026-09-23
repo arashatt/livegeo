@@ -664,7 +664,21 @@ export function serve(positions, config, {
 
       // A one-time link from the bot. Single use and short-lived, because a
       // link sits in a chat history where somebody else may read it.
-      const id = links.redeem(url.pathname.slice('/auth/'.length));
+      //
+      // Opening it is not using it. Telegram — like every chat app — fetches
+      // the links in a message to make a preview, with a GET, and a GET that
+      // used the link up left nothing for the person who tapped it: "used
+      // already" on the first try. So a GET only answers with a page that
+      // sends the link back as a POST, at once by script or by its button
+      // without one, and only the POST signs in. A previewer does neither.
+      const token = url.pathname.slice('/auth/'.length);
+      if (req.method !== 'POST') {
+        if (!links.peek(token)) return refuse('that link has been used already, or has expired — send /login again');
+        return page(res, 200, 'Signing you in…', `
+<form method="post" action="/auth/${escapeAttr(token)}"><button type="submit">Sign in</button></form>
+<script>document.forms[0].submit();</script>`);
+      }
+      const id = links.redeem(token);
       if (!id) return refuse('that link has been used already, or has expired — send /login again');
       if (!circles.viewerFor(id)) return refuse('that account cannot sign in here');
       log.info('login: somebody signed in through the bot');

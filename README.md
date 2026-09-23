@@ -99,7 +99,8 @@ one way only — Ada letting Grace see her does not let Ada see Grace.
 - `/circle` — who can see you and whom you can see, with a button to end
   either. The **Circle** button on the map does the same.
 - `/login` — a link that signs you in to the map. It works once and expires in
-  five minutes.
+  five minutes. A chat app fetching it for a preview does not use it up: it
+  opens a page that signs you in, and only that counts as the one use.
 - `/live` — a link anyone can follow you on for an hour, without Telegram; see
   «Following somebody live, without Telegram».
 - `/sos`, `/safe`, `/checkon`, `/checkoff`, `/ok` — see «When something is

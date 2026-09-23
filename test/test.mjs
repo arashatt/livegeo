@@ -850,7 +850,7 @@ head('what /login says, and why');
     const method = String(url).split('/').pop();
     const body = init?.body ? JSON.parse(init.body) : {};
     if (method === 'getMe') return new Response(JSON.stringify({ ok: true, result: { id: 1, username: 'livegeobot' } }));
-    if (method === 'sendMessage') { said.push({ to: body.chat_id, text: body.text }); return new Response(JSON.stringify({ ok: true, result: {} })); }
+    if (method === 'sendMessage') { said.push({ to: body.chat_id, text: body.text, preview: !body.link_preview_options?.is_disabled }); return new Response(JSON.stringify({ ok: true, result: {} })); }
     if (method === 'getUpdates') return new Response(JSON.stringify({ ok: true, result: served.shift() || [] }));
     return new Response(JSON.stringify({ ok: true, result: {} }));
   };
@@ -869,6 +869,7 @@ head('what /login says, and why');
   await bot.stop();
   const to = (id) => said.find((m) => m.to === id)?.text || '';
   t('somebody allowed gets a link', /^https:\/\/a-b\.trycloudflare\.com\/auth\/one\n\nOpens once/.test(to(1)), to(1));
+  t('sent without a preview, which would fetch it', said.find((m) => m.to === 1)?.preview === false);
   t('somebody allowed with no address is told that, not that they are not allowed', /no address to send you to/.test(to(2)) && !/not on the list/.test(to(2)), to(2));
   t('a plain link still works', to(3).startsWith('https://old.example/auth/three'));
   t('somebody not allowed is told so', to(4) === 'Your account is not on the list of who may see the map.');
@@ -960,9 +961,11 @@ head('who may look');
 
   const links = makeLinks();
   const token = links.issue('42');
+  t('looking at a link does not use it', links.peek(token) === '42' && links.peek(token) === '42');
   t('a link opens once', links.redeem(token) === '42');
   t('and not twice', links.redeem(token) === null);
   t('an unknown link opens nothing', links.redeem('nope') === null);
+  t('and a used one shows nothing either', links.peek(token) === null);
   const stale = makeLinks({ life: -1 });
   t('and an expired one is gone', stale.redeem(stale.issue('42')) === null);
 }
@@ -2556,8 +2559,16 @@ head('Sign in with Telegram, end to end against a stand-in provider');
 
   // The bot's /login link, opened in the same browser, proves the account.
   const token = links.issue('3');
-  const opened = await fetch(`${app}/auth/${token}`, { headers: { cookie: pending }, redirect: 'manual' });
+  // Telegram fetches it first, to make a preview. That must not spend it.
+  const preview = await fetch(`${app}/auth/${token}`, { headers: { 'user-agent': 'TelegramBot (like TwitterBot)' }, redirect: 'manual' });
+  const previewBody = await preview.text();
+  t('a preview of the link is a page, not a sign-in', preview.status === 200 && !cookieFrom(preview, 'tll_session')
+    && previewBody.includes(`<form method="post" action="/auth/${token}">`), preview.status);
+  t('and leaves the link unused', links.peek(token) === '3');
+  const opened = await fetch(`${app}/auth/${token}`, { method: 'POST', headers: { cookie: pending }, redirect: 'manual' });
   t('opening /login’s link in that browser signs in', opened.status === 302 && Boolean(cookieFrom(opened, 'tll_session')));
+  t('once', (await fetch(`${app}/auth/${token}`, { method: 'POST', redirect: 'manual' })).status === 403
+    && (await fetch(`${app}/auth/${token}`, { redirect: 'manual' })).status === 403);
   t('and links the Telegram sign-in to the account the bot knows',
     linkedSubs.length === 1 && linkedSubs[0].id === '3' && linkedSubs[0].sub === 'site-scoped-ada', linkedSubs);
 
