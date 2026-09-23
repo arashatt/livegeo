@@ -12,9 +12,11 @@
   :root{
     --ink:#14181d; --paper:#fff; --quiet:#6b7480; --hairline:#e3e6ea;
     --live:#0a7d33; --stale:#9aa3ad;
+    /* You, among everyone else: blue while you share, paler once you stop. */
+    --me:#1a73e8; --me-stale:#6f8fc2;
   }
   @media (prefers-color-scheme: dark){
-    :root{ --ink:#e8eaed; --paper:#14181d; --quiet:#9aa3ad; --hairline:#2a2f36; }
+    :root{ --ink:#e8eaed; --paper:#14181d; --quiet:#9aa3ad; --hairline:#2a2f36; --me:#8ab4f8; }
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -133,6 +135,11 @@
   .person.sos .who i{background:#d93025;animation:pulse .9s ease-in-out infinite}
   .person.sos .meta.alarm{color:#d93025;font-weight:600}
   @media (prefers-reduced-motion:reduce){ .person.sos .who i{animation:none} }
+  /* You. Blue on the map and here, and said in words too; an SOS stays red. */
+  .person.me:not(.sos) .who i{background:var(--me-stale)}
+  .person.me.live:not(.sos) .who i{background:var(--me)}
+  .person .you{font-size:.7rem;font-weight:600;color:var(--me);border:1px solid currentColor;
+    border-radius:999px;padding:0 .4rem;line-height:1.5}
   .card .sosline{display:flex;align-items:center;gap:.35rem;margin-top:.45rem;flex-wrap:wrap}
   .ghost.sosbtn{color:#d93025;border-color:rgba(217,48,37,.5);font-weight:600}
   .ghost.sosbtn:hover{background:#d93025;color:#fff;border-color:#d93025}
@@ -213,6 +220,9 @@
       // shared token is ended by not using it.
       document.getElementById('signout').hidden = !d.id;
       if (d.circles) loadZones();
+      // Anybody drawn before this answered was drawn as somebody else, you
+      // included. Drawing the same fix again moves nothing; it repaints.
+      if (d.id) { people.forEach(function (e) { if (e.data) draw(e.data); }); render(); }
     })
     .catch(function () {});
 
@@ -386,6 +396,10 @@
 
   function live(p) { return p.live || (p.liveUntil && p.liveUntil * 1000 > Date.now()); }
 
+  // Whether this is whoever is looking. Nobody, until /api/me answers, and
+  // for the shared token, which is nobody in particular.
+  function mine(p) { return Boolean(me && me.id && me.id === String(p.id)); }
+
   function ago(at) {
     var s = Math.max(0, Math.round(Date.now() / 1000 - at));
     if (s < 60) return s + 's ago';
@@ -427,6 +441,10 @@
     if (who && who.name) return who.name;
     return p.name || p.id;
   }
+
+  // The hover on somebody's dot, as HTML — Leaflet puts a tooltip's text in
+  // as markup, and a name is whatever its owner typed into Telegram.
+  function tipOf(p) { return esc(label(p)) + (mine(p) ? ' (you)' : ''); }
 
   // Place names, cached by coordinates rounded to about eleven metres — a
   // person standing still asks once, not once per second.
@@ -929,15 +947,22 @@
   // In place rather than by replacing the icon: a new element under the
   // pointer would count as a new hover, which would relabel it again.
   function relabel(entry) {
-    if (entry.marker) entry.marker.setTooltipContent(label(entry.data));
+    if (entry.marker) entry.marker.setTooltipContent(tipOf(entry.data));
     var span = entry.chip && entry.chip.getElement() && entry.chip.getElement().querySelector('span');
     if (span) span.textContent = label(entry.data);
   }
 
+  // Hex, always: people-map.js mixes these into rgba() for blurs and beams.
+  function cssVar(name, fallback) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  }
+
+  // An SOS is red whoever it is. Otherwise you are blue, so you can find
+  // yourself among everyone else, and the rest are green while they share.
   function colourOf(p) {
     if (p.sos) return '#d93025';
-    return live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33'
-                   : '#8a929b';
+    if (mine(p)) return live(p) ? cssVar('--me', '#1a73e8') : cssVar('--me-stale', '#6f8fc2');
+    return live(p) ? cssVar('--live', '#0a7d33') : '#8a929b';
   }
 
   function draw(p) {
@@ -985,13 +1010,13 @@
       var fresh = !entry.marker;
       if (fresh) {
         entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
-        entry.marker.bindTooltip(label(p), { permanent: false });
+        entry.marker.bindTooltip(tipOf(p), { permanent: false });
         wire(entry.marker, entry);
       }
       entry.marker.setStyle({ color: colour });
       relabel(entry);
       if (p.accuracy) {
-        if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
+        if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour, interactive: false }).addTo(map);
         entry.halo.setRadius(p.accuracy).setStyle({ color: colour });
       }
       // From wherever the dot is drawn — mid-glide, if another fix is still
@@ -1015,6 +1040,10 @@
       if (entry.glow) entry.glow.setLatLngs(lines);
     }
     fadeEnds(entry, runs, colour, p.hidden);
+
+    // Yours on top: standing where somebody else is — at home, together —
+    // must not put you under their dot, however late theirs was drawn.
+    people.forEach(function (e) { if (e.marker && mine(e.data)) e.marker.bringToFront(); });
 
     // Fit once, to everyone. After that the map stays where it was put: a
     // view that jumps to whoever moved last is unusable the moment two people
@@ -1070,6 +1099,10 @@
     else map.fitBounds(L.latLngBounds(pts).pad(0.25));
   }
 
+  // A row's name: the dot, who it is, and on your own row that it is you —
+  // in words as well as in blue.
+  function whoHtml(p) { return '<i></i>' + esc(label(p)) + (mine(p) ? '<span class="you">you</span>' : ''); }
+
   function render() {
     var list = document.getElementById('list');
     var rows = Array.from(people.values()).map(function (e) { return e.data; })
@@ -1087,10 +1120,11 @@
     list.innerHTML = '';
     rows.forEach(function (p) {
       var el = document.createElement('button');
-      el.className = 'person' + (live(p) ? ' live' : '') + (p.sos ? ' sos' : '') + ((lit || hovered || pathHover) === p.id ? ' lit' : '');
+      el.className = 'person' + (live(p) ? ' live' : '') + (p.sos ? ' sos' : '') + (mine(p) ? ' me' : '')
+        + ((lit || hovered || pathHover) === p.id ? ' lit' : '');
       el.dataset.id = p.id;
       el.innerHTML =
-        '<span class="who"><i></i>' + esc(label(p)) + '</span>' +
+        '<span class="who">' + whoHtml(p) + '</span>' +
         (p.sos ? '<span class="meta alarm">🆘 asked for help · until ' + esc(clock(p.sos)) + '</span>' : '') +
         '<span class="meta">' +
           (p.stopped ? 'stopped · ' : '') +
@@ -1104,7 +1138,7 @@
       identify(p.id).then(function (who) {
         if (who && (who.username || who.name)) {
           var who_el = el.querySelector('.who');
-          if (who_el) who_el.innerHTML = '<i></i>' + esc(label(p));
+          if (who_el) who_el.innerHTML = whoHtml(p);
         }
       });
       // The list is the other way in: hovering a row lights the same path the
@@ -1159,7 +1193,7 @@
       }).addTo(fenceLayer);
       // Above the centre rather than on it: a fence usually has somebody
       // standing in the middle of it, and the label was landing under them.
-      shape.bindTooltip(f.name, { permanent: true, direction: 'top', className: 'fence-label' });
+      shape.bindTooltip(esc(f.name), { permanent: true, direction: 'top', className: 'fence-label' });
       // Under the paths, always: fences are redrawn whenever one changes, and
       // redrawn last they would otherwise sit on top of everything.
       shape.bringToBack();

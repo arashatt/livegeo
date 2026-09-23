@@ -140,11 +140,11 @@
       var fresh = !entry.marker;
       if (fresh) {
         entry.marker = L.circleMarker(here, { radius: 8, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
-        entry.marker.bindTooltip(called(), { direction: 'top', offset: [0, -8] });
+        entry.marker.bindTooltip(esc(called()), { direction: 'top', offset: [0, -8] });
       }
       entry.marker.setStyle({ color: colour });
       if (p.accuracy) {
-        if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
+        if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour, interactive: false }).addTo(map);
         entry.halo.setRadius(p.accuracy).setStyle({ color: colour });
       }
       var from = entry.marker.getLatLng();

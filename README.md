@@ -305,6 +305,11 @@ The dashboard lists everyone currently sharing, marks live ones, counts down
 the time remaining, and draws the path behind each. Clicking a person centres
 the map on them.
 
+You are blue — your dot, your path and the way you are heading, paler once you
+stop sharing — and your row in the list says **you**, so you can find yourself
+among everyone else. Everybody else is green while they share and grey after;
+anyone who asked for help is red, you included.
+
 A dot travels to where somebody is now rather than jumping there — over about
 a second, never slower than their fixes came, and not at all for a jump across
 town or with reduced motion switched on. While they are moving, a soft fan
