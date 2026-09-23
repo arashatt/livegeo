@@ -100,9 +100,11 @@ export function checkHours(args) {
 
 // What the person who sent an SOS is told back: who knows now, how to end it,
 // and — first, whatever else — that nobody was called.
-export function sosReply({ told, circle, url, again, call }) {
+export function sosReply({ told, circle, url, again, recent, call }) {
   const lines = [];
-  if (told) {
+  if (recent) {
+    lines.push('Already sent a moment ago — everybody who can see you has it, and the link is still following you.');
+  } else if (told) {
     lines.push(`${again ? 'Sent again' : 'Sent'}. ${told === 1 ? '1 person who can see you was' : `${told} people who can see you were`} told exactly where you are,`
       + ' with a link that follows you for the next hour — even inside your private places.');
   } else if (!circle) {

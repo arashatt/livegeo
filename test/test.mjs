@@ -2021,8 +2021,10 @@ head('SOS: found, for an hour, by everybody who can see you');
 
   const sent = [];
   let wired = null;
+  let skew = 0;   // how far this test has moved the SOS's clock on
   const sos = makeSos({
     live, circles, positions: store, admins: ['1'], publicUrl: 'https://map.example', call: '110 (police)',
+    clock: () => Date.now() + skew,
     placeOf: async () => 'Vakilabad Blvd, Mashhad',
     notify: async (to, text) => { sent.push({ to: String(to), text }); return true; },
     locate: async (to, latitude, longitude) => { sent.push({ to: String(to), pin: [latitude, longitude] }); return true; },
@@ -2095,8 +2097,12 @@ head('SOS: found, for an hour, by everybody who can see you');
   t('whoever follows the SOS link sees her exactly', followed && !followed.hidden && followed.latitude === graceAt.latitude && followed.sos);
 
   const before = sent.length;
+  const pressedTwice = await (await hit('grace', '/api/sos', 'POST')).json();
+  t('a second press straight away is not a second round of messages', pressedTwice.recent && sent.length === before);
+  skew += 31_000;
   const again = await (await hit('grace', '/api/sos', 'POST')).json();
-  t('raising it again tells everybody again, with the same link', again.again && again.path === raised.path && sent.length > before);
+  t('half a minute on, raising it again tells everybody again, with the same link', again.again && !again.recent
+    && again.path === raised.path && sent.length > before);
   t('and does not start a second one', live.of('3').filter((l) => l.reason === 'sos').length === 1);
 
   const hal = await (await hit('hal', '/api/sos', 'POST')).json();
@@ -2146,6 +2152,7 @@ head('what an SOS says');
   t('always that nobody was called, and whom to call', /called nobody\. If they may be in danger, call 110\./.test(text));
   t('the reply counts who was told', /^Sent\. 2 people who can see you were told/.test(sosReply({ told: 2, circle: 2, call: '110' })));
   t('and says when it went again', /^Sent again\. 1 person/.test(sosReply({ told: 1, circle: 1, again: true, call: '110' })));
+  t('or that it already went a moment ago', /^Already sent a moment ago/.test(sosReply({ told: 0, circle: 1, again: true, recent: true, call: '110' })));
   t('with nobody to tell, it hands over the link',
     /Nobody can see you yet[\s\S]*https:\/\/m\/live\/x/.test(sosReply({ told: 0, circle: 0, url: 'https://m/live/x', call: '110' })));
   t('and always, whom to call', /This called nobody\. If you are in danger, call 110\./.test(sosReply({ told: 0, circle: 0, call: '110' })));

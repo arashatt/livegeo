@@ -1184,7 +1184,7 @@ export function serve(positions, config, {
           .catch((e) => { log.error('sos:', e && e.message ? e.message : e); return null; });
         if (!raised) return json(500, { error: 'could not raise an SOS' });
         return json(200, {
-          told: raised.told, circle: raised.circle, again: raised.again, call: raised.call,
+          told: raised.told, circle: raised.circle, again: raised.again, recent: Boolean(raised.recent), call: raised.call,
           path: `/live/${raised.link.token}`, until: raised.link.expiresAt,
         });
       }

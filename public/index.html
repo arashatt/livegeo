@@ -593,7 +593,9 @@
         if (!res.ok) throw new Error(res.d && res.d.error);
         var d = res.d;
         button.parentNode.innerHTML = sosLine({ sos: d.until });
-        window.alert((d.told
+        window.alert((d.recent
+          ? 'Already sent a moment ago — everybody who can see you has it.'
+          : d.told
           ? 'Sent. ' + d.told + (d.told === 1 ? ' person who can see you knows' : ' people who can see you know') + ' where you are.'
           : 'Nobody could be told — nobody can see you yet. Send somebody this link: ' + location.origin + d.path)
           + '\n\nThis called nobody. If you are in danger, call ' + d.call + '.');

@@ -60,6 +60,11 @@ export function makeSos({
   // Who had an SOS running at the last look, so one that runs out by itself
   // can be noticed and put back.
   const running = new Set();
+  // When everybody was last told, per person. Pressing again sends where
+  // they are now — but not twice in half a minute: a panicked double press
+  // is one message, and a held button is not a flood.
+  const lastSent = new Map();
+  const AGAIN_AFTER = 30_000;
 
   const nameOf = (id) => circles.user(id)?.name || positions.get(id)?.name || 'Somebody';
   const whoSees = (id) => everyoneWhoSees(circles, admins, id);
@@ -89,12 +94,16 @@ export function makeSos({
       const link = had || await live.create({ person: key, minutes, reason: 'sos' });
       running.add(key);
       if (!had) resend(key);
+      const url = publicUrl ? `${publicUrl}/live/${link.token}` : '';
+      const ids = whoSees(key);
+      if (had && clock() - (lastSent.get(key) ?? -Infinity) < AGAIN_AFTER) {
+        return { link, url, told: 0, circle: ids.length, again: true, recent: true, call };
+      }
+      lastSent.set(key, clock());
 
       const p = positions.get(key);
       const located = Boolean(p && p.latitude !== null && p.latitude !== undefined);
       const place = located && placeOf ? await placeOf(p.latitude, p.longitude).catch(() => '') : '';
-      const url = publicUrl ? `${publicUrl}/live/${link.token}` : '';
-      const ids = whoSees(key);
       const text = sosMessage({
         who: nameOf(key), place, located, url, call,
         minutes: located ? Math.round((clock() / 1000 - p.at) / 60) : null,
@@ -111,6 +120,7 @@ export function makeSos({
       const key = String(id);
       const link = live.sosOf(key);
       running.delete(key);
+      lastSent.delete(key);
       if (!link) return false;
       await stopLink(link, 'safe');
       resend(key);
