@@ -7,6 +7,33 @@ on:
   workflow_dispatch:
 
 jobs:
+  cartography:
+    name: Cartography (PostGIS)
+    runs-on: ubuntu-latest
+    services:
+      postgis:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: cartography_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:cartography
+        env:
+          CARTOGRAPHY_TEST_DATABASE_URL: postgres://postgres:test-only@localhost:5432/cartography_test
+
   test:
     name: test (node ${{ matrix.node }})
     runs-on: ubuntu-latest

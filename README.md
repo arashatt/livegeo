@@ -569,6 +569,40 @@ than a handful of people, run your own renderer and point `TILE_UPSTREAM` at
 it — it is one environment variable, and the PostGIS extract from the next
 section is most of what a renderer needs anyway.
 
+### Styled OpenStreetMap layers
+
+The dashboard opens on a world view. **Layers** controls the worldwide street
+map and six independent detail overlays: roads, railways, urban areas and
+terrain, parks and woodland, water, and buildings. The palette uses teal
+ground, pink arterial roads, muted violet urban areas, jade parks and cyan
+water. It follows real OSM geometry, without decorative or invented roads.
+
+The street map supplies labels and worldwide coverage. Detailed feature
+styling uses the local osm2pgsql import described under **Places and history**;
+it appears from zoom 8, with smaller roads and buildings added as you zoom in.
+No provider key or browser request to another host is required. Any imported
+region works. Outside its coverage, or without PostGIS, detail tiles are
+transparent and the street map remains visible. The Layers panel reports
+whether styled features are available at the current view.
+
+Feature switches affect the overlay; features printed into the underlying
+raster remain visible while **Street map & labels** is on. Land-cover tags
+provide the tan terrain tint; this is not an elevation or hillshade layer.
+
+`/carto/{z}/{x}/{y}.svg?layers=roads,water` selects a subset. Omit `layers`
+for all features, or use `layers=` for none. Requests require the same
+authentication as the dashboard. Geometry is clipped with a tile-edge buffer,
+cached independently of the selected styles, and refreshed after five minutes.
+Missing imports are retried after a minute, so importing data does not require
+an app restart. SVGs preserve polygon holes and correct the Y-axis inversion
+introduced by `ST_AsSVG` after `ST_AsMVTGeom`.
+
+`npm test` includes rendering, caching, fallback and access-control regressions.
+CI also runs `npm run test:cartography` against PostGIS to verify real geometry,
+tile alignment, edge buffering and feature budgets. To run that check locally,
+set `CARTOGRAPHY_TEST_DATABASE_URL` to a disposable PostGIS database. The test
+uses temporary fixture tables and does not change an imported OSM dataset.
+
 ## Handing a path to somebody
 
 Clicking yourself opens your card; if you have gone anywhere, it offers a link.

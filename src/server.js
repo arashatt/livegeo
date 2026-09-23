@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
 import { parseTilePath, parseCartoPath, makeTiles } from './tiles.js';
+import { EMPTY_CARTOGRAPHY, parseCartographyLayers } from './cartography.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
 import {
@@ -156,14 +157,14 @@ export function serve(positions, config, {
     res.end(got.bytes);
   }
 
-  async function serveCartography(tile, res) {
-    const svg = geo?.cartographyTile ? await geo.cartographyTile(tile.z, tile.x, tile.y) : null;
+  async function serveCartography(tile, res, layers) {
+    const svg = geo?.cartographyTile ? await geo.cartographyTile(tile.z, tile.x, tile.y, layers) : null;
     // Transparent is a normal fallback: PostGIS is optional, and an install
     // without an osm2pgsql extract should still show the raster basemap.
-    const body = svg || '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"/>';
+    const body = svg || EMPTY_CARTOGRAPHY;
     res.writeHead(200, {
       'content-type': 'image/svg+xml; charset=utf-8',
-      'cache-control': svg ? 'private, max-age=86400' : 'private, max-age=300',
+      'cache-control': svg ? 'private, max-age=300' : 'private, max-age=30',
       'x-carto-source': svg ? 'postgis' : 'empty',
     });
     res.end(body);
@@ -934,7 +935,11 @@ export function serve(positions, config, {
     // Styled vector geometry from the local OSM extract. It is deliberately
     // guarded like raster tiles: this service is not a public map-tile host.
     const carto = parseCartoPath(url.pathname);
-    if (carto) return serveCartography(carto, res);
+    if (carto) {
+      const layers = parseCartographyLayers(url.searchParams.get('layers'));
+      if (layers === null) return json(400, { error: 'unknown cartography layer' });
+      return serveCartography(carto, res, layers);
+    }
 
     // The basemap. Guarded like everything else, so this cannot be used as
     // somebody else's free tile proxy.

@@ -156,7 +156,7 @@
     --panel:rgba(7,14,18,.90);
     --panel-solid:#0c171d;
     --panel-hover:#13242c;
-    --map-bg:#0d1d24;
+    --map-bg:#16333d;
     --live:#40e38f;
     --stale:#78868c;
     --me:#4cb5ff;
@@ -289,11 +289,11 @@
   #circle h2{color:#9eaaae}
 
   .leaflet-tile-pane{
-    filter:invert(.94) hue-rotate(154deg) saturate(.76) brightness(.80) contrast(1.06);
+    filter:invert(.88) hue-rotate(152deg) saturate(.65) brightness(1.04) contrast(.91);
     transition:filter .18s ease;
   }
   body.spotlight .leaflet-tile-pane{
-    filter:invert(.94) hue-rotate(154deg) saturate(.54) brightness(.62) contrast(1.08) grayscale(.30) opacity(.78);
+    filter:invert(.88) hue-rotate(152deg) saturate(.5) brightness(.88) contrast(.91) grayscale(.3) opacity(.75);
   }
 
   .leaflet-control-zoom a{
@@ -408,7 +408,7 @@
   .detail-panel .card .shared input{background:#081116}
   .detail-panel .card .follow,.detail-panel .card .gpx,.detail-panel .card .sosline{margin-top:.65rem}
 
-  .layers-panel{right:1rem;top:4.65rem;width:15.5rem;padding:.72rem}
+  .layers-panel{right:1rem;top:4.65rem;width:19rem;padding:.72rem;max-height:calc(100% - 5.65rem);overflow:auto}
   .layers-title{
     margin-bottom:.55rem;padding-bottom:.5rem;border-bottom:1px solid rgba(255,255,255,.08);
     font-size:.68rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase;color:#98a5a9
@@ -420,6 +420,19 @@
   .layer-option+ .layer-option{border-top:1px solid rgba(255,255,255,.045)}
   .layer-option input{accent-color:var(--accent)}
   .layer-option small{display:block;margin-left:auto;color:#74858a;font-size:.62rem}
+  .layer-features{border:0;padding:0;margin:.35rem 0 .7rem}
+  .layer-features legend{padding:.3rem .2rem;color:#96a8b0;font-size:.65rem;text-transform:uppercase;letter-spacing:.1em}
+  .layer-features:disabled{opacity:.45}
+  .map-swatch{width:1.35rem;height:.72rem;border-radius:2px;flex:none;background:var(--swatch)}
+  .map-swatch.roads{height:.35rem;background:linear-gradient(90deg,#ec64ac 50%,#f2b2ca 50%);box-shadow:0 0 0 1px #233343}
+  .map-swatch.rail{height:0;border-top:2px dashed #c4c2d4;border-radius:0}
+  .layer-note{font-size:.7rem;line-height:1.5;color:#a5b6bd;margin:.25rem .2rem .65rem}
+  .layer-status{color:#c8d8dd}
+  .layer-option input{width:15px;height:15px;flex:none}
+  .layer-option:focus-within{outline:1px solid #9cbdcc;outline-offset:2px;border-radius:3px}
+  @media(prefers-reduced-motion:reduce){
+    .people-panel,.leaflet-tile-pane,body.spotlight .leaflet-cartography-pane{transition:none}
+  }
 
   /* Raster supplies labels; the PostGIS SVG pane adds independent feature
      styling over it. Keeping them in separate panes lets Layers toggle either. */
@@ -443,7 +456,7 @@
     .detail-panel{
       left:.55rem;right:.55rem;top:auto;bottom:.55rem;width:auto;max-height:58vh;overflow:auto
     }
-    .layers-panel{right:.55rem;top:4.25rem;width:min(15.5rem,calc(100vw - 1.1rem))}
+    .layers-panel{right:.55rem;top:3.4rem;width:min(19rem,calc(100vw - 1.1rem));max-height:calc(100% - 4rem)}
   }
 
 </style>
@@ -465,7 +478,7 @@
     <div id="map"></div>
     <div class="map-toolbar" aria-label="Map controls">
       <button class="ghost" id="peoplebtn" type="button" aria-expanded="false">People <span id="peoplebadge"></span></button>
-      <button class="ghost" id="layersbtn" type="button" aria-expanded="false">Layers</button>
+      <button class="ghost" id="layersbtn" type="button" aria-expanded="false" aria-controls="layersPanel">Layers</button>
       <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
     </div>
 
@@ -482,8 +495,20 @@
 
     <section class="layers-panel" id="layersPanel" aria-label="Map layers" hidden>
       <div class="layers-title">Map layers</div>
-      <label class="layer-option"><input type="checkbox" data-layer="cartography" checked><span>Styled cartography</span><small>PostGIS</small></label>
-      <label class="layer-option"><input type="checkbox" data-layer="raster" checked><span>Base labels</span><small>OSM</small></label>
+      <label class="layer-option"><input type="checkbox" data-layer="raster" checked><span>Street map &amp; labels</span><small>Worldwide</small></label>
+      <label class="layer-option"><input type="checkbox" data-layer="cartography" checked><span>Styled map details</span></label>
+      <p class="layer-note layer-status" id="cartographyStatus" role="status">Zoom in for styled map details.</p>
+      <fieldset class="layer-features" id="cartographyFeatures">
+        <legend>Feature colours</legend>
+        <label class="layer-option"><input type="checkbox" data-feature="roads" checked><i class="map-swatch roads" aria-hidden="true"></i><span>Roads &amp; highways</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="rail" checked><i class="map-swatch rail" aria-hidden="true"></i><span>Railways</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="landuse" checked><i class="map-swatch" style="--swatch:linear-gradient(90deg,#8778a9 50%,#b79b78 50%)" aria-hidden="true"></i><span>Urban areas &amp; terrain</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="parks" checked><i class="map-swatch" style="--swatch:#4b967e" aria-hidden="true"></i><span>Parks &amp; woodland</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="water" checked><i class="map-swatch" style="--swatch:#1caaca" aria-hidden="true"></i><span>Water</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="buildings" checked><i class="map-swatch" style="--swatch:#73758f" aria-hidden="true"></i><span>Buildings</span><small>Street zoom</small></label>
+      </fieldset>
+      <p class="layer-note">Feature switches affect the styled detail overlay. The street map retains its own features and labels.</p>
+      <div class="layers-title">Live overlays</div>
       <label class="layer-option"><input type="checkbox" data-layer="trails" checked><span>Movement trails</span></label>
       <label class="layer-option"><input type="checkbox" data-layer="fences" checked><span>Geofences</span></label>
       <label class="layer-option"><input type="checkbox" data-layer="zones" checked><span>Private places</span></label>
@@ -494,6 +519,7 @@
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/lib/path-time.js"></script>
 <script src="/lib/people-map.js"></script>
+<script src="/lib/cartography.js"></script>
 <script>
 (function () {
   var map = L.map('map', {
@@ -515,19 +541,9 @@
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   }).addTo(map);
 
-  // Transparent SVG geometry rendered from the same local osm2pgsql extract
-  // PostGIS already uses for place names. The raster stays underneath for
-  // labels; roads, parks, water, rail and buildings can now be styled
-  // independently instead of recolouring one PNG.
-  map.createPane('cartography');
-  map.getPane('cartography').style.zIndex = 250;
-  map.getPane('cartography').style.pointerEvents = 'none';
-  var cartography = L.tileLayer('/carto/{z}/{x}/{y}.svg', {
-    pane: 'cartography',
-    maxZoom: 19,
-    minZoom: 3,
-    opacity: 1
-  }).addTo(map);
+  var cartography = Cartography.on(map, function (message) {
+    document.getElementById('cartographyStatus').textContent = message;
+  });
 
   var layerPrefs = { raster: true, cartography: true, trails: true, fences: true, zones: true };
 
@@ -571,6 +587,13 @@
     if (!layersPanel.hidden && !layersPanel.contains(e.target) && e.target !== layersButton) {
       layersPanel.hidden = true;
       layersButton.setAttribute('aria-expanded', 'false');
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !layersPanel.hidden) {
+      layersPanel.hidden = true;
+      layersButton.setAttribute('aria-expanded', 'false');
+      layersButton.focus();
     }
   });
 
@@ -1696,8 +1719,11 @@
 
   function applyLayerPreference(name, on) {
     layerPrefs[name] = on;
+    if (name === 'cartography') {
+      cartography.setVisible(on);
+      document.getElementById('cartographyFeatures').disabled = !on;
+    }
     var layer = name === 'raster' ? rasterBase
-      : name === 'cartography' ? cartography
       : name === 'fences' ? fenceLayer
       : name === 'zones' ? zoneLayer
       : null;
@@ -1709,6 +1735,8 @@
   }
 
   layersPanel.addEventListener('change', function (e) {
+    var feature = e.target.closest && e.target.closest('input[data-feature]');
+    if (feature) { cartography.setFeature(feature.getAttribute('data-feature'), feature.checked); return; }
     var box = e.target.closest && e.target.closest('input[data-layer]');
     if (!box) return;
     applyLayerPreference(box.getAttribute('data-layer'), box.checked);
