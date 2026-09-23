@@ -98,6 +98,10 @@ one way only — Ada letting Grace see her does not let Ada see Grace.
   either. The **Circle** button on the map does the same.
 - `/login` — a link that signs you in to the map. It works once and expires in
   five minutes.
+- `/live` — a link anyone can follow you on for an hour, without Telegram; see
+  «Following somebody live, without Telegram».
+- `/sos`, `/safe`, `/checkon`, `/checkoff`, `/ok` — see «When something is
+  wrong».
 
 `DASHBOARD_USERS` are the **admins**: they see everyone, as before, and receive
 alerts for fences made before fences had owners. `DASHBOARD_TOKEN` still works
@@ -113,6 +117,7 @@ What a person can do is narrower than what they can see:
 |---|---|---|---|
 | see on the map, history, name, photo | yes | yes | *not found* |
 | publish their path as a share link | yes | **no** | *not found* |
+| hand out a live link to them, or raise an SOS | yes | **no** | *not found* |
 | erase their history | yes | **no** | *not found* |
 
 Seeing somebody is not their consent to have their movements published, or
@@ -220,6 +225,8 @@ TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
 TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
 TILE_MAX_AGE=2592000          # seconds before a cached tile is refetched
 SHARE_TTL=604800              # how long a shared path link stays readable
+SOS_CALL=                     # who an SOS says to call; default Iran's 110 / 115
+CHECK_STOP=900                # seconds standing still before a check asks
 ```
 
 Leaving `TELEGRAM_CHATS` empty means *every chat the account is in* is
@@ -294,6 +301,14 @@ point that is never marked live.
 The dashboard lists everyone currently sharing, marks live ones, counts down
 the time remaining, and draws the path behind each. Clicking a person centres
 the map on them.
+
+A dot travels to where somebody is now rather than jumping there — over about
+a second, never slower than their fixes came, and not at all for a jump across
+town or with reduced motion switched on. While they are moving, a soft fan
+under the dot points the way they are going: the phone's own heading when
+Telegram sends one, otherwise their last step (watches send none). It goes
+away a few minutes after they stop, since standing still sends no update to
+say so.
 
 ### Why the path is not every reading
 
@@ -558,6 +573,30 @@ positions, or anybody else's path, and there are tests that say so.
 Requires PostGIS; without `DATABASE_URL` the button reports that rather than
 appearing to work.
 
+## Following somebody live, without Telegram
+
+A shared path is a frozen copy. Sometimes what you want is the opposite — *watch
+me get home* — for somebody who has no Telegram, or no bot, or is not in your
+circle. Your own card has **Follow me for 15 min · 1 h · 4 h**, and the bot has
+`/live` (an hour), `/live 15m` and `/live 4h`. Either makes a link; whoever
+opens it watches you move on a page of its own, gliding and turning as on the
+dashboard, until it runs out.
+
+What it shows is what your circle is shown, and less:
+
+- **It starts now.** The path on it begins when the link was made. Where you
+  were before — usually the way from your door — is not in it.
+- **Private places apply.** Inside one, the page shows the blur and *somewhere
+  private*, like everybody else who cannot see you exactly.
+- **It ends.** When the time is up, when you stop it (**Circle → Live links →
+  Stop**, or `/live stop`), or when you `/stop`, the page is told at once, says
+  so, and takes you off the map.
+
+The link opens that page, one stream carrying you, and the map tiles the page
+draws on — nothing else, and nobody else. You can have five running. Links are
+kept in the database, so a restart does not end them early. Requires PostGIS,
+and `PUBLIC_URL` for the bot to hand out a working link.
+
 ## Private places
 
 The people who can see you do not need to know where you live. A private place
@@ -618,6 +657,46 @@ exactly as detailed as the history — see «Why the path is not every reading»
 Over HTTP: `GET /api/gpx/<your id>?from=<epoch>&to=<epoch>`, a week at most. A
 share link offers its path the same way, at `/api/shared/<token>?format=gpx`.
 Requires PostGIS.
+
+## When something is wrong: SOS, and check on me
+
+Ride apps put a safety button on the map and watch their rides for stops that
+should not be happening. Here the people who can see you are the ones who
+answer — and they are told through the bot, so both need `BOT_TOKEN`, PostGIS
+and, for the links in the messages, `PUBLIC_URL`.
+
+**SOS.** Send `/sos` to the bot, or press **SOS** on your own card (which says
+what it will do before it does it). Everybody who can see you — your circle
+and the admins — gets a message saying you asked for help and near where, a
+Telegram pin that opens in any maps app, and a live link that follows you for
+the next hour. Their maps turn your row red and take them to you once.
+
+For that hour **your private places do not hide you** from them: you asked to
+be found, and a blur would be in the way. Only where you are — the path you
+came by, and your history, stay veiled. `/safe`, **I'm safe** on your card, or
+stopping its link ends it, and everybody who was told is told you are safe.
+If it simply runs out, the blur comes back and the bot asks whether you still
+need help. It survives a restart.
+
+**Check on me.** `/checkon` (two hours; `/checkon 1h` or `4h`), or **Check on
+me for 2 h** on your card, while you are sharing a live location. If you then
+stand still for a quarter of an hour (`CHECK_STOP`) somewhere that is not one
+of your places — a private place or a fence of your own — or your live
+location stops, the bot asks whether you are all right. `/ok` answers it.
+Only if you do not answer within five minutes is everybody who can see you
+told how long you have been stopped and where, with a pin; moving on, or a
+late `/ok`, is passed on to them too. `/checkoff` ends it.
+
+Asking first is the point: a long lunch is not an emergency, and a check that
+told everybody every time you sat down would be switched off by the second
+day. It never lifts a private place — it only fires outside them, and if your
+live location ends somewhere of your own, the check just ends.
+
+**Neither calls anybody.** Every message says so, with the number to call
+instead: `SOS_CALL`, which is Iran's `110 (police) or 115 (ambulance)` unless
+you set it. Both depend on Telegram reaching the people told, which on a
+filtered network is only as reliable as their connection. If you are in
+danger, call first.
 
 ## Watches
 
@@ -982,6 +1061,11 @@ are, which is enough for a uptime check.
 | `src/server.js` | the dashboard, its JSON, and the SSE stream |
 | `src/zones.js` | private places: what a circle is shown instead of where somebody is; pure, fully tested |
 | `src/gpx.js` | a path as a GPX file; pure, fully tested |
+| `src/live.js` | live links: one person, followed from now, for a while |
+| `src/sos.js` | an SOS: who is told, and what they are told |
+| `src/checks.js` | check on me: when to ask, and when to tell; the judgement is one pure function |
 | `src/config.js` | environment, checked once at startup |
 | `public/index.html` | the map: Leaflet, OpenStreetMap tiles, one EventSource |
+| `public/live.html` | the page a live link opens |
+| `public/lib/people-map.js` | how a person is drawn — the glide, the beam, the blur — for both |
 | `bin/login.mjs` | the one interactive step |
