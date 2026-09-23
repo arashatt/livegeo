@@ -10,10 +10,8 @@
 
 const MAX_ZOOM = 19;
 
-// Three integers in range, or nothing. Digits only, so no traversal survives
-// it — encoded or otherwise.
-export function parseTilePath(pathname) {
-  const m = /^\/tiles\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.png$/.exec(pathname || '');
+function parse(pathname, re) {
+  const m = re.exec(pathname || '');
   if (!m) return null;
   const z = Number(m[1]);
   const x = Number(m[2]);
@@ -23,6 +21,18 @@ export function parseTilePath(pathname) {
   const span = 2 ** z;
   if (x < 0 || x >= span || y < 0 || y >= span) return null;
   return { z, x, y };
+}
+
+// Three integers in range, or nothing. Digits only, so no traversal survives
+// it — encoded or otherwise.
+export function parseTilePath(pathname) {
+  return parse(pathname, /^\/tiles\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.png$/);
+}
+
+// The styled cartography overlay is an SVG tile made from the local OSM
+// extract in PostGIS. It shares the same range checks as raster tiles.
+export function parseCartoPath(pathname) {
+  return parse(pathname, /^\/carto\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.svg$/);
 }
 
 export function tileUrl(template, { z, x, y }) {

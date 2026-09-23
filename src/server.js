@@ -7,7 +7,8 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
-import { parseTilePath, makeTiles } from './tiles.js';
+import { parseTilePath, parseCartoPath, makeTiles } from './tiles.js';
+import { EMPTY_CARTOGRAPHY, parseCartographyLayers } from './cartography.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
 import {
@@ -154,6 +155,19 @@ export function serve(positions, config, {
       'x-tile-source': got.from,
     });
     res.end(got.bytes);
+  }
+
+  async function serveCartography(tile, res, layers) {
+    const svg = geo?.cartographyTile ? await geo.cartographyTile(tile.z, tile.x, tile.y, layers) : null;
+    // Transparent is a normal fallback: PostGIS is optional, and an install
+    // without an osm2pgsql extract should still show the raster basemap.
+    const body = svg || EMPTY_CARTOGRAPHY;
+    res.writeHead(200, {
+      'content-type': 'image/svg+xml; charset=utf-8',
+      'cache-control': svg ? 'private, max-age=300' : 'private, max-age=30',
+      'x-carto-source': svg ? 'postgis' : 'empty',
+    });
+    res.end(body);
   }
 
   async function serveStatic(url, req, res) {
@@ -827,7 +841,8 @@ export function serve(positions, config, {
       const allowed = url.pathname === '/api/ingest'
         || (req.method === 'GET' && (DEVICE_READS.has(url.pathname)
           || DEVICE_READ_PREFIXES.some((pre) => url.pathname.startsWith(pre))
-          || parseTilePath(url.pathname)))
+          || parseTilePath(url.pathname)
+          || parseCartoPath(url.pathname)))
         || (url.pathname === '/api/stream' && req.method === 'POST');
       if (!allowed) return notFound();
     }
@@ -915,6 +930,15 @@ export function serve(positions, config, {
       const beat = setInterval(() => { try { send(res, 'beat', {}); } catch { /* gone */ } }, 25000);
       req.on('close', () => { clearInterval(beat); watchers.delete(res); });
       return;
+    }
+
+    // Styled vector geometry from the local OSM extract. It is deliberately
+    // guarded like raster tiles: this service is not a public map-tile host.
+    const carto = parseCartoPath(url.pathname);
+    if (carto) {
+      const layers = parseCartographyLayers(url.searchParams.get('layers'));
+      if (layers === null) return json(400, { error: 'unknown cartography layer' });
+      return serveCartography(carto, res, layers);
     }
 
     // The basemap. Guarded like everything else, so this cannot be used as

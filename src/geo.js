@@ -14,6 +14,7 @@
 // the same way personOf is in directory.js.
 
 import pg from 'pg';
+import { makeCartography } from './cartography.js';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -49,6 +50,8 @@ export function makeGeo({ url, log = console } = {}) {
   // 'off' without DATABASE_URL, 'connected', or 'unreachable': configured,
   // tried, and given up on. /healthz says which.
   let state = url ? 'unreachable' : 'off';
+
+  const cartography = makeCartography({ query: (...args) => pool.query(...args), log });
 
   // Queries run against whatever osm2pgsql produced. If the extract was never
   // imported the tables are missing, which is a perfectly ordinary state —
@@ -160,6 +163,11 @@ export function makeGeo({ url, log = console } = {}) {
         log.error('geo: cannot describe a point —', e && e.message ? e.message : e);
         return '';
       }
+    },
+
+    // Styling remains optional, just like the imported OSM data it uses.
+    async cartographyTile(z, x, y, layers) {
+      return pool ? cartography.tile(z, x, y, layers) : null;
     },
 
     // The last known position of everyone seen recently — what the in-memory

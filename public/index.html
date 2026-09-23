@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Live locations</title>
+<title>LiveGeo</title>
 <!-- Served from this host. Nothing on this page reaches a third party: on a
      network that filters things, a CDN is one more way for the map to vanish. -->
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
@@ -147,76 +147,325 @@
   header .spacer{flex:1}
   header a.ghost{text-decoration:none;color:inherit}
 
-  /* Mashhad Vice City map chrome. The basemap stays OSM-derived and local;
-     this layer changes presentation without weakening any privacy rules. */
-  .vice-map-shell{position:relative;min-width:0;min-height:0;overflow:hidden;background:#0d5662}
-  .vice-map-shell #map{position:absolute;inset:0}
-  .vice-map-shell::after{
-    content:"";pointer-events:none;position:absolute;inset:0;z-index:410;
-    background:
-      radial-gradient(circle at 72% 18%,rgba(255,69,191,.12),transparent 34%),
-      radial-gradient(circle at 12% 82%,rgba(45,210,210,.11),transparent 30%);
-    mix-blend-mode:screen
+  /* Mature cartographic direction: quiet chrome, strong map hierarchy. */
+  :root{
+    --ink:#f1ede7;
+    --paper:#0b1419;
+    --quiet:#92a0a5;
+    --hairline:rgba(255,255,255,.11);
+    --panel:rgba(7,14,18,.90);
+    --panel-solid:#0c171d;
+    --panel-hover:#13242c;
+    --map-bg:#16333d;
+    --live:#40e38f;
+    --stale:#78868c;
+    --me:#4cb5ff;
+    --me-stale:#7499b4;
+    --accent:#d85691;
+    --danger:#ff5a62;
   }
+
+  body{
+    color:var(--ink);
+    background:var(--paper);
+    font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+
+  header{
+    min-height:52px;
+    padding:.55rem .8rem;
+    gap:.55rem;
+    background:rgba(6,13,17,.97);
+    border-bottom:1px solid var(--hairline);
+    box-shadow:0 1px 0 rgba(0,0,0,.35);
+    z-index:1200;
+  }
+
+  .brand{
+    display:flex;
+    align-items:baseline;
+    gap:.65rem;
+    min-width:max-content;
+  }
+  .brand h1{
+    font-size:.78rem;
+    font-weight:800;
+    letter-spacing:.18em;
+    color:#f7f4ef;
+  }
+  .brand .city{
+    font-size:.72rem;
+    font-weight:650;
+    letter-spacing:.12em;
+    color:var(--quiet);
+  }
+  .count{font-size:.75rem;color:var(--quiet)}
+
+  .ghost{
+    min-height:30px;
+    padding:.24rem .58rem;
+    border:1px solid var(--hairline);
+    border-radius:6px;
+    background:rgba(255,255,255,.025);
+    color:#aeb9bc;
+    font-size:.76rem;
+    transition:background .15s ease,border-color .15s ease,color .15s ease;
+  }
+  .ghost:hover{
+    background:rgba(255,255,255,.06);
+    border-color:rgba(255,255,255,.22);
+    color:var(--ink);
+  }
+
+  .conn{
+    margin-left:.2rem;
+    padding-left:.35rem;
+    color:var(--quiet);
+    font-size:.74rem;
+  }
+  .conn i{width:.42rem;height:.42rem;box-shadow:0 0 0 3px rgba(255,255,255,.035)}
+  .conn.up i{background:var(--live);box-shadow:0 0 0 3px rgba(64,227,143,.10)}
+
+  main{
+    grid-template-columns:minmax(0,1fr) 17.5rem;
+    background:var(--map-bg);
+  }
+
+  .map-shell{
+    position:relative;
+    min-width:0;
+    min-height:0;
+    overflow:hidden;
+    background:var(--map-bg);
+  }
+  .map-shell #map{position:absolute;inset:0;background:var(--map-bg)}
+
+
+  aside{
+    background:var(--panel-solid);
+    border-left:1px solid var(--hairline);
+    padding:.55rem;
+    gap:.35rem;
+  }
+
+  .person{
+    border:1px solid rgba(255,255,255,.085);
+    border-radius:6px;
+    padding:.58rem .62rem;
+    background:rgba(255,255,255,.018);
+    transition:background .15s ease,border-color .15s ease,opacity .15s ease;
+  }
+  .person:hover{
+    background:rgba(255,255,255,.045);
+    border-color:rgba(255,255,255,.18);
+  }
+  .person.lit{
+    background:rgba(255,255,255,.065);
+    border-color:rgba(255,255,255,.28);
+  }
+  .person .who{font-size:.82rem;letter-spacing:.005em}
+  .person .meta{font-size:.72rem;color:#849398}
+  .person .you{
+    border-radius:4px;
+    padding:.02rem .32rem;
+    font-size:.61rem;
+    letter-spacing:.04em;
+  }
+  .person.sos{
+    border-color:rgba(255,90,98,.72);
+    box-shadow:inset 2px 0 0 var(--danger);
+  }
+
+  #circle{
+    top:3.6rem;
+    right:.8rem;
+    width:min(22rem,calc(100vw - 1.6rem));
+    background:var(--panel);
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:7px;
+    box-shadow:0 14px 42px rgba(0,0,0,.42);
+    backdrop-filter:blur(14px);
+  }
+  #circle h2{color:#9eaaae}
+
   .leaflet-tile-pane{
-    filter:sepia(.2) saturate(1.7) hue-rotate(132deg) brightness(.73) contrast(1.16);
-    transition:filter .18s ease
+    filter:invert(.88) hue-rotate(152deg) saturate(.65) brightness(1.04) contrast(.91);
+    transition:filter .18s ease;
   }
   body.spotlight .leaflet-tile-pane{
-    filter:sepia(.15) saturate(.9) hue-rotate(132deg) brightness(.58) contrast(1.2) grayscale(.45)
+    filter:invert(.88) hue-rotate(152deg) saturate(.5) brightness(.88) contrast(.91) grayscale(.3) opacity(.75);
   }
-  .vice-logo{
-    position:absolute;left:50%;top:1.1rem;transform:translateX(-50%);z-index:800;
-    text-align:center;pointer-events:none;filter:drop-shadow(0 4px 0 #071528) drop-shadow(0 8px 14px rgba(0,0,0,.35))
+
+  .leaflet-control-zoom a{
+    color:#d6dddf;
+    background:rgba(6,14,18,.90);
+    border-color:rgba(255,255,255,.10);
   }
-  .vice-logo .city{
-    display:block;font:900 clamp(2rem,5vw,4.7rem)/.8 Impact,Haettenschweiler,"Arial Black",sans-serif;
-    letter-spacing:.045em;text-transform:uppercase;color:#f7f8ff;
-    -webkit-text-stroke:2px #071528;text-shadow:0 1px 0 #f2d9ff
+  .leaflet-control-zoom a:hover{background:#13242c;color:#fff}
+  .leaflet-control-attribution{
+    background:rgba(6,14,18,.68)!important;
+    color:#8e9b9f;
+    font-size:10px;
   }
-  .vice-logo .vice{
-    display:block;margin-top:.22rem;transform:rotate(-7deg);
-    font:italic 800 clamp(1.3rem,3.5vw,3rem)/.9 "Trebuchet MS","Segoe UI",sans-serif;
-    letter-spacing:.02em;color:#ff50c9;-webkit-text-stroke:1px #38134b;text-shadow:0 2px 0 #7c1fa8
+  .leaflet-control-attribution a{color:#b9c5c8}
+
+  .leaflet-control-scale{margin:0 0 17px 17px}
+  .leaflet-control-scale-line{
+    min-width:74px;
+    border:0;
+    border-bottom:2px solid rgba(245,241,236,.92);
+    background:transparent;
+    color:#f5f1ec;
+    padding:0 4px 4px;
+    font:600 10px/1 ui-sans-serif,system-ui,sans-serif;
+    text-align:right;
+    text-shadow:0 1px 3px rgba(0,0,0,.9);
+    box-shadow:none;
   }
-  .vice-scale{
-    position:absolute;left:1.1rem;top:1rem;z-index:790;color:#fff;pointer-events:none;
-    font:600 .72rem/1.2 ui-sans-serif,system-ui,sans-serif;text-shadow:0 1px 2px #00131a
+
+  .leaflet-popup-content-wrapper,
+  .leaflet-popup-tip{
+    background:rgba(8,16,21,.96);
+    color:var(--ink);
+    box-shadow:0 12px 28px rgba(0,0,0,.42);
   }
-  .vice-scale-labels{display:flex;justify-content:space-between;width:205px;margin-bottom:.25rem}
-  .vice-scale-line{width:205px;border-top:2px solid #fff;position:relative}
-  .vice-scale-line::before,.vice-scale-line::after,.vice-scale-line span{
-    content:"";position:absolute;top:-5px;width:2px;height:10px;background:#fff
+  .leaflet-popup-content-wrapper{
+    border:1px solid rgba(255,255,255,.11);
+    border-radius:7px;
   }
-  .vice-scale-line::before{left:0}.vice-scale-line::after{right:0}.vice-scale-line span{left:50%}
-  .vice-legend{
-    position:absolute;left:1rem;top:5.6rem;z-index:790;width:132px;padding:.7rem .72rem;
-    background:rgba(4,48,66,.94);border:1px solid rgba(0,0,0,.45);border-radius:9px;
-    color:#f8f8ff;box-shadow:0 7px 18px rgba(0,0,0,.28);font:600 .68rem/1.32 ui-sans-serif,system-ui,sans-serif
-  }
-  .vice-legend-row{display:flex;align-items:center;gap:.48rem;margin:.28rem 0;white-space:nowrap}
-  .vice-line{width:24px;height:0;border-top:3px solid #ff6cab;flex:none}
-  .vice-line.main{border-color:#ff51d0}.vice-line.minor{border-color:#efeff7;border-top-width:2px}
-  .vice-line.highway{border-color:#ff83df;border-top-style:dashed}
-  .vice-line.rail{border-color:#b8bdd1;border-top-style:dashed;border-top-width:2px}
-  .vice-box{width:16px;height:11px;flex:none;border:1px solid rgba(255,255,255,.18)}
-  .vice-box.urban{background:#a9b9c8}.vice-box.green{background:#6ac376}
-  .vice-box.mountain{background:#bc956d}.vice-box.water{background:#37b7dc}
-  .vice-symbol{width:18px;flex:none;text-align:center;color:#fff;font-size:.83rem}
+  .leaflet-popup-close-button{color:#9aa8ac!important}
+
+  .card .cname{font-size:.86rem}
+  .card .chandle,.card .cid{color:#87969b}
+
   @media (max-width:760px){
-    .vice-logo{top:.75rem}.vice-logo .city{font-size:2rem}.vice-logo .vice{font-size:1.25rem}
-    .vice-scale{left:.75rem;top:.65rem;transform:scale(.78);transform-origin:top left}
-    .vice-legend{left:.65rem;top:4.6rem;transform:scale(.88);transform-origin:top left}
+    header{padding:.45rem .55rem}
+    .brand{gap:.45rem}
+    .brand .city{display:none}
+    main{grid-template-columns:1fr;grid-template-rows:1fr auto}
+    aside{max-height:34vh}
+    .leaflet-control-scale{margin-left:10px;margin-bottom:10px}
+  }
+
+  /* Phase 2: the map is the product. Panels float over a full-width canvas. */
+  body{overflow:hidden}
+  main{position:relative;display:block;min-height:0;overflow:hidden}
+  .map-shell{position:absolute;inset:0}
+  .map-toolbar{
+    position:absolute;z-index:820;top:1rem;right:1rem;
+    display:flex;align-items:center;gap:.35rem
+  }
+  .map-toolbar .ghost{
+    background:rgba(7,14,18,.88);
+    backdrop-filter:blur(10px);
+    box-shadow:0 8px 20px rgba(0,0,0,.18)
+  }
+  #peoplebadge{
+    display:inline-grid;place-items:center;min-width:1.15rem;height:1.15rem;margin-left:.25rem;
+    padding:0 .25rem;border-radius:4px;background:rgba(255,255,255,.08);
+    color:#d9e1e3;font-size:.63rem;font-variant-numeric:tabular-nums
+  }
+  #peoplebadge:empty{display:none}
+
+  .people-panel,.detail-panel,.layers-panel{
+    position:absolute;z-index:810;
+    background:rgba(7,14,18,.86);
+    border:1px solid rgba(255,255,255,.11);
+    border-radius:7px;
+    box-shadow:0 18px 48px rgba(0,0,0,.38);
+    backdrop-filter:blur(14px)
+  }
+  .people-panel{
+    left:1rem;top:4.65rem;bottom:1rem;width:min(17rem,calc(100vw - 2rem));
+    padding:0;display:flex;flex-direction:column;overflow:hidden;
+    transform:translateX(calc(-100% - 1.4rem));opacity:0;pointer-events:none;
+    transition:transform .2s ease,opacity .16s ease
+  }
+  .people-panel.is-open{transform:none;opacity:1;pointer-events:auto}
+  .panel-heading{
+    display:flex;align-items:center;gap:.5rem;min-height:43px;padding:.55rem .65rem;
+    border-bottom:1px solid rgba(255,255,255,.08)
+  }
+  .panel-heading strong{font-size:.74rem;letter-spacing:.11em;text-transform:uppercase}
+  .panel-heading .panel-meta{margin-left:auto;color:var(--quiet);font-size:.68rem}
+  .panel-close{
+    width:28px;height:28px;padding:0;display:grid;place-items:center;
+    border:1px solid transparent;border-radius:5px;background:transparent;color:#89979b;cursor:pointer
+  }
+  .panel-close:hover{border-color:var(--hairline);background:rgba(255,255,255,.045);color:#fff}
+  #list{overflow:auto;padding:.45rem;display:flex;flex-direction:column;gap:.32rem}
+  #list .empty{padding:1.3rem .7rem;color:#7f8e93}
+
+  .detail-panel{right:1rem;top:4.65rem;width:min(21rem,calc(100vw - 2rem));padding:.7rem}
+  .detail-panel[hidden],.layers-panel[hidden]{display:none}
+  .detail-head{
+    display:flex;justify-content:space-between;align-items:center;margin-bottom:.55rem;
+    padding-bottom:.5rem;border-bottom:1px solid rgba(255,255,255,.08)
+  }
+  .detail-head span{font-size:.67rem;letter-spacing:.12em;text-transform:uppercase;color:#8e9ba0}
+  .detail-panel .card{display:grid;grid-template-columns:3rem 1fr;align-items:start;gap:.7rem;min-width:0}
+  .detail-panel .card>div:last-child{min-width:0}
+  .detail-panel .card .shared input{background:#081116}
+  .detail-panel .card .follow,.detail-panel .card .gpx,.detail-panel .card .sosline{margin-top:.65rem}
+
+  .layers-panel{right:1rem;top:4.65rem;width:19rem;padding:.72rem;max-height:calc(100% - 5.65rem);overflow:auto}
+  .layers-title{
+    margin-bottom:.55rem;padding-bottom:.5rem;border-bottom:1px solid rgba(255,255,255,.08);
+    font-size:.68rem;font-weight:750;letter-spacing:.12em;text-transform:uppercase;color:#98a5a9
+  }
+  .layer-option{
+    display:flex;align-items:center;gap:.65rem;padding:.5rem .2rem;
+    color:#d2d9db;font-size:.76rem;cursor:pointer
+  }
+  .layer-option+ .layer-option{border-top:1px solid rgba(255,255,255,.045)}
+  .layer-option input{accent-color:var(--accent)}
+  .layer-option small{display:block;margin-left:auto;color:#74858a;font-size:.62rem}
+  .layer-features{border:0;padding:0;margin:.35rem 0 .7rem}
+  .layer-features legend{padding:.3rem .2rem;color:#96a8b0;font-size:.65rem;text-transform:uppercase;letter-spacing:.1em}
+  .layer-features:disabled{opacity:.45}
+  .map-swatch{width:1.35rem;height:.72rem;border-radius:2px;flex:none;background:var(--swatch)}
+  .map-swatch.roads{height:.35rem;background:linear-gradient(90deg,#ec64ac 50%,#f2b2ca 50%);box-shadow:0 0 0 1px #233343}
+  .map-swatch.rail{height:0;border-top:2px dashed #c4c2d4;border-radius:0}
+  .layer-note{font-size:.7rem;line-height:1.5;color:#a5b6bd;margin:.25rem .2rem .65rem}
+  .layer-status{color:#c8d8dd}
+  .layer-option input{width:15px;height:15px;flex:none}
+  .layer-option:focus-within{outline:1px solid #9cbdcc;outline-offset:2px;border-radius:3px}
+  @media(prefers-reduced-motion:reduce){
+    .people-panel,.leaflet-tile-pane,body.spotlight .leaflet-cartography-pane{transition:none}
+  }
+
+  /* Raster supplies labels; the PostGIS SVG pane adds independent feature
+     styling over it. Keeping them in separate panes lets Layers toggle either. */
+  .leaflet-cartography-pane{pointer-events:none}
+  .leaflet-cartography-pane .leaflet-tile{image-rendering:auto}
+  body.spotlight .leaflet-cartography-pane{opacity:.52;transition:opacity .18s ease}
+
+  .person .who i{width:.48rem;height:.48rem}
+  .person.live .who i{box-shadow:0 0 0 3px rgba(64,227,143,.08)}
+  .person.me.live:not(.sos) .who i{box-shadow:0 0 0 3px rgba(76,181,255,.11)}
+  .person.sos .who i{box-shadow:0 0 0 3px rgba(255,90,98,.12)}
+
+  @media (max-width:760px){
+    .map-toolbar{top:.7rem;right:.7rem}
+    .map-toolbar .ghost{min-height:32px}
+    .people-panel{
+      left:.55rem;right:.55rem;bottom:.55rem;top:auto;width:auto;max-height:43vh;
+      transform:translateY(calc(100% + 1rem))
+    }
+    .people-panel.is-open{transform:none}
+    .detail-panel{
+      left:.55rem;right:.55rem;top:auto;bottom:.55rem;width:auto;max-height:58vh;overflow:auto
+    }
+    .layers-panel{right:.55rem;top:3.4rem;width:min(19rem,calc(100vw - 1.1rem));max-height:calc(100% - 4rem)}
   }
 
 </style>
 </head>
 <body>
 <header>
-  <h1>Live locations</h1>
+  <div class="brand"><h1>LIVEGEO</h1></div>
   <span class="count" id="count"></span>
   <span class="hint" id="hint" hidden></span>
-  <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
   <button class="ghost" id="newfence" type="button" hidden>New fence</button>
   <button class="ghost" id="circlebtn" type="button" hidden>Circle</button>
   <span class="spacer"></span>
@@ -225,41 +474,52 @@
 </header>
 <div id="circle" hidden></div>
 <main>
-  <div class="vice-map-shell">
+  <div class="map-shell">
     <div id="map"></div>
-    <div class="vice-logo" aria-hidden="true">
-      <span class="city">Mashhad</span>
-      <span class="vice">Vice City</span>
+    <div class="map-toolbar" aria-label="Map controls">
+      <button class="ghost" id="peoplebtn" type="button" aria-expanded="false">People <span id="peoplebadge"></span></button>
+      <button class="ghost" id="layersbtn" type="button" aria-expanded="false" aria-controls="layersPanel">Layers</button>
+      <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
     </div>
-    <div class="vice-scale" aria-hidden="true">
-      <div class="vice-scale-labels"><span>0</span><span>2.5</span><span>5</span><span>10 km</span></div>
-      <div class="vice-scale-line"><span></span></div>
-    </div>
-    <div class="vice-legend" aria-label="Map legend">
-      <div class="vice-legend-row"><span class="vice-line"></span><span>Major Road</span></div>
-      <div class="vice-legend-row"><span class="vice-line main"></span><span>Main Road</span></div>
-      <div class="vice-legend-row"><span class="vice-line minor"></span><span>Minor Road</span></div>
-      <div class="vice-legend-row"><span class="vice-line highway"></span><span>Highway</span></div>
-      <div class="vice-legend-row"><span class="vice-line rail"></span><span>Railway</span></div>
-      <div class="vice-legend-row"><span class="vice-box urban"></span><span>Urban Area</span></div>
-      <div class="vice-legend-row"><span class="vice-box green"></span><span>Green Space / Park</span></div>
-      <div class="vice-legend-row"><span class="vice-box mountain"></span><span>Mountain</span></div>
-      <div class="vice-legend-row"><span class="vice-box water"></span><span>Water</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">✈</span><span>Airport</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">▣</span><span>Train Station</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">▰</span><span>Bus Terminal</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">✚</span><span>Hospital</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">◆</span><span>University</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">♜</span><span>Religious Site</span></div>
-      <div class="vice-legend-row"><span class="vice-symbol">★</span><span>Landmark</span></div>
-    </div>
+
+    <aside class="people-panel" id="peoplePanel" aria-label="People">
+      <div class="panel-heading">
+        <strong>People</strong>
+        <span class="panel-meta" id="panelcount"></span>
+        <button class="panel-close" id="peopleclose" type="button" aria-label="Close people panel">×</button>
+      </div>
+      <div id="list"><p class="empty">Nobody is sharing a location yet.</p></div>
+    </aside>
+
+    <section class="detail-panel" id="detailPanel" aria-label="Person details" hidden></section>
+
+    <section class="layers-panel" id="layersPanel" aria-label="Map layers" hidden>
+      <div class="layers-title">Map layers</div>
+      <label class="layer-option"><input type="checkbox" data-layer="raster" checked><span>Street map &amp; labels</span><small>Worldwide</small></label>
+      <label class="layer-option"><input type="checkbox" data-layer="cartography" checked><span>Styled map details</span></label>
+      <p class="layer-note layer-status" id="cartographyStatus" role="status">Zoom in for styled map details.</p>
+      <fieldset class="layer-features" id="cartographyFeatures">
+        <legend>Feature colours</legend>
+        <label class="layer-option"><input type="checkbox" data-feature="roads" checked><i class="map-swatch roads" aria-hidden="true"></i><span>Roads &amp; highways</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="rail" checked><i class="map-swatch rail" aria-hidden="true"></i><span>Railways</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="landuse" checked><i class="map-swatch" style="--swatch:linear-gradient(90deg,#8778a9 50%,#b79b78 50%)" aria-hidden="true"></i><span>Urban areas &amp; terrain</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="parks" checked><i class="map-swatch" style="--swatch:#4b967e" aria-hidden="true"></i><span>Parks &amp; woodland</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="water" checked><i class="map-swatch" style="--swatch:#1caaca" aria-hidden="true"></i><span>Water</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="buildings" checked><i class="map-swatch" style="--swatch:#73758f" aria-hidden="true"></i><span>Buildings</span><small>Street zoom</small></label>
+      </fieldset>
+      <p class="layer-note">Feature switches affect the styled detail overlay. The street map retains its own features and labels.</p>
+      <div class="layers-title">Live overlays</div>
+      <label class="layer-option"><input type="checkbox" data-layer="trails" checked><span>Movement trails</span></label>
+      <label class="layer-option"><input type="checkbox" data-layer="fences" checked><span>Geofences</span></label>
+      <label class="layer-option"><input type="checkbox" data-layer="zones" checked><span>Private places</span></label>
+    </section>
   </div>
-  <aside id="list"><p class="empty">Nobody is sharing a location yet.</p></aside>
 </main>
 
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/lib/path-time.js"></script>
 <script src="/lib/people-map.js"></script>
+<script src="/lib/cartography.js"></script>
 <script>
 (function () {
   var map = L.map('map', {
@@ -270,21 +530,78 @@
     // Far enough out to see a continent, never so far that the whole world
     // shrinks into a band with empty space above and below it.
     minZoom: 3
-  }).setView([36.2605, 59.6168], 12);
+  }).setView([20, 0], 3);
 
   // Proxied and cached by this service rather than fetched from OSM directly,
   // so the browser only ever talks to the host it loaded the page from. The
   // attribution stays either way — it is a condition of using the data, not a
   // consequence of where the bytes came from.
-  L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+  var rasterBase = L.tileLayer('/tiles/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+
+  var cartography = Cartography.on(map, function (message) {
+    document.getElementById('cartographyStatus').textContent = message;
+  });
+
+  var layerPrefs = { raster: true, cartography: true, trails: true, fences: true, zones: true };
+
+  // A real geographic scale. Leaflet recomputes this from zoom and latitude,
+  // so the number always corresponds to the map instead of being decorative.
+  L.control.scale({
+    position: 'bottomleft',
+    metric: true,
+    imperial: false,
+    maxWidth: 180
   }).addTo(map);
 
   // How a person is drawn — the blur over somebody in a private place, the
   // dot gliding to where they are now, the beam for the way they are heading
   // — is shared with the page a live link opens. See /lib/people-map.js.
   var drawing = PeopleMap.on(map);
+
+  var peoplePanel = document.getElementById('peoplePanel');
+  var peopleButton = document.getElementById('peoplebtn');
+  var layersPanel = document.getElementById('layersPanel');
+  var layersButton = document.getElementById('layersbtn');
+  var detailPanel = document.getElementById('detailPanel');
+
+  function setPeopleOpen(open) {
+    peoplePanel.classList.toggle('is-open', open);
+    peopleButton.setAttribute('aria-expanded', String(open));
+  }
+  peopleButton.onclick = function () {
+    setPeopleOpen(!peoplePanel.classList.contains('is-open'));
+    layersPanel.hidden = true;
+    layersButton.setAttribute('aria-expanded', 'false');
+  };
+  document.getElementById('peopleclose').onclick = function () { setPeopleOpen(false); };
+  layersButton.onclick = function () {
+    layersPanel.hidden = !layersPanel.hidden;
+    layersButton.setAttribute('aria-expanded', String(!layersPanel.hidden));
+  };
+  setPeopleOpen(false);
+
+  document.addEventListener('mousedown', function (e) {
+    if (!layersPanel.hidden && !layersPanel.contains(e.target) && e.target !== layersButton) {
+      layersPanel.hidden = true;
+      layersButton.setAttribute('aria-expanded', 'false');
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !layersPanel.hidden) {
+      layersPanel.hidden = true;
+      layersButton.setAttribute('aria-expanded', 'false');
+      layersButton.focus();
+    }
+  });
+
+  function closeDetail() {
+    detailPanel.hidden = true;
+    detailPanel.innerHTML = '';
+    delete detailPanel.dataset.id;
+  }
 
   // Leaflet measures the container when the map is built, and this one is
   // sized by a CSS grid that may not have settled yet. Measured too early it
@@ -783,13 +1100,19 @@
   }
 
   function openCard(p, marker) {
-    // autoPan off: opening a card must not shove the map. Lighting a path
-    // fits the whole of it, and a popup panning to make room for itself
-    // undoes that immediately.
-    marker.bindPopup(card(p), { minWidth: 180, autoPan: false }).openPopup();
-    identify(p.id).then(function () {
-      if (marker.isPopupOpen()) marker.setPopupContent(card(p));
-    });
+    function paint() {
+      if (detailPanel.dataset.id !== String(p.id)) return;
+      detailPanel.innerHTML =
+        '<div class="detail-head"><span>Location details</span>'
+        + '<button class="panel-close" id="detailclose" type="button" aria-label="Close details">×</button></div>'
+        + card(p);
+      document.getElementById('detailclose').onclick = closeDetail;
+    }
+    detailPanel.dataset.id = String(p.id);
+    detailPanel.hidden = false;
+    paint();
+    identify(p.id).then(function () { paint(); });
+    if (window.matchMedia && window.matchMedia('(max-width:760px)').matches) setPeopleOpen(false);
   }
 
   // Which path is being looked at. `lit` is pinned by a click or a tap and
@@ -832,13 +1155,14 @@
           weight: focus ? 4 : 2,
           // Solid when lit: a dashed line reads as provisional, and this is
           // the one thing being asserted.
-          dashArray: focus ? null : '4 4',
+          dashArray: focus ? null : (mine(e.data) ? null : '4 5'),
+          color: focus ? colourOf(e.data) : trailColourOf(e.data),
         });
       }
 
       // A wider, softer line underneath is what makes it look lit rather than
       // merely thicker.
-      if (focus && e.path) {
+      if (layerPrefs.trails && focus && e.path) {
         var pts = e.path.getLatLngs();
         if (!e.glow) {
           e.glow = L.polyline(pts, {
@@ -891,6 +1215,7 @@
   // Only the lit one while something is pinned, so moving across the map
   // does not flick between people.
   function pathHit(pt) {
+    if (!layerPrefs.trails) return null;
     var best = null;
     var ids = lit ? [lit] : Array.from(people.keys());
     ids.forEach(function (id) {
@@ -981,6 +1306,7 @@
     }
     lit = null; hovered = null; pathHover = null;
     hideTime();
+    closeDetail();
     shine();
   });
 
@@ -1051,9 +1377,15 @@
   // An SOS is red whoever it is. Otherwise you are blue, so you can find
   // yourself among everyone else, and the rest are green while they share.
   function colourOf(p) {
-    if (p.sos) return '#d93025';
-    if (mine(p)) return live(p) ? cssVar('--me', '#1a73e8') : cssVar('--me-stale', '#6f8fc2');
-    return live(p) ? cssVar('--live', '#0a7d33') : '#8a929b';
+    if (p.sos) return cssVar('--danger', '#ff5a62');
+    if (mine(p)) return live(p) ? cssVar('--me', '#4cb5ff') : cssVar('--me-stale', '#7499b4');
+    return live(p) ? cssVar('--live', '#40e38f') : '#78868c';
+  }
+
+  function trailColourOf(p) {
+    if (p.sos) return cssVar('--danger', '#ff5a62');
+    if (mine(p)) return cssVar('--me', '#4cb5ff');
+    return live(p) ? '#78958c' : '#5f7077';
   }
 
   function draw(p) {
@@ -1100,11 +1432,11 @@
       if (entry.chip) { map.removeLayer(entry.chip); entry.chip = null; }
       var fresh = !entry.marker;
       if (fresh) {
-        entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
+        entry.marker = L.circleMarker(here, { radius: 6.5, weight: 2, color: '#071318', fillColor: colour, fillOpacity: 1 }).addTo(map);
         entry.marker.bindTooltip(tipOf(p), { permanent: false });
         wire(entry.marker, entry);
       }
-      entry.marker.setStyle({ color: colour });
+      entry.marker.setStyle({ color: '#071318', fillColor: colour });
       relabel(entry);
       if (p.accuracy) {
         if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour, interactive: false }).addTo(map);
@@ -1126,8 +1458,13 @@
     var lines = runs.filter(function (r) { return r.length > 1; })
       .map(function (r) { return r.map(function (t) { return [t.latitude, t.longitude]; }); });
     if (lines.length) {
-      if (!entry.path) entry.path = L.polyline(lines, { weight: 2, opacity: .45, dashArray: '4 4', color: colour }).addTo(map);
-      else entry.path.setLatLngs(lines).setStyle({ color: colour });
+      var trailColour = trailColourOf(p);
+      if (!entry.path) {
+        entry.path = L.polyline(lines, { weight: mine(p) ? 2.6 : 1.8, opacity: mine(p) ? .72 : .34, dashArray: mine(p) ? null : '4 5', color: trailColour });
+        if (layerPrefs.trails) entry.path.addTo(map);
+      } else {
+        entry.path.setLatLngs(lines).setStyle({ color: trailColour });
+      }
       if (entry.glow) entry.glow.setLatLngs(lines);
     }
     fadeEnds(entry, runs, colour, p.hidden);
@@ -1165,7 +1502,10 @@
   // A soft spot where a path goes out of view into a private place, and
   // where it comes back out.
   function fadeEnds(entry, runs, colour, hidden) {
-    if (!entry.fades) entry.fades = L.layerGroup().addTo(map);
+    if (!entry.fades) {
+      entry.fades = L.layerGroup();
+      if (layerPrefs.trails) entry.fades.addTo(map);
+    }
     entry.fades.clearLayers();
     var at = function (q) {
       L.marker([q.latitude, q.longitude], {
@@ -1199,8 +1539,10 @@
     var rows = Array.from(people.values()).map(function (e) { return e.data; })
       .sort(function (a, b) { return b.at - a.at; });
 
-    document.getElementById('count').textContent =
-      rows.length ? rows.length + (rows.length === 1 ? ' person' : ' people') : '';
+    var countText = rows.length ? rows.length + (rows.length === 1 ? ' person' : ' people') : '';
+    document.getElementById('count').textContent = countText;
+    document.getElementById('panelcount').textContent = countText;
+    document.getElementById('peoplebadge').textContent = rows.length ? String(rows.length) : '';
     document.getElementById('recentre').hidden = !rows.length;
 
     if (lit && !people.has(lit)) { lit = null; shine(); }
@@ -1359,6 +1701,46 @@
   // with its edge marked, so you know where they stop seeing you.
   var myZones = [];
   var zoneLayer = L.layerGroup().addTo(map);
+
+  function syncTrails() {
+    people.forEach(function (e) {
+      ['path', 'glow', 'fades'].forEach(function (key) {
+        var layer = e[key];
+        if (!layer) return;
+        if (layerPrefs.trails) {
+          if (!map.hasLayer(layer)) layer.addTo(map);
+        } else if (map.hasLayer(layer)) {
+          map.removeLayer(layer);
+        }
+      });
+    });
+    if (!layerPrefs.trails) hideTime();
+  }
+
+  function applyLayerPreference(name, on) {
+    layerPrefs[name] = on;
+    if (name === 'cartography') {
+      cartography.setVisible(on);
+      document.getElementById('cartographyFeatures').disabled = !on;
+    }
+    var layer = name === 'raster' ? rasterBase
+      : name === 'fences' ? fenceLayer
+      : name === 'zones' ? zoneLayer
+      : null;
+    if (layer) {
+      if (on && !map.hasLayer(layer)) layer.addTo(map);
+      if (!on && map.hasLayer(layer)) map.removeLayer(layer);
+    }
+    if (name === 'trails') syncTrails();
+  }
+
+  layersPanel.addEventListener('change', function (e) {
+    var feature = e.target.closest && e.target.closest('input[data-feature]');
+    if (feature) { cartography.setFeature(feature.getAttribute('data-feature'), feature.checked); return; }
+    var box = e.target.closest && e.target.closest('input[data-layer]');
+    if (!box) return;
+    applyLayerPreference(box.getAttribute('data-layer'), box.checked);
+  });
 
   function loadZones() {
     return fetch('/api/zones', { cache: 'no-store' })
