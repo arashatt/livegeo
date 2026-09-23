@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "login": "node bin/login.mjs",
-    "test": "node test/test.mjs && node --test test/cartography.test.mjs test/district.test.mjs",
+    "test": "node test/test.mjs && node --test test/cartography.test.mjs test/cartography-vector.test.mjs test/district.test.mjs",
     "test:cartography": "node test/cartography-postgis.mjs"
   },
   "engines": {

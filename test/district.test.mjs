@@ -4,13 +4,15 @@ import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readLayer, decodeTile } from '../src/mvt.js';
+import { readLayer, decodeTile, partsOf, LINE } from '../src/mvt.js';
 import {
-  makeDistrict, makePlacesPostgis, makeVectorUpstream, placesInTile, placesFromRows, placeSql,
+  makeDistrict, makePlacesPostgis, placesInTile, placesFromRows, placeSql,
   pickDistrict, tilesAround, DISTRICT_MIN_ZOOM, PLACE_MAX_ZOOM,
 } from '../src/district.js';
+import { makeVectorUpstream } from '../src/vector-tiles.js';
 import { serve, staticFile } from '../src/server.js';
 import { Positions } from '../src/positions.js';
+import { encodeTile } from './mvt-encode.mjs';
 
 const quiet = { info() {}, error() {} };
 
@@ -28,59 +30,6 @@ const REAL = Buffer.from(
 );
 const VADUZ = { lat: 47.1392862, lon: 9.5227962 };
 const TRIESEN = { lat: 47.106994, lon: 9.5274876 };
-
-// Enough of an encoder to write the tiles these tests need.
-const varint = (n) => {
-  const out = [];
-  while (n >= 0x80) { out.push((n % 0x80) | 0x80); n = Math.floor(n / 0x80); }
-  out.push(n);
-  return out;
-};
-const key = (no, type) => varint(no * 8 + type);
-const sized = (no, bytes) => [...key(no, 2), ...varint(bytes.length), ...bytes];
-const text = (s) => [...Buffer.from(s, 'utf8')];
-const zz = (n) => (n < 0 ? -2 * n - 1 : 2 * n);
-function valueOf(v) {
-  if (typeof v === 'string') return sized(1, text(v));
-  if (typeof v === 'boolean') return [...key(7, 0), ...varint(v ? 1 : 0)];
-  if (Number.isInteger(v) && v >= 0) return [...key(5, 0), ...varint(v)];
-  if (Number.isInteger(v)) return [...key(6, 0), ...varint(zz(v))];
-  const b = Buffer.alloc(8);
-  b.writeDoubleLE(v);
-  return [...key(3, 1), ...b];
-}
-function encodeTile(layers) {
-  const out = [];
-  for (const [name, { extent, features }] of Object.entries(layers)) {
-    const keys = [];
-    const values = [];
-    const feats = features.map((f) => {
-      const tags = [];
-      for (const [k, v] of Object.entries(f.properties)) {
-        if (!keys.includes(k)) keys.push(k);
-        if (!values.includes(v)) values.push(v);
-        tags.push(keys.indexOf(k), values.indexOf(v));
-      }
-      const geometry = [];
-      let x = 0;
-      let y = 0;
-      if (f.type !== 1) geometry.push(1 + 8, zz(0), zz(0), 2 + 8, zz(10), zz(10));
-      else {
-        geometry.push(1 + 8 * f.points.length);
-        for (const [px, py] of f.points) { geometry.push(zz(px - x), zz(py - y)); x = px; y = py; }
-      }
-      return [...sized(2, tags.flatMap(varint)), ...key(3, 0), ...varint(f.type || 1), ...sized(4, geometry.flatMap(varint))];
-    });
-    out.push(...sized(3, [
-      ...key(15, 0), ...varint(2), ...sized(1, text(name)),
-      ...feats.flatMap((f) => sized(2, f)),
-      ...keys.flatMap((k) => sized(3, text(k))),
-      ...values.flatMap((v) => sized(4, valueOf(v))),
-      ...(extent ? [...key(5, 0), ...varint(extent)] : []),
-    ]));
-  }
-  return Buffer.from(out);
-}
 
 const toLon = (x) => x * 360 - 180;
 const toLat = (y) => (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI;
@@ -104,12 +53,12 @@ test('a real tile reads: names, kinds, and where each place is', () => {
 
 test('the reader takes every value type, skips what it does not need, and refuses a broken tile', () => {
   const tile = encodeTile({
-    water: { features: [{ type: 3, properties: { class: 'lake' } }] },
+    water: { features: [{ type: 3, properties: { class: 'lake' }, rings: [[[0, 0], [10, 0], [10, 10]]] }] },
     place: {
       extent: 512,
       features: [
         { type: 1, points: [[100, 200]], properties: { class: 'suburb', name: 'Tajrish', rank: 12, capital: false, score: 1.5, depth: -3 } },
-        { type: 2, properties: { class: 'town', name: 'A line' } },
+        { type: 2, properties: { class: 'town', name: 'A line' }, lines: [[[0, 0], [10, 10]]] },
       ],
     },
   });
@@ -117,12 +66,14 @@ test('the reader takes every value type, skips what it does not need, and refuse
   assert.deepEqual(Object.keys(layers), ['water', 'place']);
   const place = readLayer(tile, 'place');
   assert.equal(place.extent, 512);
-  assert.deepEqual(place.features[0], {
+  const { type, properties, points } = place.features[0];
+  assert.deepEqual({ type, properties, points }, {
     type: 1,
     properties: { class: 'suburb', name: 'Tajrish', rank: 12, capital: false, score: 1.5, depth: -3 },
     points: [[100, 200]],
   });
-  assert.deepEqual(place.features[1].points, [], 'only points are placed');
+  assert.deepEqual(place.features[1].points, [], 'a line has no points of its own');
+  assert.deepEqual(partsOf(LINE, place.features[1].geometry), [[[0, 0], [10, 10]]]);
   assert.equal(placesInTile(tile, { z: 12, x: 0, y: 0 }).length, 1);
   assert.throws(() => readLayer(tile.subarray(0, tile.length - 3), 'place'));
   assert.deepEqual(placesInTile(Buffer.from('not a tile'), { z: 12, x: 0, y: 0 }), []);

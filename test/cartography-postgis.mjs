@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import pg from 'pg';
 import { CARTOGRAPHY_SQL, makeCartography } from '../src/cartography.js';
 import { makeDistrict, makePlacesPostgis, placeSql } from '../src/district.js';
+import { makeVectorCartography } from '../src/cartography-vector.js';
 
 if (!process.env.CARTOGRAPHY_TEST_DATABASE_URL) throw new Error('CARTOGRAPHY_TEST_DATABASE_URL is required');
 const db = new pg.Client({ connectionString: process.env.CARTOGRAPHY_TEST_DATABASE_URL });
@@ -55,6 +56,35 @@ try {
   // Test a different hemisphere: the query has no city-specific bounds.
   assert.equal(await carto.tile(15, 25000, 25000), null);
   console.log('PostGIS cartography: geometry, orientation, edge buffer, budgets, selections and coverage passed');
+
+  // The same features from a vector tile, as a server with no import draws
+  // them: a z14 tile in the OpenMapTiles layout, made by PostGIS's own MVT
+  // encoder from the same rows. Both must land in the same place.
+  const { rows: [{ mvt }] } = await db.query(`
+    WITH t AS (SELECT ST_TileEnvelope(14, 50, 50) AS env),
+    roads AS (SELECT highway AS class, ST_AsMVTGeom(way, t.env, 4096, 64, true) AS geom
+                FROM planet_osm_line, t WHERE highway IS NOT NULL),
+    lakes AS (SELECT 'lake' AS class, ST_AsMVTGeom(way, t.env, 4096, 64, true) AS geom
+                FROM planet_osm_polygon, t WHERE "natural" = 'water')
+    SELECT (SELECT ST_AsMVT(roads, 'transportation', 4096, 'geom') FROM roads WHERE geom IS NOT NULL)
+        || (SELECT ST_AsMVT(lakes, 'water', 4096, 'geom') FROM lakes WHERE geom IS NOT NULL) AS mvt`);
+  const vector = makeVectorCartography({ upstream: { enabled: true, tile: async () => ({ bytes: mvt, from: 'upstream' }) } });
+  const fromVector = await vector.tile(15, 100, 100, ['roads', 'water']);
+  const fromImport = await carto.tile(15, 100, 100, ['roads', 'water']);
+  const bounds = (svg, layer) => {
+    const group = new RegExp(`<g data-layer="${layer}">(.*?)</g>`).exec(svg)[1];
+    const numbers = [...group.matchAll(/ d="([^"]*)"/g)].flatMap(([, d]) => d.match(/-?\d+(?:\.\d+)?/g).map(Number));
+    const xs = numbers.filter((_, i) => i % 2 === 0);
+    const ys = numbers.filter((_, i) => i % 2 === 1);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  };
+  for (const layer of ['roads', 'water']) {
+    const a = bounds(fromImport, layer);
+    const b = bounds(fromVector, layer);
+    assert.ok(a.every((v, i) => Math.abs(v - b[i]) <= 1), `${layer}: import ${a}, vector tile ${b}`);
+  }
+  assert.match(fromVector, /transform="scale\(1,-1\)"/);
+  console.log('PostGIS cartography from vector tiles: the same roads and water, in the same place');
 
   // The district name, from the import's place nodes: the same query the
   // server runs, against a few places around Vaduz.

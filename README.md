@@ -227,7 +227,7 @@ DATABASE_URL=                 # optional PostGIS — see «Places and history»
 TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
 TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
 TILE_MAX_AGE=2592000          # seconds before a cached tile is refetched
-VECTOR_UPSTREAM=              # where district names come from; default OpenFreeMap
+VECTOR_UPSTREAM=              # district names and styled layers without an import; default OpenFreeMap
 VECTOR_MAX_AGE=604800         # seconds before a cached vector tile is refetched
 SHARE_TTL=604800              # how long a shared path link stays readable
 SOS_CALL=                     # who an SOS says to call; default Iran's 110 / 115
@@ -579,13 +579,25 @@ terrain, parks and woodland, water, and buildings. The palette uses teal
 ground, pink arterial roads, muted violet urban areas, jade parks and cyan
 water. It follows real OSM geometry, without decorative or invented roads.
 
-The street map supplies labels and worldwide coverage. Detailed feature
-styling uses the local osm2pgsql import described under **Places and history**;
-it appears from zoom 8, with smaller roads and buildings added as you zoom in.
-No provider key or browser request to another host is required. Any imported
-region works. Outside its coverage, or without PostGIS, detail tiles are
-transparent and the street map remains visible. The Layers panel reports
-whether styled features are available at the current view.
+The street map supplies labels and worldwide coverage. The styled features
+appear from zoom 8, with smaller roads and buildings added as you zoom in, and
+come from one of two places:
+
+- the local osm2pgsql import described under **Places and history**, where
+  there is one and it has something at that spot;
+- everywhere else, the same features from vector tiles in the OpenMapTiles
+  layout, from `VECTOR_UPSTREAM`: the OpenFreeMap tiles the district name
+  reads, proxied and cached by this server (`src/cartography-vector.js`).
+  So a server that keeps no extract, only history, still draws them
+  worldwide.
+
+Both go through the same renderer, with the same zooms and the same budgets
+per tile, so the map looks and switches the same whichever drew it. No
+provider key or browser request to another host is required. With neither
+source, detail tiles are transparent and the street map remains visible. The
+Layers panel reports whether styled features are available at the current
+view; each tile says where it came from in `x-carto-source` (`postgis`,
+`upstream` or `empty`).
 
 Feature switches affect the overlay; features printed into the underlying
 raster remain visible while **Street map & labels** is on. Land-cover tags
@@ -617,7 +629,8 @@ The page asks `/api/district?lat=…&lon=…&z=…` once the map has settled, an
 gets one or two lines of text back. The names are OpenStreetMap's place nodes,
 from the imported extract where there is one (see **Places and history**).
 Everywhere else they come from the `place` layer of vector tiles in the
-OpenMapTiles layout, from `VECTOR_UPSTREAM`. That is
+OpenMapTiles layout, from `VECTOR_UPSTREAM`, the same tiles the styled map
+layers draw from. That is
 [OpenFreeMap](https://openfreemap.org) by default: free, keyless, and covering
 the planet. Those tiles are proxied and cached on disk under
 `TILE_CACHE/vector` like the raster ones, so the browser still talks to
@@ -1210,7 +1223,9 @@ are, which is enough for a uptime check.
 | `src/sos.js` | an SOS: who is told, and what they are told |
 | `src/checks.js` | check on me: when to ask, and when to tell; the judgement is one pure function |
 | `src/district.js` | the name of where the middle of the map is: place nodes from the import, else vector tiles from the upstream |
-| `src/mvt.js` | just enough of a vector tile reader for that |
+| `src/cartography-vector.js` | the styled map layers from those vector tiles, where there is no import |
+| `src/vector-tiles.js` | the vector tile upstream (OpenFreeMap by default), proxied and cached on disk |
+| `src/mvt.js` | just enough of a vector tile reader for both |
 | `src/config.js` | environment, checked once at startup |
 | `public/index.html` | the map: Leaflet, OpenStreetMap tiles, one EventSource |
 | `public/live.html` | the page a live link opens |

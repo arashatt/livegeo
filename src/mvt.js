@@ -1,6 +1,7 @@
 // mvt.js — just enough of a Mapbox Vector Tile reader: a layer's features,
-// with their properties and, for points, where they are in the tile. What
-// the district name needs (district.js), without a dependency.
+// with their properties and geometry. What the district name (district.js)
+// and the styled map layers (cartography-vector.js) need, without a
+// dependency.
 //
 // A tile is protocol buffers: layers, each with its own key and value tables,
 // and features that point into them. Anything this does not need is skipped
@@ -70,27 +71,65 @@ function value(buf) {
 
 const zigzag = (n) => (n % 2 ? -(n + 1) / 2 : n / 2);
 
-// The positions a point feature's MoveTo commands give, in tile units (0 to
-// the layer's extent). Lines and polygons are not needed and not decoded.
-function pointsOf(geometry) {
-  const out = [];
+export const POINT = 1;
+export const LINE = 2;
+export const POLYGON = 3;
+
+// A feature's geometry as parts, in tile units (0 to the layer's extent):
+// the points of a point feature, each line of a line, each ring of a polygon
+// (closed: its first point repeated at the end). Rings keep their winding,
+// so an even-odd fill draws holes without being told which ring is which.
+export function partsOf(type, geometry) {
+  const parts = [];
+  let part = null;
   let x = 0;
   let y = 0;
   for (let i = 0; i < geometry.length;) {
     const command = geometry[i] & 7;
     const count = Math.floor(geometry[i] / 8);
     i++;
-    if (command !== 1) break;
+    if (command === 7) {
+      if (part && part.length) part.push(part[0]);
+      continue;
+    }
+    if (command !== 1 && command !== 2) break;
     for (let k = 0; k < count && i + 1 < geometry.length; k++) {
       x += zigzag(geometry[i++]);
       y += zigzag(geometry[i++]);
-      out.push([x, y]);
+      if (command === 1 && type !== POINT) {
+        part = [];
+        parts.push(part);
+      }
+      if (type === POINT) parts.push([x, y]);
+      else if (part) part.push([x, y]);
     }
   }
-  return out;
+  return parts;
 }
 
-export const POINT = 1;
+// The bounds of a feature's geometry, [minX, minY, maxX, maxY] in tile units,
+// without building its parts: enough to tell whether it reaches a tile.
+export function boundsOf(geometry) {
+  let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i < geometry.length;) {
+    const command = geometry[i] & 7;
+    const count = Math.floor(geometry[i] / 8);
+    i++;
+    if (command === 7) continue;
+    if (command !== 1 && command !== 2) break;
+    for (let k = 0; k < count && i + 1 < geometry.length; k++) {
+      x += zigzag(geometry[i++]);
+      y += zigzag(geometry[i++]);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  return [minX, minY, maxX, maxY];
+}
 
 function readLayerBody(buf) {
   const r = reader(buf);
@@ -125,7 +164,7 @@ function featuresOf(layer) {
       else if (no === 4) geometry = r.uints(wire);
       else r.skip(wire);
     }
-    return { type, properties, points: type === POINT ? pointsOf(geometry) : [] };
+    return { type, properties, geometry, points: type === POINT ? partsOf(POINT, geometry) : [] };
   });
 }
 
@@ -147,6 +186,20 @@ export function readLayer(buf, name) {
     } else r.skip(type);
   }
   return null;
+}
+
+// The named layers of a tile, read in one pass: { name: { extent, features } }.
+export function readLayers(buf, names) {
+  const r = reader(asBuffer(buf));
+  const out = {};
+  while (!r.done()) {
+    const { no, type } = r.field();
+    if (no === 3 && type === 2) {
+      const layer = readLayerBody(r.bytes());
+      if (names.includes(layer.name)) out[layer.name] = { extent: layer.extent, features: featuresOf(layer) };
+    } else r.skip(type);
+  }
+  return out;
 }
 
 // Every layer, by name: for tests, which check what a tile says.

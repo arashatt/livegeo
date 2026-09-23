@@ -46,10 +46,11 @@ export function defaults() {
     tileUserAgent: process.env.TILE_USER_AGENT
       || 'livegeo/1.0 (+https://github.com/arashatt/livegeo)',
 
-    // Where the district name comes from without an imported OSM extract
-    // (district.js): vector tiles, proxied and cached like the raster ones,
-    // so the browser still talks to nobody else. A TileJSON address, or a
-    // {z}/{x}/{y} template; 'off' leaves only an import to name places from.
+    // Where the district name and the styled map layers come from without
+    // an imported OSM extract (vector-tiles.js): vector tiles, proxied and
+    // cached like the raster ones, so the browser still talks to nobody
+    // else. A TileJSON address, or a {z}/{x}/{y} template; 'off' leaves only
+    // an import to draw from.
     vectorUpstream: process.env.VECTOR_UPSTREAM || 'https://tiles.openfreemap.org/planet',
     vectorMaxAge: Number(process.env.VECTOR_MAX_AGE || 7 * 24 * 3600),
 

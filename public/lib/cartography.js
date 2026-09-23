@@ -25,7 +25,9 @@
           return x < bounds.max.x && x + 256 > bounds.min.x;
         });
       });
-      if (current.some(function (tile) { return tile.dataset.source === 'postgis'; })) return status('Styled details in available areas.');
+      // From the imported extract, or from the vector tiles the server fetches
+      // where there is none: either way, real OpenStreetMap features.
+      if (current.some(function (tile) { return tile.dataset.source === 'postgis' || tile.dataset.source === 'upstream'; })) return status('Styled details from OpenStreetMap.');
       if (!current.length || current.some(function (tile) { return !tile.dataset.source; })) return status('Loading styled details…');
       if (current.some(function (tile) { return tile.dataset.source === 'error'; })) return status('Styled details unavailable. The street map is still available.');
       status('No styled features here. Keep the street map on for coverage.');

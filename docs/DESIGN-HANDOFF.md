@@ -177,6 +177,18 @@ The full vocabulary is in section 4. In brief:
 
 In this screenshot Vaduz was given a Persian name in the local copy, to show a name in another script with its Latin line. The map under it is the placeholder grid city, with the Liechtenstein extract's styled detail over it.
 
+**The Layers panel** (**Layers** at the top right of the map):
+
+![The Layers panel](design-handoff/15-layers.jpg)
+
+This was taken on the local copy with no extract imported, so the details come from vector tiles. The stand-in for OpenFreeMap built those tiles from the Liechtenstein extract, over the placeholder grid city.
+
+- **Street map & labels:** the raster map underneath, worldwide.
+- **Styled map details:** an overlay of real OpenStreetMap features in the map's own palette, from zoom 8. Six switches under **Feature colours** turn each one on or off: roads and highways, railways, urban areas and terrain, parks and woodland, water, and buildings (from street zoom).
+  - The features come from the server's imported extract where there is one. Everywhere else they come from OpenFreeMap's vector tiles, fetched by the server. Either way they are drawn the same.
+  - A status line under the switch says what is happening: "Styled details from OpenStreetMap.", "Zoom in for styled map details.", "Loading styled details…", "No styled features here…", "Styled details unavailable…", or "Styled details are off."
+- **Live overlays:** movement trails, geofences and private places.
+
 #### 3.1.3 Lighting a path (spotlight) and the time along it
 
 ![Hovering a path](design-handoff/02-path-hover-time.jpg)
@@ -622,6 +634,7 @@ These are product decisions about privacy and safety. Changing one is a conversa
 
 - **The GPX dialog:** `gpxDialog` and the ids inside it (`gpxTitle`, `gpxClose`, `gpxPrev`, `gpxDate`, `gpxNext`, `gpxMap`, `gpxStatus`, `gpxFacts`, `gpxWarning`, `gpxSave`, `gpxSend`, `gpxCopy`, `gpxFile`, `gpxText`). The card's button keeps the `gpxbtn` class.
 - **The district name:** `district`, the box in the map's bottom-right corner, filled from `/api/district`, and its `show` class.
+- **The Layers panel:** `layersbtn`, `layersPanel`, `cartographyStatus`, and the `data-layer` and `data-feature` attributes on its checkboxes. The feature names (`roads`, `rail`, `landuse`, `parks`, `water`, `buildings`) are what the server's `/carto/…?layers=` accepts.
 - **Element ids the scripts look up.**
   - Dashboard: `map`, `list`, `count`, `hint`, `recentre`, `newfence`, `circlebtn`, `signout`, `conn`, `circle`, and ids inside the Circle panel (`mkinvite`, `invitebox`, `livelist`, `zonelist`, `mkzone`, `devices`, `mkcode`, `codebox`, `copyinvite`).
   - Live page: `who`, `when`, `state`, `follow`, `notice`.
