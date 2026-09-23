@@ -31,7 +31,7 @@ jobs:
 
       - name: Capture desktop preview
         run: |
-          cat > /tmp/screenshot.mjs <<'EOF'
+          cat > screenshot-preview.mjs <<'EOF'
           import { chromium } from 'playwright';
           const browser = await chromium.launch({ headless: true });
           const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
@@ -39,7 +39,8 @@ jobs:
           await page.screenshot({ path: '/tmp/livegeo-preview.png', fullPage: true });
           await browser.close();
           EOF
-          node /tmp/screenshot.mjs
+          node screenshot-preview.mjs
+          rm screenshot-preview.mjs
 
       - name: Print screenshot as base64
         run: |
