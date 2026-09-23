@@ -323,11 +323,17 @@ if (seeded) console.log(`restored ${seeded} fence states`);
 
 // Which address the bot's links will carry. Checked once here for the log;
 // a tunnel that comes up later is picked up by the first link that needs it.
+// Never the address itself: these lines are read where it should not be.
 if (config.ingest === 'bot' && !config.publicUrl) {
   await address.get();
   console.log(address.source() === 'quick tunnel'
     ? 'PUBLIC_URL is not set — links the bot sends use the quick tunnel\'s address'
     : 'PUBLIC_URL is not set and no quick tunnel answers — /login cannot send a working link yet');
+} else if (config.ingest === 'bot' && address.copied) {
+  await address.get();
+  console.log(address.source() === 'quick tunnel'
+    ? 'PUBLIC_URL is a quick tunnel\'s address, which changes whenever the tunnel restarts — links the bot sends use the tunnel\'s current address'
+    : 'PUBLIC_URL is a quick tunnel\'s address and the tunnel does not answer, so links use PUBLIC_URL, which stops working when the tunnel restarts');
 }
 
 const bye = async () => { await telegram.stop(); await geo.close(); process.exit(0); };

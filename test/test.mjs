@@ -914,6 +914,22 @@ head('where the links point');
   hostname = 'calm-hill-9q.trycloudflare.com';
   now += 6_000;
   t('but is after a few seconds', (await quick.get()) === 'https://calm-hill-9q.trycloudflare.com');
+
+  // A PUBLIC_URL copied out of the tunnel's log is right only until the
+  // tunnel restarts, so the tunnel's own answer wins over it.
+  t('a PUBLIC_URL of your own is not taken for a copy', fixed.copied === false);
+  hostname = 'bright-river-3fx.trycloudflare.com';
+  const copy = makeAddress({ publicUrl: 'https://old-name-7k.trycloudflare.com/', fetch: tunnel, clock: () => now });
+  t('one on trycloudflare.com is', copy.copied === true);
+  t('and the tunnel\'s current address is used over it',
+    (await copy.get()) === 'https://bright-river-3fx.trycloudflare.com' && copy.source() === 'quick tunnel');
+  hostname = 'calm-hill-9q.trycloudflare.com';
+  now += 61_000;
+  t('following the tunnel when it restarts', (await copy.get()) === 'https://calm-hill-9q.trycloudflare.com');
+  up = false;
+  now += 61_000;
+  t('and the copy only when the tunnel cannot be asked',
+    (await copy.get()) === 'https://old-name-7k.trycloudflare.com' && copy.source() === 'PUBLIC_URL');
 }
 
 head('who may look');

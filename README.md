@@ -431,6 +431,11 @@ Worker is what gives links that outlast a restart. `/healthz` says which the
 links are using — `"address": "PUBLIC_URL"`, `"quick tunnel"` or `"none"` —
 and never the address itself.
 
+A `PUBLIC_URL` on `trycloudflare.com` — copied from the tunnel's log — is not
+believed over the tunnel, since it stops working the next time cloudflared
+restarts: while the tunnel answers, its current address is used, and the copy
+only when it cannot be asked. The startup log says which.
+
 If UDP is filtered where this runs, `TUNNEL_PROTOCOL=http2` moves the same
 connection to TCP on the same port.
 

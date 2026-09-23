@@ -10,6 +10,11 @@
 // minute, which is how a restarted tunnel's new address reaches the next
 // /login without anybody editing a file.
 //
+// A PUBLIC_URL on trycloudflare.com was copied from a quick tunnel's log, and
+// is right only until that tunnel restarts. So it is not believed over the
+// tunnel: while the tunnel answers, its current address is used, and the copy
+// only when it cannot be asked.
+//
 // The page itself never needs this: its own buttons use the address it was
 // opened at. This is for links that leave it — /login, /live, an SOS.
 
@@ -27,6 +32,7 @@ export function makeAddress({
   clock = () => Date.now(),
 } = {}) {
   const fixed = String(publicUrl || '').replace(/\/+$/, '');
+  const copied = Boolean(fixed) && QUICK.test(hostOf(fixed));
   let known = '';
   let next = 0;   // when to ask the tunnel again
 
@@ -41,19 +47,31 @@ export function makeAddress({
   return {
     // The address to put in a link, or '' when there is none to give.
     async get() {
-      if (fixed) return fixed;
-      if (clock() < next) return known;
-      try {
-        known = (await ask()) || '';
-      } catch {
-        known = '';
+      if (fixed && !copied) return fixed;
+      if (clock() >= next) {
+        try {
+          known = (await ask()) || '';
+        } catch {
+          known = '';
+        }
+        next = clock() + (known ? ttl : retry);
       }
-      next = clock() + (known ? ttl : retry);
-      return known;
+      return known || fixed;
     },
 
     // Which address links are using, for /healthz and the startup log. Never
     // the address itself: both are read in places it should not be.
-    source: () => (fixed ? 'PUBLIC_URL' : known ? 'quick tunnel' : 'none'),
+    source: () => (fixed && !copied ? 'PUBLIC_URL' : known ? 'quick tunnel' : fixed ? 'PUBLIC_URL' : 'none'),
+
+    // Whether PUBLIC_URL is a quick tunnel's address, for the startup log.
+    copied,
   };
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
 }
