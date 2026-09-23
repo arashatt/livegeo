@@ -128,6 +128,14 @@
     border-radius:6px;background:var(--paper);color:var(--ink)}
   /* Follow me: a live link from your own card. */
   .card .follow{display:flex;align-items:center;gap:.3rem;margin-top:.45rem;flex-wrap:wrap}
+  /* Somebody who asked for help. */
+  .person.sos{border-color:#d93025;box-shadow:0 0 0 2px rgba(217,48,37,.18)}
+  .person.sos .who i{background:#d93025;animation:pulse .9s ease-in-out infinite}
+  .person.sos .meta.alarm{color:#d93025;font-weight:600}
+  @media (prefers-reduced-motion:reduce){ .person.sos .who i{animation:none} }
+  .card .sosline{display:flex;align-items:center;gap:.35rem;margin-top:.45rem;flex-wrap:wrap}
+  .ghost.sosbtn{color:#d93025;border-color:rgba(217,48,37,.5);font-weight:600}
+  .ghost.sosbtn:hover{background:#d93025;color:#fff;border-color:#d93025}
   header .hint{font-size:.8rem;color:var(--quiet)}
   header .spacer{flex:1}
   header a.ghost{text-decoration:none;color:inherit}
@@ -460,6 +468,10 @@
       ((p.trail || []).length > 1 && me && (me.admin || me.id === String(p.id))
         ? '<button class="ghost share" data-id="' + esc(p.id) + '">Share this path</button>'
         : '') +
+      // An SOS: yours only, and what it does is said before anything is sent.
+      (me && me.live && me.id === String(p.id)
+        ? '<div class="sosline">' + sosLine(p) + '</div>'
+        : '') +
       // A link anyone can follow you on, for a while — the page it opens needs
       // no Telegram and no sign-in. Only for yourself: the server makes links
       // for nobody else, whoever asks.
@@ -555,6 +567,45 @@
         button.disabled = false;
         window.alert((e && e.message) || 'Could not make a live link.');
       });
+  }
+
+  function sosLine(p) {
+    return p.sos
+      ? '<span class="chandle">SOS on until ' + esc(clock(p.sos)) + ': everyone who can see you knows exactly where you are.</span>'
+        + '<button class="ghost safebtn">I’m safe</button>'
+      : '<button class="ghost sosbtn">SOS</button>';
+  }
+
+  // Asked twice, in effect: the button, then what it will do. An SOS is the
+  // one thing here that deliberately sets private places aside.
+  function raiseSos(button) {
+    var ok = window.confirm('Send your exact location to everyone who can see you, and let them follow you for an hour — '
+      + 'even inside your private places?\n\nThis calls nobody. If you are in danger, call the emergency services.');
+    if (!ok) return;
+    button.disabled = true;
+    fetch('/api/sos', { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d && res.d.error);
+        var d = res.d;
+        button.parentNode.innerHTML = sosLine({ sos: d.until });
+        window.alert((d.told
+          ? 'Sent. ' + d.told + (d.told === 1 ? ' person who can see you knows' : ' people who can see you know') + ' where you are.'
+          : 'Nobody could be told — nobody can see you yet. Send somebody this link: ' + location.origin + d.path)
+          + '\n\nThis called nobody. If you are in danger, call ' + d.call + '.');
+      })
+      .catch(function (e) {
+        button.disabled = false;
+        window.alert(((e && e.message) || 'Could not send the SOS.') + ' If you are in danger, call the emergency services.');
+      });
+  }
+
+  function endSos(button) {
+    button.disabled = true;
+    fetch('/api/sos', { method: 'DELETE', credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function () { button.parentNode.innerHTML = sosLine({}); loadLive(); })
+      .catch(function () { button.disabled = false; });
   }
 
   function copyText(text, button) {
@@ -796,6 +847,8 @@
     if (g) { e.preventDefault(); downloadDay(g.getAttribute('data-id'), g); return; }
     var lv = e.target.closest && e.target.closest('button.livebtn');
     if (lv) { e.preventDefault(); makeLive(Number(lv.getAttribute('data-min')), lv); return; }
+    var sb = e.target.closest && e.target.closest('button.sosbtn, button.safebtn');
+    if (sb) { e.preventDefault(); if (sb.classList.contains('sosbtn')) raiseSos(sb); else endSos(sb); return; }
     var cp = e.target.closest && e.target.closest('button.copylink, button.sendlink');
     if (cp) {
       e.preventDefault();
@@ -845,6 +898,7 @@
   }
 
   function colourOf(p) {
+    if (p.sos) return '#d93025';
     return live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33'
                    : '#8a929b';
   }
@@ -929,6 +983,13 @@
     // view that jumps to whoever moved last is unusable the moment two people
     // are sharing, so recentring is a button rather than a surprise.
     if (!fitted) { fit(); fitted = true; }
+
+    // The one exception: somebody just asked for help. Whoever is watching is
+    // taken to them, once — not on every fix after, and not the person who
+    // pressed it, who knows where they are.
+    if (p.sos && !(before && before.sos) && !(me && me.id === String(p.id))) {
+      map.setView(here, Math.max(map.getZoom(), 15));
+    }
   }
 
   // The beam, pointed the way somebody is going, or taken away once they are
@@ -989,10 +1050,11 @@
     list.innerHTML = '';
     rows.forEach(function (p) {
       var el = document.createElement('button');
-      el.className = 'person' + (live(p) ? ' live' : '') + ((lit || hovered || pathHover) === p.id ? ' lit' : '');
+      el.className = 'person' + (live(p) ? ' live' : '') + (p.sos ? ' sos' : '') + ((lit || hovered || pathHover) === p.id ? ' lit' : '');
       el.dataset.id = p.id;
       el.innerHTML =
         '<span class="who"><i></i>' + esc(label(p)) + '</span>' +
+        (p.sos ? '<span class="meta alarm">🆘 asked for help · until ' + esc(clock(p.sos)) + '</span>' : '') +
         '<span class="meta">' +
           (p.stopped ? 'stopped · ' : '') +
           (live(p) ? 'live · ' + left(p) + ' · ' : '') + ago(p.at) +

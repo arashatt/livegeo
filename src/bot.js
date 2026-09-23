@@ -41,6 +41,7 @@ const HELP = [
   '/login — a link to the map',
   '/invite — a link that lets one person see you',
   '/live — a link anyone can follow you on, for an hour (/live 15m, /live 4h, /live stop)',
+  '/sos — tell everyone who can see you exactly where you are, for an hour; /safe ends it',
   '/circle — who can see you, and whom you can see',
   '/pair — a code to connect a watch',
   '/stop — stop being shown, and delete the path held about you',
@@ -84,6 +85,24 @@ export function liveMinutes(args) {
 
 export function liveFor(minutes) {
   return minutes >= 60 ? `${minutes / 60} hour${minutes === 60 ? '' : 's'}` : `${minutes} minutes`;
+}
+
+// What the person who sent an SOS is told back: who knows now, how to end it,
+// and — first, whatever else — that nobody was called.
+export function sosReply({ told, circle, url, again, call }) {
+  const lines = [];
+  if (told) {
+    lines.push(`${again ? 'Sent again' : 'Sent'}. ${told === 1 ? '1 person who can see you was' : `${told} people who can see you were`} told exactly where you are,`
+      + ' with a link that follows you for the next hour — even inside your private places.');
+  } else if (!circle) {
+    lines.push('Nobody can see you yet, so nobody was told.'
+      + (url ? ` Send this link to somebody you trust — it follows you for the next hour:\n${url}` : ''));
+  } else {
+    lines.push('The SOS is on, but the message could not be delivered to anybody.'
+      + (url ? ` Send this link to somebody you trust — it follows you for the next hour:\n${url}` : ''));
+  }
+  lines.push('', `This called nobody. If you are in danger, call ${call}.`, '', '/safe when you are safe.');
+  return lines.join('\n');
 }
 
 // A button's callback data: `rm:<id>` takes back what you gave, `leave:<id>`
@@ -317,6 +336,23 @@ export async function connect(config, {
         ].join('\n'));
         return;
       }
+      if (command.name === '/sos') {
+        const id = String(command.from.id);
+        if (!circle?.sos) { await say(command.chat, 'An SOS needs the database this service is running without. If you are in danger, call the emergency services.'); return; }
+        const r = await circle.sos.raise(id).catch((e) => { log.error('sos:', e.message); return null; });
+        if (!r) { await say(command.chat, 'Could not send the SOS. If you are in danger, call the emergency services.'); return; }
+        // Not silenced: this is the one reply that should make a sound.
+        await api.call('sendMessage', { chat_id: command.chat, text: sosReply(r) })
+          .catch((e) => log.error('bot: cannot reply —', e.message));
+        return;
+      }
+      if (command.name === '/safe') {
+        const ended = circle?.sos ? await circle.sos.end(String(command.from.id)).catch(() => false) : false;
+        await say(command.chat, ended
+          ? 'Glad you are safe. Everybody who was told has been told this too, and your private places hide you again.'
+          : 'You have no SOS running.');
+        return;
+      }
       if (command.name === '/pair') {
         const code = circle?.pair ? circle.pair(String(command.from.id)) : null;
         await say(command.chat, code
@@ -406,6 +442,17 @@ export async function connect(config, {
         return true;
       } catch (e) {
         log.error('bot: cannot notify —', e.message);
+        return false;
+      }
+    },
+    // A pin, which Telegram opens in whatever maps app the reader has — the
+    // quickest way from a message to directions.
+    locate: async (chatId, latitude, longitude) => {
+      try {
+        await api.call('sendLocation', { chat_id: chatId, latitude, longitude });
+        return true;
+      } catch (e) {
+        log.error('bot: cannot send a location —', e.message);
         return false;
       }
     },

@@ -19,6 +19,7 @@ import { makeCircles, canActFor } from './circles.js';
 import { makeDevices, makeCodes } from './devices.js';
 import { makeZones } from './zones.js';
 import { makeLive, LIVE_EACH } from './live.js';
+import { makeSos } from './sos.js';
 
 const config = load();
 const positions = new Positions({
@@ -76,13 +77,30 @@ async function makeInvite(owner) {
 // while `telegram` is still in its temporal dead zone — which would be a
 // ReferenceError rather than a missed message.
 let notify = null;
+let locate = null;
+
+// Somebody asking for help (sos.js). Built before the server, which offers
+// it on the map, and handed the server's own resend and stopLink, which only
+// exist once the server does — so they are reached through closures.
+const sos = makeSos({
+  live, circles, positions,
+  admins: config.viewers,
+  publicUrl: config.publicUrl,
+  call: config.sosCall,
+  placeOf: (lat, lon) => geo.placeOf(lat, lon),
+  notify: (to, text) => (notify ? notify(to, text) : false),
+  locate: (to, lat, lon) => (locate ? locate(to, lat, lon) : false),
+  resend: (id) => resend(id),
+  stopLink: (link, why) => stopLink(link, why),
+});
+if (sos.load()) console.log('sos: an SOS is still running from before the restart');
 
 // Watches every position against every fence. Pure decisions, kept here so
 // the state survives for as long as the process does.
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
-const { publish, publishFence, forget, setBot, grant, revoke, stopLink } = serve(positions, config, {
-  directory, geo, links, circles, makeInvite, devices, codes, zones, live,
+const { publish, publishFence, forget, setBot, grant, revoke, stopLink, resend } = serve(positions, config, {
+  directory, geo, links, circles, makeInvite, devices, codes, zones, live, sos,
   onFenceDeleted: (id) => fences.dropFence(id),
   onIngest: (fixes) => ingest(fixes),
 });
@@ -235,6 +253,11 @@ const circle = circles.enabled ? {
       return mine.length;
     },
   },
+  // /sos and /safe: the same code as the map's SOS button.
+  sos: {
+    raise: (id) => sos.raise(id),
+    end: (id) => sos.end(id),
+  },
 } : null;
 
 const telegram = config.ingest === 'bot'
@@ -245,6 +268,11 @@ inviteLink = telegram.inviteLink || null;
 // Both connectors expose the thing the directory needs to resolve a name.
 directory.attach(telegram.client);
 notify = telegram.notify || null;
+locate = telegram.locate || null;
+
+// An SOS lasts an hour. One that runs out by itself is noticed here, open
+// maps are put right, and its person is asked whether they still need help.
+setInterval(() => { sos.sweep().catch((e) => console.error('sos:', e && e.message ? e.message : e)); }, 30_000);
 // So the sign-in page can say which bot to open. Only the bot knows its own
 // username, and it only knows it once connected.
 if (telegram.me?.username) setBot(telegram.me.username);

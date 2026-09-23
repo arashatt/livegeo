@@ -60,6 +60,11 @@ export function defaults() {
     // minMove: a fix that admits to worse accuracy raises the bar itself.
     fenceFloor: Number(process.env.FENCE_FLOOR || 50),
     fenceDwell: Number(process.env.FENCE_DWELL || 60),
+
+    // Who to call, named in every SOS the bot passes on. An SOS here tells
+    // the circle and never the emergency services, and each message says so
+    // and points at them instead. Iran's numbers unless told otherwise.
+    sosCall: process.env.SOS_CALL || '110 (police) or 115 (ambulance)',
   };
 }
 

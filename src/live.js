@@ -22,6 +22,8 @@ import { randomBytes } from 'node:crypto';
 // nobody remembers sending should not still be working next week.
 export const LIVE_MINUTES = [15, 60, 240];
 export const LIVE_EACH = 5;
+// An SOS is a live link too (see sos.js), for an hour.
+export const SOS_MINUTES = 60;
 
 export function makeLive({ geo = null, clock = () => Date.now() } = {}) {
   const links = new Map();   // token -> { token, person, reason, createdAt, expiresAt }, in seconds
@@ -52,6 +54,14 @@ export function makeLive({ geo = null, clock = () => Date.now() } = {}) {
     of: (person) => [...links.values()]
       .filter((l) => l.person === String(person) && current(l))
       .sort((a, b) => b.createdAt - a.createdAt),
+
+    // Every link that still works, whoever's it is.
+    all: () => [...links.values()].filter((l) => current(l)),
+
+    // The SOS somebody has running, or null. Asked for every position sent
+    // to every open map, so it stays a walk over a handful of links.
+    sosOf: (person) => [...links.values()]
+      .find((l) => l.reason === 'sos' && l.person === String(person) && current(l)) || null,
 
     async create({ person, minutes, reason = 'share' }) {
       const createdAt = Math.floor(now());

@@ -109,6 +109,8 @@ export function serve(positions, config, {
   zones = makeZones(),
   // Live links. Without a database there are none to make.
   live = makeLive(),
+  // SOS (sos.js): { raise(id), end(id) }. Absent, the map offers none.
+  sos = null,
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -208,10 +210,28 @@ export function serve(positions, config, {
   }
 
   // A live link stopped by its owner: gone from the store, and whoever is
-  // following it is told at once rather than at the next reconnect.
-  async function stopLink(link) {
+  // following it is told at once rather than at the next reconnect — and why,
+  // since "stopped" and "safe" are different things to be told.
+  async function stopLink(link, why = 'stopped') {
     await live.revoke(link.token);
-    endLive((v) => v.token === link.token, 'stopped');
+    endLive((v) => v.token === link.token, why);
+  }
+
+  // Somebody's SOS began or ended: every open map that may see them is sent
+  // them afresh, the exact point or the blur as `shown` now decides. Nothing
+  // needs forgetting first — what a veiled map fetched of their path was
+  // veiled, and stays so either way.
+  function resend(id) {
+    const key = String(id);
+    const p = positions.get(key);
+    if (!p) return;
+    const payload = { ...p, live: isLive(p) };
+    let veiled = null;
+    const veil = () => (veiled ??= zones.veil(payload));
+    for (const [res, viewer] of watchers) {
+      if (!circles.canSee(viewer, key)) continue;
+      try { send(res, 'position', shown(viewer, payload, veil)); } catch { watchers.delete(res); }
+    }
   }
 
   // A live link's stream, closed: told why first, so the page can say so
@@ -232,11 +252,22 @@ export function serve(positions, config, {
   // there is nothing under the blur for a curious viewer to find. `veil`
   // works that out, and is passed in when one veiled copy serves many.
   //
+  // Except in an emergency. Somebody who raised an SOS asked to be found, and
+  // for as long as it runs everybody who may see them is sent where they are
+  // — the point, not the path: the way they came stays veiled (sos.js). Every
+  // view of them says it is an SOS, and until when.
+  //
   // Somebody following a live link sees the person from the moment the link
   // was made and no earlier: the path before it — usually from a front door
   // — was not what was sent.
   function shown(viewer, p, veil = () => zones.veil(p)) {
+    const sos = live.sosOf(p.id);
     let view = canActFor(viewer, p.id) ? p : veil();
+    if (sos && view.hidden) {
+      const { hidden, ...rest } = view;
+      view = { ...rest, latitude: p.latitude, longitude: p.longitude, accuracy: p.accuracy, heading: p.heading };
+    }
+    if (sos) view = { ...view, sos: sos.expiresAt };
     if (viewer.since !== undefined) {
       view = { ...view, trail: (view.trail || []).filter((q) => q.at >= viewer.since) };
     }
@@ -1106,9 +1137,31 @@ export function serve(positions, config, {
         const link = live.get(decodeURIComponent(url.pathname.slice('/api/live/'.length)));
         // Yours, or an admin's call; anybody else's reads as no such link.
         if (!link || !canActFor(viewer, link.person)) return notFound();
-        await stopLink(link);
+        // Stopping an SOS's link is ending the SOS, and everybody who was
+        // told about it is told that too.
+        if (link.reason === 'sos' && sos) await sos.end(link.person);
+        else await stopLink(link);
         return json(200, { links: live.of(me).map(describeLink) });
       }
+      return notFound();
+    }
+
+    // An SOS from the map: the same act as /sos to the bot, through the same
+    // code. Yours only — nobody raises one for somebody else — and not from a
+    // watch's token, which cannot hand out a way to follow its owner.
+    if (url.pathname === '/api/sos') {
+      if (!sos || !live.enabled || !viewer.id || viewer.via === 'device') return notFound();
+      if (!circles.user(viewer.id)) await circles.seen({ id: viewer.id });
+      if (req.method === 'POST') {
+        const raised = await sos.raise(viewer.id)
+          .catch((e) => { log.error('sos:', e && e.message ? e.message : e); return null; });
+        if (!raised) return json(500, { error: 'could not raise an SOS' });
+        return json(200, {
+          told: raised.told, circle: raised.circle, again: raised.again, call: raised.call,
+          path: `/live/${raised.link.token}`, until: raised.link.expiresAt,
+        });
+      }
+      if (req.method === 'DELETE') return json(200, { ended: await sos.end(viewer.id) });
       return notFound();
     }
 
@@ -1161,7 +1214,7 @@ export function serve(positions, config, {
   });
 
   return {
-    server, publish, publishFence, forget, watchers, grant, revoke, stopLink,
+    server, publish, publishFence, forget, watchers, grant, revoke, stopLink, resend,
     // Told once the bot has connected, so the login page can name it.
     setBot: (username) => { botName = username || ''; },
   };

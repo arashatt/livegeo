@@ -15,8 +15,9 @@ import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
 import worker from '../worker/src/index.js';
 import { fromUpdate } from '../src/positions.js';
-import { connect as connectBot, commandIn, liveMinutes, liveFor } from '../src/bot.js';
+import { connect as connectBot, commandIn, liveMinutes, liveFor, sosReply } from '../src/bot.js';
 import { makeLive } from '../src/live.js';
+import { makeSos, sosMessage } from '../src/sos.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
@@ -1147,6 +1148,7 @@ head('the leak matrix: every route, as every kind of viewer');
     dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60,
   }, {
     geo, circles, devices, codes, links: makeLinks(), log: { info() {}, error() {} }, live: makeLive({ geo }),
+    sos: { raise: async () => ({ link: { token: 'x', expiresAt: 0 }, told: 0, circle: 0, call: '' }), end: async () => false },
     onIngest: async (fixes, device) => { ingested.push(...fixes.map((f) => ({ ...f, device: device.id }))); },
   });
   await new Promise((r) => server.once('listening', r));
@@ -1175,7 +1177,7 @@ head('the leak matrix: every route, as every kind of viewer');
     signedIn: ['/', '/index.html', '/api/me', '/api/place'],
     filtered: ['/api/positions', '/api/stream'],
     canSee: ['/api/history/', '/api/person/', '/api/photo/'],
-    selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/', '/api/live', '/api/live/'],
+    selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/', '/api/live', '/api/live/', '/api/sos'],
     owned: ['/api/fences', '/api/fences/'],
     ownCircle: ['/api/circle', '/api/circle/', '/api/circle/invite', '/api/circle/viewer/', '/api/circle/owner/'],
     pairing: ['/api/devices/pair'],
@@ -1297,6 +1299,7 @@ head('the leak matrix: every route, as every kind of viewer');
     ['take a GPX of its owner', '/api/gpx/3', 'GET'],
     ['hand out a live link to its owner', '/api/live?minutes=60', 'POST'],
     ['list its owner’s live links', '/api/live', 'GET'],
+    ['raise an SOS', '/api/sos', 'POST'],
   ]) {
     t(`a watch cannot ${what}`, (await watch(path, method)).status === 404, path);
   }
@@ -1958,6 +1961,186 @@ head('live links: one person, from now, for a while');
     lastly.seen.map((e) => e.ev));
 
   server.close();
+}
+
+head('SOS: found, for an hour, by everybody who can see you');
+{
+  const db = {
+    users: [{ id: '1', name: 'Admin', username: '' }, { id: '2', name: 'Ada', username: '' },
+      { id: '3', name: 'Grace', username: '' }, { id: '4', name: 'Hal', username: '' }],
+    grants: [{ owner: '3', viewer: '2' }],   // Grace lets Ada see her; nobody but the admin sees Hal
+    zones: [], next: 1, links: [], history: [],
+  };
+  const geo = {
+    enabled: () => true,
+    listUsers: async () => db.users,
+    listGrants: async () => db.grants,
+    upsertUser: async () => true,
+    addGrant: async () => true,
+    removeGrant: async () => 1,
+    historyOf: async (id) => (id === '3' ? [...db.history].sort((a, b) => b.at - a.at) : []),
+    listFences: async () => [],
+    placeOf: async () => '',
+    forget: async () => 1,
+    readShare: async () => null,
+    listZones: async () => db.zones,
+    createZone: async (z) => { const id = db.next++; db.zones.push({ id, ...z }); return id; },
+    deleteZone: async () => 1,
+    listLiveLinks: async () => db.links,
+    createLiveLink: async (l) => { db.links.push({ ...l }); return true; },
+    revokeLiveLink: async (token) => { db.links = db.links.filter((l) => l.token !== token); return 1; },
+  };
+  const quiet = { info() {}, error() {} };
+  const botToken = '123:sos';
+  const circles = makeCircles({ geo, admins: ['1'] });
+  await circles.load();
+  const zones = makeZones({ geo, random: () => 0 });
+  await zones.load();
+  const home = await zones.create({ owner: '3', name: 'Home', latitude: 36.3, longitude: 59.6, radius: 300 });
+  const live = makeLive({ geo });
+  await live.load();
+  const store = new Positions({ minMove: 1 });
+  const now = Math.floor(Date.now() / 1000);
+  // Grace walked home from the north; the last four fixes are inside it.
+  for (let i = 0; i < 20; i++) {
+    const fix = { id: '3', name: 'Grace', latitude: +(36.31 - i * 0.0005).toFixed(4), longitude: 59.6, accuracy: 5, heading: 180, at: now - 600 + i * 20, liveUntil: now + 3600 };
+    store.update(fix);
+    db.history.push({ at: fix.at, latitude: fix.latitude, longitude: 59.6 });
+  }
+  store.update({ id: '4', name: 'Hal', latitude: 36.5, longitude: 59.6, accuracy: 5, at: now, liveUntil: now + 3600 });
+  const graceAt = store.get('3');
+  const insideHome = (q) => metresBetween(q, home) <= home.radius;
+
+  const sent = [];
+  let wired = null;
+  const sos = makeSos({
+    live, circles, positions: store, admins: ['1'], publicUrl: 'https://map.example', call: '110 (police)',
+    placeOf: async () => 'Vakilabad Blvd, Mashhad',
+    notify: async (to, text) => { sent.push({ to: String(to), text }); return true; },
+    locate: async (to, latitude, longitude) => { sent.push({ to: String(to), pin: [latitude, longitude] }); return true; },
+    resend: (id) => wired.resend(id),
+    stopLink: (link, why) => wired.stopLink(link, why),
+    log: quiet,
+  });
+  wired = serve(store, { dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60 },
+    { geo, circles, zones, live, sos, links: makeLinks(), log: quiet });
+  const { server } = wired;
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = {
+    admin: { cookie: `tll_session=${encodeURIComponent(mint('1', { botToken }))}` },
+    ada: { cookie: `tll_session=${encodeURIComponent(mint('2', { botToken }))}` },
+    grace: { cookie: `tll_session=${encodeURIComponent(mint('3', { botToken }))}` },
+    hal: { cookie: `tll_session=${encodeURIComponent(mint('4', { botToken }))}` },
+  };
+  const hit = (who, path, method = 'GET') => fetch(base + path, { method, headers: as[who] });
+  const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+  const listen = async (path, headers = {}) => {
+    const res = await fetch(base + path, { method: 'POST', headers });
+    const seen = [];
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    (async () => {
+      for (;;) {
+        const step = await reader.read().catch(() => ({ done: true }));
+        if (step.done) return;
+        buf += dec.decode(step.value, { stream: true });
+        const parts = buf.split('\n\n'); buf = parts.pop();
+        for (const c of parts) seen.push({ ev: /event: (\w+)/.exec(c)?.[1], data: JSON.parse(/data: (.*)/.exec(c)?.[1] || '{}') });
+      }
+    })();
+    return { seen, close: () => reader.cancel().catch(() => {}) };
+  };
+  const graceIn = (s) => s.seen.filter((e) => e.ev === 'position' && e.data.id === '3').pop()?.data;
+
+  const ada = await listen('/api/stream', as.ada);
+  const admin = await listen('/api/stream', as.admin);
+  await settle();
+  t('at home, Ada sees Grace as her private place', ada.seen[0].data.people.find((p) => p.id === '3').hidden === true);
+
+  const raisedRes = await hit('grace', '/api/sos', 'POST');
+  const raised = await raisedRes.json();
+  await settle();
+  t('Grace raises an SOS', raisedRes.status === 200 && raised.told === 2 && raised.path.startsWith('/live/')
+    && raised.until - now >= 3590 && raised.call === '110 (police)', raised);
+  const toAda = sent.filter((m) => m.to === '2');
+  t('Ada is told who, and near where', /🆘 Grace asked for help/.test(toAda[0]?.text) && /near Vakilabad Blvd, Mashhad/.test(toAda[0]?.text), toAda[0]?.text);
+  t('with a link that follows her, and who to call', toAda[0]?.text.includes(`https://map.example${raised.path}`) && /livegeo, which has called nobody.*call 110 \(police\)/.test(toAda[0]?.text));
+  t('and a pin exactly where she is', toAda[1]?.pin?.[0] === graceAt.latitude && toAda[1]?.pin?.[1] === graceAt.longitude, toAda[1]);
+  t('the admin is told too', sent.some((m) => m.to === '1' && /Grace asked for help/.test(m.text || '')));
+  t('and nobody else is — not Hal, not Grace', !sent.some((m) => m.to === '4' || m.to === '3'));
+
+  const adaNow = graceIn(ada);
+  t('Ada’s open map is sent Grace exactly, inside her private place', adaNow && !adaNow.hidden
+    && adaNow.latitude === graceAt.latitude && adaNow.sos === raised.until, adaNow);
+  t('but the way she came stays veiled', adaNow.trail.length > 0 && !adaNow.trail.some(insideHome), adaNow.trail.length);
+  t('so does her history', !(await (await hit('ada', '/api/history/3')).json()).points.some(insideHome));
+  const adaList = (await (await hit('ada', '/api/positions')).json()).people.find((p) => p.id === '3');
+  t('and Ada’s list says so too', adaList.latitude === graceAt.latitude && adaList.sos === raised.until && !adaList.hidden);
+  t('the admin’s map is told it is an SOS', graceIn(admin)?.sos === raised.until);
+
+  const token = raised.path.slice('/live/'.length);
+  const follower = await listen(`/api/live-stream/${token}`);
+  await settle();
+  const followed = follower.seen.find((e) => e.ev === 'hello')?.data.people[0];
+  t('whoever follows the SOS link sees her exactly', followed && !followed.hidden && followed.latitude === graceAt.latitude && followed.sos);
+
+  const before = sent.length;
+  const again = await (await hit('grace', '/api/sos', 'POST')).json();
+  t('raising it again tells everybody again, with the same link', again.again && again.path === raised.path && sent.length > before);
+  t('and does not start a second one', live.of('3').filter((l) => l.reason === 'sos').length === 1);
+
+  const hal = await (await hit('hal', '/api/sos', 'POST')).json();
+  t('Hal’s SOS reaches the admin, the only one who can see him', hal.told === 1
+    && sent.filter((m) => /Hal asked for help/.test(m.text || '')).map((m) => m.to).join() === '1');
+  await hit('hal', '/api/sos', 'DELETE');
+
+  t('Ada cannot end Grace’s SOS', (await (await hit('ada', '/api/sos', 'DELETE')).json()).ended === false && Boolean(live.sosOf('3')));
+  t('nor stop its link', (await hit('ada', `/api/live/${token}`, 'DELETE')).status === 404);
+
+  const safe = await (await hit('grace', '/api/sos', 'DELETE')).json();
+  await settle();
+  t('Grace is safe, and says so', safe.ended === true && live.sosOf('3') === null);
+  const adaAfter = graceIn(ada);
+  t('Ada’s map is sent the blur again', adaAfter.hidden === true && adaAfter.sos === undefined && adaAfter.latitude === home.latitude, adaAfter);
+  t('everybody who was told is told she is safe',
+    ['1', '2'].every((to) => sent.some((m) => m.to === to && /Grace is safe now/.test(m.text || ''))));
+  t('and whoever followed the link hears why it ended', follower.seen.some((e) => e.ev === 'ended' && e.data.why === 'safe'));
+  t('ending one that is not running says so', (await (await hit('grace', '/api/sos', 'DELETE')).json()).ended === false);
+
+  // Its link is the SOS: stopping that from the list is being safe.
+  const third = await (await hit('grace', '/api/sos', 'POST')).json();
+  await settle();
+  await hit('grace', `/api/live/${third.path.slice('/live/'.length)}`, 'DELETE');
+  await settle();
+  t('stopping the SOS link ends the SOS', live.sosOf('3') === null && graceIn(ada).hidden === true, graceIn(ada));
+
+  // An hour on, it runs out by itself.
+  await hit('grace', '/api/sos', 'POST');
+  await live.revoke(live.sosOf('3').token);   // as an hour passing would
+  await sos.sweep();
+  await settle();
+  t('an SOS that runs out puts the blur back', graceIn(ada).hidden === true && graceIn(ada).sos === undefined);
+  t('and asks Grace whether she still needs help', sent.some((m) => m.to === '3' && /ran out after an hour/.test(m.text || '')));
+
+  [ada, admin, follower].forEach((s) => s.close());
+  server.close();
+}
+
+head('what an SOS says');
+{
+  const text = sosMessage({ who: 'Grace', place: 'Vakilabad Blvd', located: true, minutes: 12, url: 'https://m/live/x', call: '110' });
+  t('who, where, and how long ago', /Grace asked for help/.test(text) && /near Vakilabad Blvd \(12 min ago\)/.test(text));
+  t('a fresh fix is not called old', !/ago/.test(sosMessage({ who: 'G', located: true, minutes: 1, call: '110' })));
+  t('without a name for the place, the pin', /Where: the pin below/.test(sosMessage({ who: 'G', located: true, minutes: 0, call: '110' })));
+  t('without a location, it says so', /not known/.test(sosMessage({ who: 'G', located: false, call: '110' })));
+  t('always that nobody was called, and whom to call', /called nobody\. If they may be in danger, call 110\./.test(text));
+  t('the reply counts who was told', /^Sent\. 2 people who can see you were told/.test(sosReply({ told: 2, circle: 2, call: '110' })));
+  t('and says when it went again', /^Sent again\. 1 person/.test(sosReply({ told: 1, circle: 1, again: true, call: '110' })));
+  t('with nobody to tell, it hands over the link',
+    /Nobody can see you yet[\s\S]*https:\/\/m\/live\/x/.test(sosReply({ told: 0, circle: 0, url: 'https://m/live/x', call: '110' })));
+  t('and always, whom to call', /This called nobody\. If you are in danger, call 110\./.test(sosReply({ told: 0, circle: 0, call: '110' })));
 }
 
 head('what /live takes');

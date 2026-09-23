@@ -22,6 +22,7 @@
          padding:.7rem 1rem;border-bottom:1px solid var(--hairline)}
   h1{font-size:1rem;font-weight:600;letter-spacing:-.01em}
   .meta{color:var(--quiet);font-size:.85rem;font-variant-numeric:tabular-nums}
+  .meta.alarm{color:#d93025;font-weight:600}
   .spacer{flex:1}
   .ghost{font:inherit;font-size:.8rem;color:var(--quiet);background:none;cursor:pointer;
          border:1px solid var(--hairline);border-radius:999px;padding:.15rem .6rem}
@@ -96,6 +97,7 @@
   };
   function live(p) { return p.live || (p.liveUntil && p.liveUntil * 1000 > Date.now()); }
   function colourOf(p) {
+    if (p.sos) return '#d93025';
     return live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33' : '#8a929b';
   }
   function called() { return name || 'Somebody'; }
@@ -243,7 +245,9 @@
       var speed = n > 1 ? PathTime.speedLabel(PathTime.speedBetween(entry.pts[n - 2], entry.pts[n - 1])) : '';
       line = 'updated ' + ago(p.at) + (speed && speed !== 'still' && PathTime.headingOf(null, entry.pts, Date.now() / 1000) !== null ? ' · ' + speed : '');
     }
+    if (p && p.sos) line = '🆘 asked for help · ' + line;
     el('state').textContent = line;
+    el('state').classList.toggle('alarm', Boolean(p && p.sos));
     if (until && left <= 0) end('ended');
   }
 
@@ -259,7 +263,9 @@
     el('when').textContent = '';
     el('state').textContent = '';
     var notice = el('notice');
-    notice.innerHTML = '<strong>' + (why === 'stopped' ? esc(called()) + ' stopped this link.' : 'This link has ended.') + '</strong>'
+    var headline = why === 'safe' ? esc(called()) + ' is safe.'
+      : why === 'stopped' ? esc(called()) + ' stopped this link.' : 'This link has ended.';
+    notice.innerHTML = '<strong>' + headline + '</strong>'
       + '<div class="quiet">' + esc(called()) + ' is no longer shown here. Ask them for a new link to follow them again.</div>';
     notice.hidden = false;
   }
