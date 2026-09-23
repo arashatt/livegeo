@@ -1132,3 +1132,4 @@ are, which is enough for a uptime check.
 | `public/live.html` | the page a live link opens |
 | `public/lib/people-map.js` | how a person is drawn — the glide, the beam, the blur — for both |
 | `bin/login.mjs` | the one interactive step |
+| `docs/DESIGN-HANDOFF.md` | the state of every screen, the rules a redesign must keep, and what is known to be wrong — for a UI/UX designer taking it over |
