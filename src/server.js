@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, sep, extname } from 'node:path';
-import { parseTilePath, makeTiles } from './tiles.js';
+import { parseTilePath, parseCartoPath, makeTiles } from './tiles.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
 import {
@@ -154,6 +154,19 @@ export function serve(positions, config, {
       'x-tile-source': got.from,
     });
     res.end(got.bytes);
+  }
+
+  async function serveCartography(tile, res) {
+    const svg = geo?.cartographyTile ? await geo.cartographyTile(tile.z, tile.x, tile.y) : null;
+    // Transparent is a normal fallback: PostGIS is optional, and an install
+    // without an osm2pgsql extract should still show the raster basemap.
+    const body = svg || '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"/>';
+    res.writeHead(200, {
+      'content-type': 'image/svg+xml; charset=utf-8',
+      'cache-control': svg ? 'private, max-age=86400' : 'private, max-age=300',
+      'x-carto-source': svg ? 'postgis' : 'empty',
+    });
+    res.end(body);
   }
 
   async function serveStatic(url, req, res) {
@@ -827,7 +840,8 @@ export function serve(positions, config, {
       const allowed = url.pathname === '/api/ingest'
         || (req.method === 'GET' && (DEVICE_READS.has(url.pathname)
           || DEVICE_READ_PREFIXES.some((pre) => url.pathname.startsWith(pre))
-          || parseTilePath(url.pathname)))
+          || parseTilePath(url.pathname)
+          || parseCartoPath(url.pathname)))
         || (url.pathname === '/api/stream' && req.method === 'POST');
       if (!allowed) return notFound();
     }
@@ -916,6 +930,11 @@ export function serve(positions, config, {
       req.on('close', () => { clearInterval(beat); watchers.delete(res); });
       return;
     }
+
+    // Styled vector geometry from the local OSM extract. It is deliberately
+    // guarded like raster tiles: this service is not a public map-tile host.
+    const carto = parseCartoPath(url.pathname);
+    if (carto) return serveCartography(carto, res);
 
     // The basemap. Guarded like everything else, so this cannot be used as
     // somebody else's free tile proxy.
