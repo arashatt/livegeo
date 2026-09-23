@@ -35,7 +35,8 @@ jobs:
           import { chromium } from 'playwright';
           const browser = await chromium.launch({ headless: true });
           const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-          await page.goto('http://127.0.0.1:8080/?token=selfcheck', { waitUntil: 'networkidle' });
+          await page.goto('http://127.0.0.1:8080/?token=selfcheck', { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await page.waitForTimeout(5000);
           await page.screenshot({ path: '/tmp/livegeo-preview.png', fullPage: true });
           await browser.close();
           EOF
