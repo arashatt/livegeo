@@ -771,8 +771,26 @@ everything else, they go with you on `/stop`.
 
 ## Taking a path with you (GPX)
 
-Your own card has **A day as GPX**: pick a day and Download gives your path for
-it as a GPX 1.1 file — the format Strava, Garmin Connect, Komoot and OsmAnd import.
+Your own card has **A day as GPX…**. It opens a dialog with today in it, and ‹ › or
+the date field go to other days. The dialog shows what the file holds before
+anything is saved:
+
+- that day's path on a small map;
+- how far, from when to when, and how many readings;
+- how many breaks: the file starts a new segment at each one.
+
+Then:
+
+- **Download** saves it as a GPX 1.1 file, the format Strava, Garmin Connect,
+  Komoot and OsmAnd import.
+- **Send…** hands it to another app, where the phone allows sharing files.
+- **Copy** puts it on the clipboard.
+- **Show the file** shows the file itself.
+
+The last two exist because a download can silently fail in a phone's in-app
+browser. The dialog says plainly that the file is your exact path, private
+places included, so whoever gets it sees all of it.
+
 The day runs midnight to midnight where you are, and the file is named for it.
 It is your own path, or an admin's export: your circle sees your path on the
 map, but a file made to be kept is for the person who walked it.

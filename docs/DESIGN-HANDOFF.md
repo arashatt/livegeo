@@ -198,7 +198,7 @@ Clicking a dot, a name chip or a row opens a Leaflet popup:
 | **SOS** / **I'm safe** | You | See 6.5. A browser `confirm` comes first. |
 | **Check on me for 2 h** / **Stop** | You | See 6.6. A browser `confirm` comes first. |
 | **Follow me for 15 min / 1 h / 4 h** | You | Makes a live link. The card shows it with **Copy** and **Send…** (the phone's share sheet), plus what it allows and until when. |
-| **A day as GPX** + date + **Download** | You; admins for anyone | Downloads that day's path as a file. Errors appear on the button itself, for example "nothing that day" or "needs PostGIS". |
+| **A day as GPX…** | You; admins for anyone | Opens the GPX dialog (`#gpxDialog`). It shows the chosen day's path on a small map, with distance, times, readings and breaks. It offers **Download**, **Send…** (only where the phone can share files) and **Copy**, and "Show the file" reveals the file itself. It warns that the file is the exact path, private places included. Errors are written in the dialog, for example "Nothing was recorded that day." |
 
 #### 3.1.5 The Circle panel
 
@@ -545,7 +545,7 @@ A one-off "Send this location" appears on the map too, but never as live.
 ### 6.8 Sharing a path, and GPX
 
 - **Share this path** makes a frozen copy that anyone can open for 7 days. Its first and last 200–500 m are cut at random, so neither end marks a door.
-- **A day as GPX** downloads a file for Strava, Garmin and similar apps.
+- **A day as GPX…** opens a dialog showing the day before anything is saved: its path on a map, and how far and how long. From there it is downloaded for Strava, Garmin and similar apps, sent to another app, or copied. A download alone can silently fail in a phone's in-app browser.
 
 ### 6.9 Watches
 
@@ -629,6 +629,7 @@ These are product decisions about privacy and safety. Changing one is a conversa
 
 ### 8.3 Things that break silently if renamed
 
+- **The GPX dialog:** `gpxDialog` and the ids inside it (`gpxTitle`, `gpxClose`, `gpxPrev`, `gpxDate`, `gpxNext`, `gpxMap`, `gpxStatus`, `gpxFacts`, `gpxWarning`, `gpxSave`, `gpxSend`, `gpxCopy`, `gpxFile`, `gpxText`). The card's button keeps the `gpxbtn` class. The preview map is always real Leaflet (`window.L`), even on the 3D map.
 - **Added with the 3D map:** `legendbtn`, `legendPanel`, the `data-game` controls in Layers, and the `gl-*` classes in `public/lib/game/game.css`. The dashboard also passes a `blip` kind (`me`, `live`, `stale`, `sos`) with each dot; keep it in step with `colourOf`.
 - **Element ids the scripts look up.**
   - Dashboard: `map`, `list`, `count`, `hint`, `recentre`, `newfence`, `circlebtn`, `signout`, `conn`, `circle`, and ids inside the Circle panel (`mkinvite`, `invitebox`, `livelist`, `zonelist`, `mkzone`, `devices`, `mkcode`, `codebox`, `copyinvite`).
@@ -711,7 +712,7 @@ Ordered by how much I think they matter. **P1** is important; **P3** is polish.
 - Everything is in English.
 - The defaults point at Iran: the map opens on Tehran, and the emergency numbers are 110 and 115.
 - Dates and times follow the browser's locale, via `toLocaleTimeString`, so formatting varies by device.
-- The GPX date picker is Gregorian.
+- The GPX dialog's date picker is Gregorian.
 
 **What a design needs to decide:**
 - which languages;
@@ -790,7 +791,7 @@ In the bot it's `/sos`, which is easier but only if you remember it.
 
 - The shared-path page says **"shared 1 minutes ago"**. Plurals are wrong below two minutes (`share.html`, `ago()`).
 - **Time units differ between pages:** "6s ago" and "2h left" on the map; "21 s ago" and "60 min left" on the live page; "3 minutes ago" on the shared-path page.
-- The GPX date field shows the browser's format (`09/23/2026` on an American English browser).
+- The GPX dialog's date field shows the browser's format (`09/23/2026` on an American English browser).
 - Coordinates (`36.30160, 59.61650`) are shown when no place name is known. They are useful, but noisy as the main line.
 
 ### 10.9 P3: Dark theme

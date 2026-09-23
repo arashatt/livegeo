@@ -124,10 +124,9 @@
      the page a live link opens. */
   /* Where a path goes out of view, or comes back into it. */
   .fade-end{width:22px;height:22px;border-radius:50%;filter:blur(2px);opacity:.65}
-  /* A day of your own path, to take away as GPX. */
+  /* A day of your own path, to take away as GPX: a button here, and a
+     dialog (#gpxDialog) with the day in it. */
   .card .gpx{display:flex;align-items:center;gap:.35rem;margin-top:.45rem;flex-wrap:wrap}
-  .card .gpx input{font:inherit;font-size:.78rem;padding:.12rem .3rem;border:1px solid var(--hairline);
-    border-radius:6px;background:var(--paper);color:var(--ink)}
   /* Follow me: a live link from your own card. */
   .card .follow{display:flex;align-items:center;gap:.3rem;margin-top:.45rem;flex-wrap:wrap}
   /* Somebody who asked for help. */
@@ -514,6 +513,51 @@
     .legend-panel{left:.55rem;right:.55rem;top:auto;bottom:.55rem;width:auto;max-height:60vh}
   }
 
+  /* A day as GPX: seen before it goes anywhere. The dialog's box fills the
+     dialog, so a click that lands on the dialog itself is on the backdrop. */
+  /* margin:auto is what centres a modal dialog; the page's reset takes it away. */
+  .gpx-dialog{margin:auto;padding:0;border:0;background:transparent;color:var(--ink);
+    width:min(34rem,calc(100vw - 1.5rem));max-width:none;max-height:calc(100svh - 2rem);overflow:visible}
+  .gpx-dialog::backdrop{background:rgba(3,5,12,.62)}
+  .gpx-dialog.no-modal{position:fixed;inset:1rem 0 auto;margin:0 auto;z-index:5000;box-shadow:0 0 0 100vmax rgba(3,5,12,.62)}
+  /* One column that never grows past the dialog: the file's long lines scroll
+     inside their own box rather than widening everything. */
+  .gpx-body{display:grid;grid-template-columns:minmax(0,1fr);gap:.7rem;padding:.9rem;max-height:calc(100svh - 2rem);overflow:auto;
+    background:rgba(9,12,24,.98);border:1px solid rgba(255,255,255,.16);box-shadow:0 24px 60px rgba(0,0,0,.55);
+    clip-path:polygon(var(--bevel) 0,100% 0,100% calc(100% - var(--bevel)),calc(100% - var(--bevel)) 100%,0 100%,0 var(--bevel));
+    background-image:linear-gradient(90deg,var(--sun1),var(--sun2));background-size:100% 2px;background-repeat:no-repeat}
+  .gpx-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.6rem}
+  .gpx-kicker{display:block;font:600 .68rem/1 var(--hud);letter-spacing:.16em;text-transform:uppercase;color:var(--sun1);margin-bottom:.3rem}
+  /* The title can hold a name, in any script: the system font, as typed. */
+  .gpx-head h2{font:650 1.05rem/1.25 ui-sans-serif,system-ui,sans-serif;color:#fff}
+  .gpx-day{display:flex;align-items:center;gap:.35rem}
+  .gpx-day input{font:inherit;font-size:.9rem;min-height:40px;padding:.3rem .55rem;border-radius:3px;
+    background:#0b1320;color:#e9e6f2;border:1px solid rgba(255,255,255,.24);color-scheme:dark}
+  .gpx-day .ghost{min-width:40px;min-height:40px;font-size:1.1rem;border-radius:3px}
+  .gpx-map{height:16rem;border:1px solid rgba(255,255,255,.14);background:var(--map-bg)}
+  /* Whoever is lit on the big map, the preview is not dimmed with it. */
+  body.spotlight .gpx-map .leaflet-tile-pane{filter:invert(.88) hue-rotate(152deg) saturate(.65) brightness(1.04) contrast(.91)}
+  .gpx-status{font-size:.85rem;color:#c9d2d6}
+  .gpx-status[hidden]{display:none}
+  .gpx-facts{display:grid;grid-template-columns:auto 1fr;gap:.25rem .9rem;font-size:.84rem;margin:0}
+  .gpx-facts[hidden]{display:none}
+  .gpx-facts dt{color:#8fa0a6}
+  .gpx-facts dd{margin:0;color:#f2eee8;font-variant-numeric:tabular-nums}
+  .gpx-actions{display:flex;gap:.4rem;flex-wrap:wrap}
+  .gpx-actions .ghost{min-height:40px;padding:.3rem .95rem;border-radius:3px;font-size:.82rem}
+  .gpx-actions .ghost:disabled{opacity:.45;cursor:default}
+  .gpx-warn{font-size:.78rem;line-height:1.45;color:#ffe2bd;border-left:3px solid var(--sun1);padding-left:.55rem}
+  .gpx-file[hidden]{display:none}
+  .gpx-file summary{cursor:pointer;font-size:.8rem;color:#c9d2d6}
+  .gpx-file pre{margin-top:.4rem;max-height:13rem;overflow:auto;padding:.55rem;background:#05070f;border:1px solid rgba(255,255,255,.1);
+    font:.7rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dc;white-space:pre;direction:ltr;text-align:left}
+  .gpx-fine{font-size:.72rem;color:#8fa0a6}
+  @media (max-width:760px){
+    .gpx-dialog{width:calc(100vw - 1rem);max-height:calc(100svh - 1rem)}
+    .gpx-body{max-height:calc(100svh - 1rem);padding:.75rem}
+    .gpx-map{height:40svh}
+  }
+
 </style>
 </head>
 <body>
@@ -598,6 +642,31 @@
     </section>
   </div>
 </main>
+
+<dialog class="gpx-dialog" id="gpxDialog" aria-labelledby="gpxTitle">
+  <div class="gpx-body">
+    <div class="gpx-head">
+      <div><span class="gpx-kicker">A day as GPX</span><h2 id="gpxTitle" dir="auto">Your day</h2></div>
+      <button class="panel-close" id="gpxClose" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="gpx-day">
+      <button class="ghost" id="gpxPrev" type="button" aria-label="The day before">‹</button>
+      <input type="date" id="gpxDate" aria-label="Day" />
+      <button class="ghost" id="gpxNext" type="button" aria-label="The day after">›</button>
+    </div>
+    <div class="gpx-map" id="gpxMap" role="img" aria-label="The path that day"></div>
+    <p class="gpx-status" id="gpxStatus" role="status"></p>
+    <dl class="gpx-facts" id="gpxFacts" hidden></dl>
+    <p class="gpx-warn" id="gpxWarning"></p>
+    <div class="gpx-actions">
+      <button class="ghost" id="gpxSave" type="button" disabled>Download</button>
+      <button class="ghost" id="gpxSend" type="button" hidden disabled>Send…</button>
+      <button class="ghost" id="gpxCopy" type="button" disabled>Copy</button>
+    </div>
+    <p class="gpx-fine">GPX 1.1, for Strava, Garmin Connect, Komoot or OsmAnd. If your browser does not save it, send or copy it instead.</p>
+    <details class="gpx-file" id="gpxFile" hidden><summary>Show the file</summary><pre id="gpxText"></pre></details>
+  </div>
+</dialog>
 
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/lib/path-time.js"></script>
@@ -1006,11 +1075,10 @@ function startDashboard(L, PeopleMap, Cartography, game) {
           + '</div>'
         : '') +
       // A day of your own path as a GPX file, for Strava, Garmin or your own
-      // records. Yours or an admin's, as the server insists too.
+      // records, shown in a dialog before it is kept. Yours or an admin's, as
+      // the server insists too.
       (me && (me.admin || me.id === String(p.id))
-        ? '<div class="gpx"><span class="chandle">A day as GPX</span>'
-          + '<input type="date" value="' + today() + '" max="' + today() + '" />'
-          + '<button class="ghost gpxbtn" data-id="' + esc(p.id) + '">Download</button></div>'
+        ? '<div class="gpx"><button class="ghost gpxbtn" data-id="' + esc(p.id) + '">A day as GPX…</button></div>'
         : '') +
       '</div></div>';
   }
@@ -1020,33 +1088,249 @@ function startDashboard(L, PeopleMap, Cartography, game) {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
-  // The chosen day, from midnight to midnight where the reader is, fetched and
-  // then saved — so a day with nothing recorded says so on the button rather
-  // than handing the browser a download that fails.
-  function downloadDay(id, button) {
-    var input = button.parentNode.querySelector('input[type=date]');
-    var ymd = (input && input.value || '').split('-').map(Number);
+  // ------------------------------------------------------------- GPX
+  //
+  // A day of a path as a GPX file, shown before it is kept: where it went,
+  // how far, from when to when — then saved, handed to another app, or
+  // copied. A dialog, because what a file holds should be seen before it
+  // goes anywhere, and because in a phone's in-app browser a download can
+  // vanish without a word; here the file is on the screen either way.
+  var gpxDialog = document.getElementById('gpxDialog');
+  var gpx = { id: null, colour: null, map: null, text: '', blob: null, name: '', asked: 0 };
+
+  // <dialog> where there is one: it holds the focus, closes on Esc and dims
+  // the page. Where there is not, the same box, fixed over everything.
+  function showDialog(d) {
+    if (typeof d.showModal === 'function') d.showModal();
+    else { d.setAttribute('open', ''); d.classList.add('no-modal'); }
+  }
+  function hideDialog(d) {
+    if (typeof d.close === 'function') { if (d.open) d.close(); return; }
+    d.removeAttribute('open');
+    d.classList.remove('no-modal');
+    gpxClosed();
+  }
+
+  function openGpx(id) {
+    var entry = people.get(id);
+    var p = entry && entry.data;
+    var who = identities.get(id);
+    var name = (who && (who.name || who.username)) || (p && p.name) || '';
+    var yours = Boolean(me && me.id === String(id));
+    gpx.id = id;
+    gpx.colour = p ? colourOf(p) : cssVar('--me', '#4cb5ff');
+    // A name is whatever its owner typed: text, never markup.
+    document.getElementById('gpxTitle').textContent = yours ? 'Your day' : (name ? name + '’s day' : 'Their day');
+    document.getElementById('gpxWarning').textContent = (yours ? 'This is your exact path' : 'This is their exact path')
+      + ' that day, private places included: whoever gets the file sees all of it.';
+    var date = document.getElementById('gpxDate');
+    date.max = today();
+    date.value = today();
+    showDialog(gpxDialog);
+    loadGpxDay();
+  }
+
+  function gpxState(message, ready) {
+    var status = document.getElementById('gpxStatus');
+    status.textContent = message;
+    status.hidden = !message;
+    ['gpxSave', 'gpxSend', 'gpxCopy'].forEach(function (b) { document.getElementById(b).disabled = !ready; });
+    document.getElementById('gpxFacts').hidden = !ready;
+    document.getElementById('gpxFile').hidden = !ready;
+  }
+
+  // The chosen day, from midnight to midnight where the reader is: the same
+  // request the file is saved from, so what is shown is what is kept.
+  function loadGpxDay() {
+    var date = document.getElementById('gpxDate');
+    var ymd = (date.value || '').split('-').map(Number);
     if (ymd.length !== 3 || !ymd[0]) return;
     var from = new Date(ymd[0], ymd[1] - 1, ymd[2]);
     var to = new Date(ymd[0], ymd[1] - 1, ymd[2] + 1);
-    var url = '/api/gpx/' + encodeURIComponent(id) + '?from=' + Math.floor(from / 1000) + '&to=' + Math.floor(to / 1000)
-      + '&tz=' + from.getTimezoneOffset();
-    button.disabled = true;
-    button.textContent = '…';
-    fetch(url, { credentials: 'same-origin' })
+    document.getElementById('gpxNext').disabled = date.value >= today();
+    var ask = ++gpx.asked;
+    gpx.text = '';
+    gpx.blob = null;
+    gpxState('Loading…', false);
+    fetch('/api/gpx/' + encodeURIComponent(gpx.id) + '?from=' + Math.floor(from / 1000) + '&to=' + Math.floor(to / 1000)
+      + '&tz=' + from.getTimezoneOffset(), { credentials: 'same-origin' })
       .then(function (r) {
         if (!r.ok) {
           return r.json().catch(function () { return {}; }).then(function (d) { throw new Error((d && d.error) || String(r.status)); });
         }
-        var name = fileNameOf(r.headers.get('content-disposition')) || ('path-' + input.value + '.gpx');
-        return r.blob().then(function (b) { save(b, name); button.textContent = 'Download'; });
+        var name = fileNameOf(r.headers.get('content-disposition')) || ('path-' + date.value + '.gpx');
+        return r.text().then(function (text) { return { name: name, text: text }; });
+      })
+      .then(function (got) {
+        if (ask !== gpx.asked) return;   // another day was asked for since
+        gpx.text = got.text;
+        gpx.name = got.name;
+        gpx.blob = new Blob([got.text], { type: 'application/gpx+xml' });
+        showGpx(readGpx(got.text));
       })
       .catch(function (e) {
+        if (ask !== gpx.asked) return;
         var why = e && e.message;
-        button.textContent = why === 'nothing recorded then' ? 'nothing that day' : (why === 'no database' ? 'needs PostGIS' : 'could not export');
-      })
-      .then(function () { button.disabled = false; });
+        clearGpxMap();
+        gpxState(why === 'nothing recorded then' ? 'Nothing was recorded that day.'
+          : why === 'no database' ? 'GPX needs the database (PostGIS).' : 'Could not load that day.', false);
+      });
   }
+
+  // The file's own segments: a new one wherever the path broke, at a hidden
+  // stretch or a long stop, which is how the server wrote it (src/gpx.js).
+  function readGpx(text) {
+    var doc = new DOMParser().parseFromString(text, 'application/xml');
+    var segs = doc.getElementsByTagName('trkseg');
+    var out = [];
+    for (var i = 0; i < segs.length; i++) {
+      var pts = segs[i].getElementsByTagName('trkpt');
+      var seg = [];
+      for (var j = 0; j < pts.length; j++) {
+        var t = pts[j].getElementsByTagName('time')[0];
+        var at = t ? Date.parse(t.textContent) / 1000 : NaN;
+        seg.push({ latitude: Number(pts[j].getAttribute('lat')), longitude: Number(pts[j].getAttribute('lon')), at: isFinite(at) ? at : null });
+      }
+      if (seg.length) out.push(seg);
+    }
+    return out;
+  }
+
+  function showGpx(segs) {
+    var count = 0;
+    var metres = 0;
+    var first = null;
+    var last = null;
+    segs.forEach(function (seg) {
+      count += seg.length;
+      // Along each stretch only: a break is not a distance anybody travelled.
+      for (var i = 1; i < seg.length; i++) metres += PathTime.metres(seg[i - 1], seg[i]);
+      seg.forEach(function (q) {
+        if (q.at === null) return;
+        if (first === null || q.at < first) first = q.at;
+        if (last === null || q.at > last) last = q.at;
+      });
+    });
+    var facts = [
+      ['Distance', metres >= 1000 ? (metres / 1000).toFixed(metres >= 100000 ? 0 : 1) + ' km' : Math.round(metres) + ' m'],
+      ['Time', first === null ? 'not recorded' : clock(first) + ' to ' + clock(last)],
+      ['Readings', String(count)],
+      ['Breaks', segs.length > 1
+        ? (segs.length - 1) + ' — a hidden stretch, or a stop of more than ten minutes'
+        : 'none'],
+    ];
+    var dl = document.getElementById('gpxFacts');
+    dl.replaceChildren();
+    facts.forEach(function (f) {
+      var dt = document.createElement('dt');
+      dt.textContent = f[0];
+      var dd = document.createElement('dd');
+      dd.textContent = f[1];
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    });
+    // The file itself, as text. A long day is cut short on screen only; what
+    // is saved, sent or copied is all of it.
+    var cap = 400000;
+    document.getElementById('gpxText').textContent = gpx.text.length > cap
+      ? gpx.text.slice(0, cap) + '\n… (' + Math.round(gpx.text.length / 1024) + ' KB in the file; the rest is not shown)'
+      : gpx.text;
+    var send = document.getElementById('gpxSend');
+    send.hidden = !gpxFile() || !(navigator.canShare && navigator.canShare({ files: [gpxFile()] }));
+    gpxState('', true);
+    drawGpxMap(segs);
+  }
+
+  function gpxFile() {
+    try { return new File([gpx.blob], gpx.name, { type: 'application/gpx+xml' }); } catch (e) { return null; }
+  }
+
+  // Real Leaflet, whichever map the page is on: on the 3D map the page's
+  // L is MapLibre underneath, and this preview is a plain map of one day.
+  function drawGpxMap(segs) {
+    var RL = window.L;
+    clearGpxMap();
+    var map = gpx.map = RL.map(document.getElementById('gpxMap'), { scrollWheelZoom: false });
+    RL.tileLayer('/tiles/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+    var all = [];
+    segs.forEach(function (seg) {
+      var line = seg.map(function (q) { return [q.latitude, q.longitude]; });
+      all = all.concat(line);
+      // No pins at either end: the times are in the facts. A lone reading
+      // is a dot, since a line of one point draws nothing.
+      if (line.length > 1) RL.polyline(line, { color: gpx.colour, weight: 3.5, opacity: 0.95, interactive: false }).addTo(map);
+      else RL.circleMarker(line[0], { radius: 4, weight: 2, color: '#071318', fillColor: gpx.colour, fillOpacity: 1, interactive: false }).addTo(map);
+    });
+    var fit = function () {
+      if (gpx.map !== map) return;
+      map.invalidateSize({ animate: false });
+      if (all.length === 1) map.setView(all[0], 16);
+      else map.fitBounds(RL.latLngBounds(all).pad(0.12));
+    };
+    fit();
+    // The dialog has only just been laid out; measured again once it has.
+    setTimeout(fit, 60);
+  }
+
+  function clearGpxMap() {
+    if (gpx.map) { gpx.map.remove(); gpx.map = null; }
+  }
+
+  function gpxClosed() {
+    gpx.asked++;
+    clearGpxMap();
+    // Back to the button that opened it — found again, since the card may
+    // have been redrawn while the dialog was open.
+    var back = detailPanel.querySelector('button.gpxbtn[data-id="' + String(gpx.id).replace(/"/g, '') + '"]');
+    if (back) back.focus();
+  }
+
+  gpxDialog.addEventListener('close', gpxClosed);
+  // A click on the dimmed page around it closes it; the dialog's own box
+  // fills it, so only the backdrop is the dialog itself.
+  gpxDialog.addEventListener('click', function (e) { if (e.target === gpxDialog) hideDialog(gpxDialog); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && gpxDialog.classList.contains('no-modal')) hideDialog(gpxDialog);
+  });
+  document.getElementById('gpxClose').onclick = function () { hideDialog(gpxDialog); };
+  document.getElementById('gpxDate').onchange = loadGpxDay;
+  function stepDay(by) {
+    var date = document.getElementById('gpxDate');
+    var ymd = (date.value || today()).split('-').map(Number);
+    var d = new Date(ymd[0], ymd[1] - 1, ymd[2] + by);
+    var next = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    if (next > today()) return;
+    date.value = next;
+    loadGpxDay();
+  }
+  document.getElementById('gpxPrev').onclick = function () { stepDay(-1); };
+  document.getElementById('gpxNext').onclick = function () { stepDay(1); };
+  document.getElementById('gpxSave').onclick = function () { if (gpx.blob) save(gpx.blob, gpx.name); };
+  document.getElementById('gpxSend').onclick = function () {
+    var file = gpxFile();
+    if (file) navigator.share({ files: [file], title: gpx.name }).catch(function () {});
+  };
+  document.getElementById('gpxCopy').onclick = function () {
+    var button = this;
+    var done = function () { button.textContent = 'Copied'; setTimeout(function () { button.textContent = 'Copy'; }, 2000); };
+    (navigator.clipboard ? navigator.clipboard.writeText(gpx.text) : Promise.reject())
+      .then(done)
+      .catch(function () {
+        // Without the clipboard API: the file, shown and selected, to copy by hand.
+        var details = document.getElementById('gpxFile');
+        details.open = true;
+        var range = document.createRange();
+        range.selectNodeContents(document.getElementById('gpxText'));
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try { if (document.execCommand('copy')) { done(); return; } } catch (x) { /* shown and selected is enough */ }
+        button.textContent = 'Selected below';
+      });
+  };
 
   function fileNameOf(disposition) {
     var utf = /filename\*=UTF-8''([^;]+)/i.exec(disposition || '');
@@ -1407,7 +1691,7 @@ function startDashboard(L, PeopleMap, Cartography, game) {
   // so a handler bound to the button would not survive it.
   document.addEventListener('click', function (e) {
     var g = e.target.closest && e.target.closest('button.gpxbtn');
-    if (g) { e.preventDefault(); downloadDay(g.getAttribute('data-id'), g); return; }
+    if (g) { e.preventDefault(); openGpx(g.getAttribute('data-id')); return; }
     var lv = e.target.closest && e.target.closest('button.livebtn');
     if (lv) { e.preventDefault(); makeLive(Number(lv.getAttribute('data-min')), lv); return; }
     var sb = e.target.closest && e.target.closest('button.sosbtn, button.safebtn');
