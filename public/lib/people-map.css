@@ -1,0 +1,53 @@
+/* people-map.css — how somebody is drawn on a map; the styles people-map.js
+   draws with, shared by the dashboard and the page a live link opens. */
+
+/* Somebody inside a private place. What arrived is the place, not a point,
+   and it is drawn as what it is: a soft patch of blur they are somewhere
+   in, breathing slowly so it reads as somebody there rather than a stain on
+   the map. There is nothing exact under it — the server never sent where in
+   the circle they are — so the blur is a way of saying so, not a secret. */
+.veil{position:absolute;pointer-events:none}
+.veil .fog{position:absolute;inset:0;border-radius:50%;
+  -webkit-backdrop-filter:blur(8px) saturate(.7);backdrop-filter:blur(8px) saturate(.7);
+  -webkit-mask-image:radial-gradient(closest-side,#000 55%,transparent);
+  mask-image:radial-gradient(closest-side,#000 55%,transparent);
+  animation:breathe 5s ease-in-out infinite;transition:opacity .18s ease}
+.veil.in .fog{animation:veil-in .9s ease-out,breathe 5s ease-in-out .9s infinite}
+.veil.out .fog{animation:veil-out .6s ease-in forwards}
+.veil.dim .fog{opacity:.3}
+/* Zoomed so far in that the blur is several screens across: the whole view
+   is inside it, and blurring all of it would hide nothing (there is nothing
+   exact under it) while being the most expensive thing on the page to
+   draw. It keeps its tint and lets the map be read. */
+.veil.huge .fog{-webkit-backdrop-filter:none;backdrop-filter:none;animation:none}
+/* Your own places, as you see them: the same blur, lighter and still, with
+   its edge marked, so you know where your circle stops seeing you. */
+.veil.mine{border:1.5px dashed rgba(122,111,240,.75);border-radius:50%;box-sizing:border-box}
+.veil.mine .fog{animation:none;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+@keyframes breathe{0%,100%{transform:scale(.97);opacity:.82}50%{transform:scale(1.03);opacity:1}}
+@keyframes veil-in{from{transform:scale(.55);opacity:0}}
+@keyframes veil-out{to{transform:scale(1.18);opacity:0}}
+/* The name on a blur, since there is no dot to hover. */
+.veil-chip{background:none;border:none}
+.veil-chip span{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;cursor:pointer;
+  font-size:.78rem;font-weight:600;color:var(--ink);background:var(--paper);border:1px solid var(--hairline);
+  border-radius:999px;padding:.12rem .55rem;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.veil-chip.lit span{border-color:var(--ink)}
+.veil-chip.dim span{opacity:.4}
+/* A dot dissolving into the blur, or condensing out of it. */
+.puff{width:16px;height:16px;border-radius:50%}
+.puff.dissolve{animation:dissolve .7s ease-out forwards}
+.puff.condense{animation:condense .5s ease-in forwards}
+@keyframes dissolve{to{transform:scale(4);filter:blur(8px);opacity:0}}
+@keyframes condense{from{transform:scale(4);filter:blur(8px);opacity:0}to{transform:none;filter:none;opacity:1}}
+/* The way somebody is heading: a fan under their dot that fades outwards,
+   turning smoothly as they do. */
+.beam{pointer-events:none}
+.beam div{width:100%;height:100%;border-radius:50%;
+  -webkit-mask-image:radial-gradient(closest-side,#000 30%,transparent);
+  mask-image:radial-gradient(closest-side,#000 30%,transparent);
+  transition:transform .6s ease}
+@media (prefers-reduced-motion:reduce){
+  .veil .fog{animation:none!important}
+  .beam div{transition:none}
+}

@@ -7,6 +7,7 @@
 <!-- Served from this host. Nothing on this page reaches a third party: on a
      network that filters things, a CDN is one more way for the map to vanish. -->
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+<link rel="stylesheet" href="/lib/people-map.css" />
 <style>
   :root{
     --ink:#14181d; --paper:#fff; --quiet:#6b7480; --hairline:#e3e6ea;
@@ -117,48 +118,10 @@
                         border:1px solid var(--hairline);border-radius:.35rem;background:var(--paper);color:var(--ink)}
   #circle .fine{color:var(--quiet);font-size:.78rem;margin-top:.5rem}
   #circle .code{font:600 1.6rem/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;margin:.4rem 0}
-  /* Somebody inside a private place. What arrived is the place, not a point,
-     and it is drawn as what it is: a soft patch of blur they are somewhere
-     in, breathing slowly so it reads as somebody there rather than a stain on
-     the map. There is nothing exact under it — the server never sent where in
-     the circle they are — so the blur is a way of saying so, not a secret. */
-  .veil{position:absolute;pointer-events:none}
-  .veil .fog{position:absolute;inset:0;border-radius:50%;
-    -webkit-backdrop-filter:blur(8px) saturate(.7);backdrop-filter:blur(8px) saturate(.7);
-    -webkit-mask-image:radial-gradient(closest-side,#000 55%,transparent);
-    mask-image:radial-gradient(closest-side,#000 55%,transparent);
-    animation:breathe 5s ease-in-out infinite;transition:opacity .18s ease}
-  .veil.in .fog{animation:veil-in .9s ease-out,breathe 5s ease-in-out .9s infinite}
-  .veil.out .fog{animation:veil-out .6s ease-in forwards}
-  .veil.dim .fog{opacity:.3}
-  /* Zoomed so far in that the blur is several screens across: the whole view
-     is inside it, and blurring all of it would hide nothing (there is nothing
-     exact under it) while being the most expensive thing on the page to
-     draw. It keeps its tint and lets the map be read. */
-  .veil.huge .fog{-webkit-backdrop-filter:none;backdrop-filter:none;animation:none}
-  /* Your own places, as you see them: the same blur, lighter and still, with
-     its edge marked, so you know where your circle stops seeing you. */
-  .veil.mine{border:1.5px dashed rgba(122,111,240,.75);border-radius:50%;box-sizing:border-box}
-  .veil.mine .fog{animation:none;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
-  @keyframes breathe{0%,100%{transform:scale(.97);opacity:.82}50%{transform:scale(1.03);opacity:1}}
-  @keyframes veil-in{from{transform:scale(.55);opacity:0}}
-  @keyframes veil-out{to{transform:scale(1.18);opacity:0}}
-  /* The name on a blur, since there is no dot to hover. */
-  .veil-chip{background:none;border:none}
-  .veil-chip span{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;cursor:pointer;
-    font-size:.78rem;font-weight:600;color:var(--ink);background:var(--paper);border:1px solid var(--hairline);
-    border-radius:999px;padding:.12rem .55rem;box-shadow:0 2px 8px rgba(0,0,0,.12)}
-  .veil-chip.lit span{border-color:var(--ink)}
-  .veil-chip.dim span{opacity:.4}
-  /* A dot dissolving into the blur, or condensing out of it. */
-  .puff{width:16px;height:16px;border-radius:50%}
-  .puff.dissolve{animation:dissolve .7s ease-out forwards}
-  .puff.condense{animation:condense .5s ease-in forwards}
-  @keyframes dissolve{to{transform:scale(4);filter:blur(8px);opacity:0}}
-  @keyframes condense{from{transform:scale(4);filter:blur(8px);opacity:0}to{transform:none;filter:none;opacity:1}}
+  /* The blur, the glide and the beam are in /lib/people-map.css, shared with
+     the page a live link opens. */
   /* Where a path goes out of view, or comes back into it. */
   .fade-end{width:22px;height:22px;border-radius:50%;filter:blur(2px);opacity:.65}
-  @media (prefers-reduced-motion:reduce){ .veil .fog{animation:none!important} }
   /* A day of your own path, to take away as GPX. */
   .card .gpx{display:flex;align-items:center;gap:.35rem;margin-top:.45rem;flex-wrap:wrap}
   .card .gpx input{font:inherit;font-size:.78rem;padding:.12rem .3rem;border:1px solid var(--hairline);
@@ -188,6 +151,7 @@
 
 <script src="/vendor/leaflet/leaflet.js"></script>
 <script src="/lib/path-time.js"></script>
+<script src="/lib/people-map.js"></script>
 <script>
 (function () {
   var map = L.map('map', {
@@ -209,71 +173,10 @@
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   }).addTo(map);
 
-  // ------------------------------------------------------------- the blur
-  //
-  // A patch of ground drawn as a <div>. Leaflet already knows how to place and
-  // scale an image over a patch of ground, zoom animation included, so this is
-  // an image overlay with a div where the image would be. It gets its own pane
-  // between the paths and the markers: a path that runs into it is blurred
-  // with the map, and names and dots stay sharp above it.
-  var Veil = L.ImageOverlay.extend({
-    _initImage: function () {
-      var el = this._image = L.DomUtil.create('div', 'veil leaflet-image-layer');
-      if (this._zoomAnimated) L.DomUtil.addClass(el, 'leaflet-zoom-animated');
-      if (this.options.className) this.options.className.split(' ').forEach(function (c) { if (c) L.DomUtil.addClass(el, c); });
-      el.innerHTML = '<div class="fog"></div>';
-      el.onselectstart = L.Util.falseFn;
-      el.onmousemove = L.Util.falseFn;
-    },
-  });
-  map.createPane('veils');
-  map.getPane('veils').style.zIndex = 450;
-  map.getPane('veils').style.pointerEvents = 'none';
-
-  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  function rgba(hex, a) {
-    var n = parseInt(String(hex).replace('#', ''), 16);
-    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
-  }
-
-  function tintVeil(veil, colour) {
-    var fog = veil.getElement() && veil.getElement().querySelector('.fog');
-    if (fog) fog.style.background = 'radial-gradient(closest-side,' + rgba(colour, .28) + ',' + rgba(colour, .14) + ' 60%,transparent)';
-  }
-
-  // A dot dissolving into a blur, or condensing out of one. Removed by a
-  // timer rather than on animationend, so nothing is left behind if the
-  // animation never runs; with reduced motion there is no puff at all.
-  function puff(latlng, colour, kind) {
-    if (reduced) return;
-    var m = L.marker(latlng, {
-      icon: L.divIcon({ className: '', html: '<div class="puff ' + kind + '" style="background:' + colour + '"></div>',
-        iconSize: [16, 16], iconAnchor: [8, 8] }),
-      interactive: false, keyboard: false,
-    }).addTo(map);
-    setTimeout(function () { map.removeLayer(m); }, kind === 'dissolve' ? 750 : 550);
-  }
-
-  function sizeVeils() {
-    var screen = map.getSize();
-    var limit = 3 * Math.max(screen.x, screen.y);
-    map.eachLayer(function (layer) {
-      if (!(layer instanceof Veil) || !layer.getElement()) return;
-      var b = layer.getBounds();
-      var across = map.latLngToContainerPoint(b.getNorthEast()).x - map.latLngToContainerPoint(b.getSouthWest()).x;
-      layer.getElement().classList.toggle('huge', across > limit);
-    });
-  }
-  map.on('zoomend resize', sizeVeils);
-
-  function fadeOut(veil) {
-    var el = veil.getElement();
-    if (reduced || !el) { map.removeLayer(veil); return; }
-    el.classList.remove('in');
-    el.classList.add('out');
-    setTimeout(function () { if (map.hasLayer(veil)) map.removeLayer(veil); }, 650);
-  }
+  // How a person is drawn — the blur over somebody in a private place, the
+  // dot gliding to where they are now, the beam for the way they are heading
+  // — is shared with the page a live link opens. See /lib/people-map.js.
+  var drawing = PeopleMap.on(map);
 
   // Leaflet measures the container when the map is built, and this one is
   // sized by a CSS grid that may not have settled yet. Measured too early it
@@ -643,6 +546,7 @@
         e.marker.setRadius(focus ? 9 : 7);
       }
       if (e.halo) e.halo.setStyle({ opacity: dim ? .05 : .3, fillOpacity: dim ? .01 : .06 });
+      if (e.beam) e.beam.setOpacity(dim ? .15 : 1);
       var veilEl = e.veil && e.veil.getElement();
       if (veilEl) veilEl.classList.toggle('dim', dim);
       var chipEl = e.chip && e.chip.getElement();
@@ -851,31 +755,37 @@
     if (span) span.textContent = label(entry.data);
   }
 
+  function colourOf(p) {
+    return live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33'
+                   : '#8a929b';
+  }
+
   function draw(p) {
     if (p.latitude === null || p.longitude === null) return;
     var here = [p.latitude, p.longitude];
     var entry = people.get(p.id) || {};
+    var before = entry.data;
     entry.data = p;
     people.set(p.id, entry);
 
-    var colour = live(p) ? getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#0a7d33'
-                         : '#8a929b';
+    var colour = colourOf(p);
 
     if (p.hidden) {
       // Inside a private place: what arrived is the place, not a point. The
       // dot, if there was one, dissolves into the blur that now stands for
       // them, and their name sits on it for hovering and clicking.
       if (entry.marker) {
-        puff(entry.marker.getLatLng(), colour, 'dissolve');
+        drawing.halt(entry);
+        drawing.puff(entry.marker.getLatLng(), colour, 'dissolve');
         map.removeLayer(entry.marker);
         entry.marker = null;
       }
       if (entry.halo) { map.removeLayer(entry.halo); entry.halo = null; }
       var area = L.latLng(here).toBounds(Math.max(50, p.accuracy || 0) * 2);
-      if (!entry.veil) entry.veil = new Veil('', area, { pane: 'veils', className: 'in' }).addTo(map);
+      if (!entry.veil) entry.veil = drawing.veil(area, 'in').addTo(map);
       else entry.veil.setBounds(area);
-      tintVeil(entry.veil, colour);
-      sizeVeils();
+      drawing.tint(entry.veil, colour);
+      drawing.size();
       if (!entry.chip) {
         entry.chip = L.marker(here, { icon: chipIcon(p), keyboard: false }).addTo(map);
         wire(entry.chip, entry);
@@ -887,28 +797,35 @@
       // In the open. Coming out of a private place, the blur swells away and
       // the dot condenses where they now are.
       if (entry.veil) {
-        fadeOut(entry.veil);
+        drawing.fadeOut(entry.veil);
         entry.veil = null;
-        puff(L.latLng(here), colour, 'condense');
+        drawing.puff(L.latLng(here), colour, 'condense');
       }
       if (entry.chip) { map.removeLayer(entry.chip); entry.chip = null; }
-      if (!entry.marker) {
+      var fresh = !entry.marker;
+      if (fresh) {
         entry.marker = L.circleMarker(here, { radius: 7, weight: 3, fillColor: '#fff', fillOpacity: 1 }).addTo(map);
         entry.marker.bindTooltip(label(p), { permanent: false });
         wire(entry.marker, entry);
       }
-      entry.marker.setLatLng(here).setStyle({ color: colour });
+      entry.marker.setStyle({ color: colour });
       relabel(entry);
       if (p.accuracy) {
-        if (!entry.halo) entry.halo = L.circle(here, { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
-        entry.halo.setLatLng(here).setRadius(p.accuracy).setStyle({ color: colour });
+        if (!entry.halo) entry.halo = L.circle(entry.marker.getLatLng(), { weight: 1, opacity: .3, fillOpacity: .06, color: colour }).addTo(map);
+        entry.halo.setRadius(p.accuracy).setStyle({ color: colour });
       }
+      // From wherever the dot is drawn — mid-glide, if another fix is still
+      // arriving — to where they are now, at about the pace the fixes came.
+      var from = entry.marker.getLatLng();
+      drawing.glide(entry, L.latLng(here), fresh || !before ? 0
+        : PathTime.glideFor({ latitude: from.lat, longitude: from.lng }, p, p.at - before.at));
     }
 
     // Every fix keeps its time beside it; the hover asks for it by index.
     // Where a stretch was hidden the path breaks, drawn as separate runs, and
     // each end fades out instead of stopping dead.
     entry.pts = PathTime.merge(entry.history, p.trail);
+    aimAt(entry);
     var runs = PathTime.runs(entry.pts);
     var lines = runs.filter(function (r) { return r.length > 1; })
       .map(function (r) { return r.map(function (t) { return [t.latitude, t.longitude]; }); });
@@ -923,6 +840,19 @@
     // view that jumps to whoever moved last is unusable the moment two people
     // are sharing, so recentring is a button rather than a surprise.
     if (!fitted) { fit(); fitted = true; }
+  }
+
+  // The beam, pointed the way somebody is going, or taken away once they are
+  // not going anywhere. Asked again every few seconds as well as on every
+  // fix: stopping sends no update to say so, and a beam left behind would
+  // keep asserting a direction nobody is travelling in.
+  function aimAt(entry) {
+    var p = entry.data;
+    if (!p) return;
+    var deg = p.hidden ? null : PathTime.headingOf(p.heading, entry.pts, Date.now() / 1000);
+    drawing.aim(entry, deg, colourOf(p));
+    var id = lit || hovered || pathHover;
+    if (entry.beam) entry.beam.setOpacity(id && id !== p.id ? .15 : 1);
   }
 
   // A soft spot where a path goes out of view into a private place, and
@@ -1145,10 +1075,10 @@
     zoneLayer.clearLayers();
     myZones.forEach(function (z) {
       var area = L.latLng(z.latitude, z.longitude).toBounds(z.radius * 2);
-      var v = new Veil('', area, { pane: 'veils', className: 'mine' });
+      var v = drawing.veil(area, 'mine');
       zoneLayer.addLayer(v);
-      tintVeil(v, '#7a6ff0');
-      sizeVeils();
+      drawing.tint(v, '#7a6ff0');
+      drawing.size();
       // On the rim rather than in the middle, which is where you are.
       L.tooltip({ permanent: true, direction: 'top', className: 'fence-label' })
         .setLatLng([area.getNorth(), z.longitude])
@@ -1175,7 +1105,8 @@
   function drop(id) {
     var entry = people.get(id);
     if (!entry) return false;
-    ['marker', 'halo', 'path', 'glow', 'veil', 'chip', 'fades'].forEach(function (k) { if (entry[k]) map.removeLayer(entry[k]); });
+    drawing.halt(entry);
+    ['marker', 'halo', 'beam', 'path', 'glow', 'veil', 'chip', 'fades'].forEach(function (k) { if (entry[k]) map.removeLayer(entry[k]); });
     people.delete(id);
     // What was fetched of their history goes too. A person sent again after
     // being forgotten — because they hid a place, say — is asked for afresh,
@@ -1312,6 +1243,9 @@
 
   // Keeps «live · 4m left» and «2m ago» from going stale between updates.
   setInterval(render, 1000);
+  // And the beams: somebody who stopped a few minutes ago is not heading
+  // anywhere now, and no update will come to say so.
+  setInterval(function () { people.forEach(aimAt); }, 5000);
 })();
 </script>
 </body>

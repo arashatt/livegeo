@@ -1183,6 +1183,19 @@ head('the leak matrix: every route, as every kind of viewer');
   t('every route server.js matches has a decided audience', unclassified.length === 0, unclassified);
   t('and the list really was read from the source', routes.length >= 20, routes.length);
 
+  // --- our own scripts are checked every time, so a deploy cannot leave a
+  // fresh page running last week's copy of the code it loads
+  {
+    const first = await fetch(base + '/lib/people-map.js');
+    const tag = first.headers.get('etag');
+    t('a script of ours is served to anybody', first.status === 200 && (await first.text()).includes('PeopleMap'));
+    t('and must be revalidated', first.headers.get('cache-control') === 'no-cache' && Boolean(tag), first.headers.get('cache-control'));
+    const again = await fetch(base + '/lib/people-map.js', { headers: { 'if-none-match': tag } });
+    t('which costs a 304 when it has not changed', again.status === 304, again.status);
+    const vendor = await fetch(base + '/vendor/leaflet/leaflet.js');
+    t('Leaflet may still be kept for a week', /max-age=604800/.test(vendor.headers.get('cache-control')));
+  }
+
   // --- who can get in at all
   t('a session for somebody the bot never met is refused', (await hit('stranger', '/api/positions')).status === 401);
   t('the shared token still works, as an admin', (await ids('token')) === '2,3');
@@ -1373,6 +1386,35 @@ head('paths with holes in them');
   const over = PathTime.nearestSegment(px, { x: 15, y: 0 });
   t('hovering over a hidden stretch finds no segment across it', over.index === 0 && over.t === 1, over);
   t('either side of it is still a path', PathTime.nearestSegment(px, { x: 25, y: 1 }).index === 2);
+}
+
+head('a dot that travels, and a beam for the way it is going');
+{
+  const here = { latitude: 36.3, longitude: 59.6 };
+  const near = { latitude: 36.3009, longitude: 59.6 };    // 100 m north
+  t('a short step glides, at most a second and a bit', PathTime.glideFor(here, near, 30) === 1200);
+  t('and never slower than the fixes came', PathTime.glideFor(here, near, 1) === 800);
+  t('a jump across town does not glide', PathTime.glideFor(here, { latitude: 36.33, longitude: 59.6 }, 60) === 0);
+  t('nor one after a long silence', PathTime.glideFor(here, near, 601) === 0);
+  t('nor a fix that went back in time', PathTime.glideFor(here, near, -5) === 0);
+  t('nor with no time at all', PathTime.glideFor(here, near, null) === 0);
+  t('nor across the antimeridian', PathTime.glideFor({ latitude: 0, longitude: 179.999 }, { latitude: 0, longitude: -179.999 }, 10) === 0);
+
+  const north = PathTime.bearing(here, near);
+  const east = PathTime.bearing(here, { latitude: 36.3, longitude: 59.61 });
+  t('north is 0°', Math.abs(north) < 0.01 || Math.abs(north - 360) < 0.01, north);
+  t('east is about 90°', Math.abs(east - 90) < 0.1, east);
+
+  const now = 10_000;
+  const walked = [{ ...here, at: now - 60 }, { ...near, at: now - 20 }];   // 100 m in 40 s: 2.5 m/s
+  t('moving, the phone\'s own heading wins', PathTime.headingOf(270, walked, now) === 270);
+  t('Telegram\'s 360 is north', PathTime.headingOf(360, walked, now) === 0);
+  t('without one, the last step stands in', Math.abs(PathTime.headingOf(null, walked, now)) < 0.01);
+  t('standing still has no heading',
+    PathTime.headingOf(90, [{ ...here, at: now - 600 }, { ...near, at: now - 20 }], now) === null);
+  t('nor does somebody who last moved minutes ago', PathTime.headingOf(90, walked, now + 400) === null);
+  t('nor a step out of a hidden stretch', PathTime.headingOf(90, [walked[0], { ...walked[1], gap: true }], now) === null);
+  t('nor a single fix', PathTime.headingOf(90, walked.slice(1), now) === null);
 }
 
 head('private places: where the circle is centred, and what is left of a path');

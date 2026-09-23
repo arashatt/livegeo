@@ -95,6 +95,57 @@
     return (kmh < 20 ? kmh.toFixed(1) : String(Math.round(kmh))) + ' km/h';
   }
 
+  // How long the dot should take to travel from where it is drawn to where
+  // somebody now is, in milliseconds, or 0 to put it there at once. A glide
+  // stands for a movement that happened; a jump across town, or across more
+  // than ten minutes, was not one movement and is not drawn as one. Never
+  // slower than the fixes themselves came, so a dot keeps up with its path.
+  function glideFor(from, to, dt) {
+    if (!from || !to) return 0;
+    var d = seconds(dt);
+    if (d === null || d <= 0 || d > 600) return 0;
+    // Across the antimeridian a straight line in degrees goes the long way
+    // round the world.
+    if (Math.abs(to.longitude - from.longitude) > 180) return 0;
+    if (metres(from, to) > 2000) return 0;
+    return Math.min(1200, Math.round(0.8 * d * 1000));
+  }
+
+  // The initial great-circle bearing from a to b, in degrees clockwise from
+  // north, 0 to 360.
+  function bearing(a, b) {
+    var rad = Math.PI / 180;
+    var p1 = a.latitude * rad;
+    var p2 = b.latitude * rad;
+    var dl = (b.longitude - a.longitude) * rad;
+    var y = Math.sin(dl) * Math.cos(p2);
+    var x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+    return (Math.atan2(y, x) / rad + 360) % 360;
+  }
+
+  // Which way somebody is heading, in degrees from north, or null when that
+  // is not worth drawing: they are not moving, or last moved too long ago to
+  // say, or their last step came out of a hidden stretch — a direction across
+  // a private place is a direction to nowhere anybody was shown.
+  //
+  // The phone's own heading wins when there is one. Telegram sends 1 to 360
+  // and only while moving; a watch sends none, and its last step stands in.
+  function headingOf(heading, points, now) {
+    var n = (points || []).length;
+    if (n < 2) return null;
+    var a = points[n - 2];
+    var b = points[n - 1];
+    if (b.gap) return null;
+    var v = speedBetween(a, b);
+    if (v === null || v < 1) return null;
+    var last = seconds(b.at);
+    var t = seconds(now);
+    if (last === null || t === null || t - last > 180) return null;
+    var h = seconds(heading);
+    if (h !== null && h > 0 && h <= 360) return h % 360;
+    return bearing(a, b);
+  }
+
   // Stored history and the live trail, as one path in time order. They
   // overlap — the trail's recent fixes are also in the history — so a fix
   // seen twice is kept once. History comes back newest first; order is not
@@ -138,6 +189,9 @@
     metres: metres,
     speedBetween: speedBetween,
     speedLabel: speedLabel,
+    glideFor: glideFor,
+    bearing: bearing,
+    headingOf: headingOf,
   };
   root.PathTime = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

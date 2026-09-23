@@ -20,7 +20,7 @@ import {
   makeZones, ZONE_MIN, ZONE_MAX, ZONES_EACH, trimEnds, trimLengths, breaksOf, withBreaks,
 } from './zones.js';
 import { toGpx, splitAtPauses, dayOf, contentDisposition } from './gpx.js';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 const PAGE = resolve(PUBLIC, 'index.html');
@@ -144,10 +144,23 @@ export function serve(positions, config, {
     res.end(got.bytes);
   }
 
-  async function serveStatic(url, res) {
+  async function serveStatic(url, req, res) {
     const hit = staticFile(url.pathname);
     const bytes = hit ? await readFile(hit.file).catch(() => null) : null;
     if (!bytes) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); return; }
+    // Leaflet does not change under a deploy, so a browser may keep it for a
+    // week. Our own code in /lib/ does, and the pages that load it are never
+    // cached: a fresh page against last week's copy of its scripts breaks in
+    // ways nobody can reproduce. So /lib/ is checked every time, which costs
+    // a 304 when nothing changed.
+    if (url.pathname.startsWith('/lib/')) {
+      const tag = `"${createHash('sha1').update(bytes).digest('base64url')}"`;
+      const headers = { 'content-type': hit.type, 'cache-control': 'no-cache', etag: tag };
+      if (req.headers['if-none-match'] === tag) { res.writeHead(304, headers); res.end(); return; }
+      res.writeHead(200, headers);
+      res.end(bytes);
+      return;
+    }
     res.writeHead(200, { 'content-type': hit.type, 'cache-control': 'private, max-age=604800' });
     res.end(bytes);
   }
@@ -564,7 +577,7 @@ export function serve(positions, config, {
     // Leaflet is a public library and a share page needs it, so it is not
     // behind the dashboard token. It carries no data. /lib/ is the same for
     // code of our own that both pages load — arithmetic, not information.
-    if (url.pathname.startsWith('/vendor/') || url.pathname.startsWith('/lib/')) return serveStatic(url, res);
+    if (url.pathname.startsWith('/vendor/') || url.pathname.startsWith('/lib/')) return serveStatic(url, req, res);
 
     // A share link is a second key, and a far narrower one: it opens the
     // viewer, the one path behind it, and the tiles that page draws on.
