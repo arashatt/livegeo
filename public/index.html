@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>LiveGeo — Mashhad</title>
+<title>LiveGeo</title>
 <!-- Served from this host. Nothing on this page reaches a third party: on a
      network that filters things, a CDN is one more way for the map to vanish. -->
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
@@ -240,33 +240,6 @@
   }
   .map-shell #map{position:absolute;inset:0;background:var(--map-bg)}
 
-  .map-context{
-    position:absolute;
-    top:1rem;
-    left:1rem;
-    z-index:760;
-    display:grid;
-    gap:.18rem;
-    padding:.62rem .7rem .58rem;
-    background:rgba(6,14,18,.76);
-    border:1px solid rgba(255,255,255,.10);
-    border-radius:6px;
-    backdrop-filter:blur(8px);
-    pointer-events:none;
-  }
-  .map-context .map-city{
-    font-family:"Arial Narrow","Helvetica Neue Condensed",ui-sans-serif,sans-serif;
-    font-size:.92rem;
-    font-weight:800;
-    letter-spacing:.16em;
-    color:#f5f1ec;
-  }
-  .map-context .map-coordinates{
-    font-size:.67rem;
-    letter-spacing:.035em;
-    color:#90a0a5;
-    font-variant-numeric:tabular-nums;
-  }
 
   aside{
     background:var(--panel-solid);
@@ -316,11 +289,11 @@
   #circle h2{color:#9eaaae}
 
   .leaflet-tile-pane{
-    filter:invert(.94) hue-rotate(154deg) saturate(.62) brightness(.62) contrast(1.12);
+    filter:invert(.94) hue-rotate(154deg) saturate(.76) brightness(.80) contrast(1.06);
     transition:filter .18s ease;
   }
   body.spotlight .leaflet-tile-pane{
-    filter:invert(.94) hue-rotate(154deg) saturate(.45) brightness(.48) contrast(1.12) grayscale(.38) opacity(.72);
+    filter:invert(.94) hue-rotate(154deg) saturate(.54) brightness(.62) contrast(1.08) grayscale(.30) opacity(.78);
   }
 
   .leaflet-control-zoom a{
@@ -371,9 +344,6 @@
     .brand .city{display:none}
     main{grid-template-columns:1fr;grid-template-rows:1fr auto}
     aside{max-height:34vh}
-    .map-context{top:.7rem;left:.7rem;padding:.5rem .58rem}
-    .map-context .map-city{font-size:.8rem}
-    .map-context .map-coordinates{font-size:.61rem}
     .leaflet-control-scale{margin-left:10px;margin-bottom:10px}
   }
 
@@ -399,14 +369,14 @@
 
   .people-panel,.detail-panel,.layers-panel{
     position:absolute;z-index:810;
-    background:rgba(7,14,18,.92);
+    background:rgba(7,14,18,.86);
     border:1px solid rgba(255,255,255,.11);
     border-radius:7px;
     box-shadow:0 18px 48px rgba(0,0,0,.38);
     backdrop-filter:blur(14px)
   }
   .people-panel{
-    left:1rem;top:4.65rem;bottom:1rem;width:min(19rem,calc(100vw - 2rem));
+    left:1rem;top:4.65rem;bottom:1rem;width:min(17rem,calc(100vw - 2rem));
     padding:0;display:flex;flex-direction:column;overflow:hidden;
     transform:translateX(calc(-100% - 1.4rem));opacity:0;pointer-events:none;
     transition:transform .2s ease,opacity .16s ease
@@ -474,14 +444,13 @@
       left:.55rem;right:.55rem;top:auto;bottom:.55rem;width:auto;max-height:58vh;overflow:auto
     }
     .layers-panel{right:.55rem;top:4.25rem;width:min(15.5rem,calc(100vw - 1.1rem))}
-    .map-context{top:.7rem;left:.7rem}
   }
 
 </style>
 </head>
 <body>
 <header>
-  <div class="brand"><h1>LIVEGEO</h1><span class="city">MASHHAD</span></div>
+  <div class="brand"><h1>LIVEGEO</h1></div>
   <span class="count" id="count"></span>
   <span class="hint" id="hint" hidden></span>
   <button class="ghost" id="newfence" type="button" hidden>New fence</button>
@@ -494,18 +463,13 @@
 <main>
   <div class="map-shell">
     <div id="map"></div>
-    <div class="map-context" aria-hidden="true">
-      <span class="map-city">MASHHAD</span>
-      <span class="map-coordinates">36.2605° N · 59.6168° E</span>
-    </div>
-
     <div class="map-toolbar" aria-label="Map controls">
-      <button class="ghost" id="peoplebtn" type="button" aria-expanded="true">People <span id="peoplebadge"></span></button>
+      <button class="ghost" id="peoplebtn" type="button" aria-expanded="false">People <span id="peoplebadge"></span></button>
       <button class="ghost" id="layersbtn" type="button" aria-expanded="false">Layers</button>
       <button class="ghost" id="recentre" type="button" hidden>Recentre</button>
     </div>
 
-    <aside class="people-panel is-open" id="peoplePanel" aria-label="People">
+    <aside class="people-panel" id="peoplePanel" aria-label="People">
       <div class="panel-heading">
         <strong>People</strong>
         <span class="panel-meta" id="panelcount"></span>
@@ -540,7 +504,7 @@
     // Far enough out to see a continent, never so far that the whole world
     // shrinks into a band with empty space above and below it.
     minZoom: 3
-  }).setView([36.2605, 59.6168], 12);
+  }).setView([20, 0], 3);
 
   // Proxied and cached by this service rather than fetched from OSM directly,
   // so the browser only ever talks to the host it loaded the page from. The
@@ -601,7 +565,7 @@
     layersPanel.hidden = !layersPanel.hidden;
     layersButton.setAttribute('aria-expanded', String(!layersPanel.hidden));
   };
-  if (window.matchMedia && window.matchMedia('(max-width:760px)').matches) setPeopleOpen(false);
+  setPeopleOpen(false);
 
   document.addEventListener('mousedown', function (e) {
     if (!layersPanel.hidden && !layersPanel.contains(e.target) && e.target !== layersButton) {
