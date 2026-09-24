@@ -1,0 +1,117 @@
+{
+  "renderer": "153.0.8010.0",
+  "cpuThrottle": 4,
+  "graphics": "SwiftShader software WebGL2 (not a physical phone)",
+  "screenshots": [
+    {
+      "name": "desktop-globe.jpg",
+      "bytes": 50468
+    },
+    {
+      "name": "desktop-day.jpg",
+      "bytes": 152723
+    },
+    {
+      "name": "desktop-night.jpg",
+      "bytes": 214902
+    },
+    {
+      "name": "desktop-street.jpg",
+      "bytes": 101311
+    },
+    {
+      "name": "desktop-map.jpg",
+      "bytes": 139741
+    },
+    {
+      "name": "desktop-chase.jpg",
+      "bytes": 154237
+    },
+    {
+      "name": "desktop-legend.jpg",
+      "bytes": 146218
+    },
+    {
+      "name": "desktop-layers.jpg",
+      "bytes": 136638
+    },
+    {
+      "name": "phone-globe.jpg",
+      "bytes": 33946
+    },
+    {
+      "name": "phone-day.jpg",
+      "bytes": 49286
+    },
+    {
+      "name": "phone-night.jpg",
+      "bytes": 69143
+    },
+    {
+      "name": "phone-street.jpg",
+      "bytes": 39517
+    },
+    {
+      "name": "phone-map.jpg",
+      "bytes": 42639
+    },
+    {
+      "name": "phone-chase.jpg",
+      "bytes": 54121
+    },
+    {
+      "name": "phone-legend.jpg",
+      "bytes": 48381
+    },
+    {
+      "name": "phone-layers.jpg",
+      "bytes": 35322
+    },
+    {
+      "name": "desktop-trail-time.jpg",
+      "bytes": 114961
+    },
+    {
+      "name": "desktop-card.jpg",
+      "bytes": 116311
+    }
+  ],
+  "externalRequests": [],
+  "desktopPanTilt": {
+    "frames": 13,
+    "ms": 4704,
+    "fps": 2.8
+  },
+  "phonePanTilt": {
+    "frames": 52,
+    "ms": 4069,
+    "fps": 12.8
+  },
+  "phoneLitePan": {
+    "frames": 78,
+    "ms": 4074,
+    "fps": 19.1
+  },
+  "idleRepaintsIn2s": 0,
+  "consoleErrors": [],
+  "addedAssetBytes": {
+    "js": 1291615,
+    "fonts": 567500,
+    "glyphs": 362138,
+    "data": 138160
+  },
+  "postgisMvt": {
+    "z12": {
+      "tiles": 4,
+      "p95GzipBytes": 811,
+      "maxGzipBytes": 811
+    },
+    "z16": {
+      "tiles": 90,
+      "p95GzipBytes": 637,
+      "maxGzipBytes": 738
+    }
+  },
+  "postgisMvtEvidence": "https://github.com/arashatt/livegeo/actions/runs/36002413451",
+  "method": "Invented grid; 4-second warmed movement; 4x CPU with software WebGL2. Single-run samples, not hardware-phone claims."
+}

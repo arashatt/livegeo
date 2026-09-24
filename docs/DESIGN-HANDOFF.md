@@ -8,9 +8,9 @@ For the UI/UX designer taking over the look and feel of livegeo. This document c
 - what is known to be wrong or missing;
 - how to work with the code.
 
-Written on 23 September 2026 against commit `99da2e7`. That commit is on `main` and is what the live server runs.
+Original handoff: 23 September 2026. Dashboard renderer/vocabulary/constraints updated for the WebGL redesign on 24 September 2026. Historical screenshots below describe the earlier UI; current demo views are in [game-map](game-map/README.md).
 
-Screenshots are in [`docs/design-handoff/`](design-handoff/). They were taken on a local copy with made-up people (Leo, May, Kai) and **placeholder map tiles** (the grid city). The real service shows OpenStreetMap.
+Screenshots are in [`docs/design-handoff/`](design-handoff/). They were taken on a local copy with made-up people (Leo, May, Kai) and **placeholder map tiles** (the grid city). The current dashboard styles its local OSM geometry itself; the raster street map is optional.
 
 ---
 
@@ -398,90 +398,65 @@ The watches hard-code the same green (`#0A7D33`) and don't know about "you" blue
 
 ## 4. The map's visual vocabulary
 
-Every mark on the map means one specific thing. Keep the meanings even if you change the look.
+The dashboard now draws with MapLibre GL JS v6; Classic and the live/share
+pages use Leaflet. Meanings and server privacy decisions are shared.
 
-| Mark | Means | Drawn as now | Rules |
-|---|---|---|---|
-| **Dot** | Where someone is, exactly as sent. | White circle, 7px radius, 3px ring in the state colour. 9px when lit. | Colour **is** state. Your dot is always drawn on top of others. |
-| **State colours** | Blue: you, sharing. Pale blue: you, not sharing. Green: sharing live. Grey: not live. Red: SOS. | See section 5. | Red is for SOS only. An SOS is red even on your own dot. |
-| **Accuracy halo** | How sure the phone is about the position. | Thin circle, 6% fill, radius equal to the reported accuracy. | Decoration only: it must never block clicks on the dot. |
-| **Heading fan** | Which way they're going. | A 70° cone under the dot, fading outward. It turns the short way round. | Removed a few minutes after they stop moving. Never shown for someone hidden. |
-| **Glide** | Movement between two readings. | The dot eases to the new spot over roughly the time between readings, at most 1.2 s. | No glide for a jump of more than 2 km, or with reduced motion on. |
-| **Trail** | Their recent path. | Dashed, 2px, 45% opacity. When lit: solid, 4px, plus a 14px soft glow. | Breaks where a stretch was hidden. Never draw a line across a hidden stretch. |
-| **Fade-end** | The path goes out of view here, into a private place or out of range. | A small blurred spot in the path's colour. | Never a pin or an arrow. There is no exact end to show. |
-| **Blur (veil)** | This person is somewhere inside this area, and you may not know where. | A soft round blur that "breathes" (5 s cycle), tinted in their state colour, with their name on a chip. | No dot, no centre mark. The blur is offset at random from the real place. With reduced motion it is still. |
-| **Dissolve / condense** | Someone entered or left a private place. | The dot puffs into the blur (0.7 s), or out of it (0.5 s). | Skipped with reduced motion. |
-| **Your private places** | Where your circle stops seeing you. | The same blur, lighter and still, with a dashed purple edge and a "Private · Home" label on the rim. | Only you see these. The server never sends anyone else's. |
-| **Fence** | A named place you're told about when people arrive or leave. | Purple outline, 7% fill, name above it. | Drawn under everything else. |
-| **Time label** | When they were at this point on the path. | Small label that follows the pointer. | `≈` means estimated. No `≈` means an actual reading. "time not recorded" when there is none. |
-| **Spotlight** | "Look at this one person". | Everyone else at 20% opacity, map greyed out. | Clicking empty map releases it. |
-
----
-
-## 5. The visual language today (tokens)
-
-Each page defines its own CSS variables inline in `:root`. There is no shared token file yet (10.10).
-
-### 5.1 Colour
-
-| Token / value | Light | Dark | Used for | Where defined |
-|---|---|---|---|---|
-| `--ink` | `#14181d` | `#e8eaed` | text | every page |
-| `--paper` | `#fff` | `#14181d` | backgrounds | every page |
-| `--quiet` | `#6b7480` | `#9aa3ad` | secondary text, ghost buttons | every page |
-| `--hairline` | `#e3e6ea` | `#2a2f36` | borders, dividers | every page |
-| `--live` | `#0a7d33` | same | live dot and trail; shared-path line; connection dot | index, live, share |
-| `--stale` | `#9aa3ad` | same | not-live dot in the **list** | index |
-| `--me` | `#1a73e8` | `#8ab4f8` | your dot, trail and list dot; the "you" tag | index |
-| `--me-stale` | `#6f8fc2` | same | you, not sharing | index |
-| not-live dot **on the map** | `#8a929b` | same | not-live dot and trail | **hard-coded in JS** (index, live) |
-| SOS red | `#d93025` | same | SOS everywhere | **hard-coded** in CSS and JS |
-| place purple | `#7a6ff0` | same | fences, your private places | **hard-coded** in CSS and JS |
-| Telegram blue | `#2aabee` | same | "Sign in with Telegram" button | login |
-| dot fill | `#fff` | same | inside every dot | **hard-coded in JS** |
-
-**Two colour families mean two different things.** State colours (blue, green, grey, red) belong to people. Purple belongs to places. Keep them apart.
-
-### 5.2 Type
-
-- **Font:** the system stack (`ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`), with `ui-monospace` for codes.
-- **One web font, self-hosted:** Oswald 600 (SIL OFL, Latin only), used only for the district name's Latin line. It is never used for anybody's name or for Persian, and letter-spacing is never applied to a script whose letters join (section 8.2).
-- **Base size:** 15px, line height 1.5 (1.6 on sign-in).
-- **Sizes in use:** 1rem titles; .85rem meta; .8rem buttons and meta; .78rem fine print and time labels; .75rem ids; .72rem fence labels and shared meta; .7rem the "you" tag; 1.6rem the watch pairing code.
-
-That is a lot of small sizes, and below .8rem it is hard to read on phones.
-
-- **Numbers:** tabular figures (`font-variant-numeric: tabular-nums`) keep countdowns from jittering.
-
-### 5.3 Shape, space, depth
-
-- Rows and cards: 10px radius, 1px hairline border.
-- Buttons are "ghost" pills: 999px radius, hairline border, `.15rem .6rem` padding, .8rem text. They end up about 24px tall.
-- Floating panels (Circle, live-page notice): radius .6rem; shadow `0 8px 30px rgba(0,0,0,.12)`.
-- Spacing is ad hoc: .3–1rem gaps. There is no scale.
-- There are no icons anywhere. Buttons are words. The only symbols are 🆘 and ⚠️ inside text.
-
-### 5.4 Motion
-
-| What | Duration | Reduced motion |
+| Mark | Meaning and presentation | Rule |
 |---|---|---|
-| Dot glide | up to 1.2 s, ease-in-out | jumps instead |
-| Heading fan turning | .6 s | instant |
-| Blur breathing | 5 s cycle | still |
-| Blur appearing / disappearing | .9 s / .6 s | instant |
-| Dissolve / condense | .7 s / .5 s | none |
-| Live dot pulse | 1.8 s | none |
-| SOS dot pulse | .9 s | none |
-| Spotlight fade | .18 s | (short, kept) |
-| Live-link "ended" greying | .4 s | (short, kept) |
+| Self | Blue arrow with a current heading; disc otherwise; pale blue and Ⅱ when not live | SOS takes priority; self is above other ordinary points |
+| Other person | Outlined green disc when live; grey disc and Ⅱ when not live | Focusable 44px button; state/name also in accessible text and card |
+| SOS | Red diamond plus the word SOS | Never hidden behind buildings; confirmation and emergency-number disclosure remain |
+| Halo / heading | Reported accuracy area and recent heading fan | Non-interactive; no heading for a private or stale person |
+| Glide | A new authorised fix eases from the previous one | At most 1.2s; jumps over 2km and reduced-motion fixes do not glide |
+| Trail | Dashed path; solid and glowing when selected | Separate runs across hidden stretches; faded ends without pins |
+| Time label | Hover/tap a path in any camera | ≈ between recorded fixes; “time not recorded” for missing times |
+| Private person | Still, soft ground polygon with a name chip at its rim | No point/centre marker; never a radar or edge blip; never a billboard |
+| Private transition | Area fades in/out, point disappears/appears only as authorised | Reduced motion is immediate; no lingering last-seen pin |
+| Your private place | Ground area, dashed purple rim, “Private · name” | Only the server-authorised owner data is drawn |
+| Fence | Purple polygon and name below people/trails | Click/delete and placement/Esc flows retained |
+| Spotlight | Others and the ground dim; selected trail lights | Empty-map click clears; people remain above buildings |
+| Buildings | Extrusions with roof highlights; lit window pattern at night | Heights are illustrative; tags then stable type defaults |
+| Radar | Flat heading-up map around self or a spotlight point; edge-clamped points | Hidden without a point centre; private people omitted; no extra tile stream |
 
-### 5.5 The map itself
+The collapsed legend sits below cards. On a 390px phone it opens in reserved
+space below a resized map, not over the map. District text describes the
+rounded/debounced view centre; a centre inside a privacy area says “Private
+area” without a place lookup.
+Below zoom 8, areas, trails and ground labels are suppressed; private people
+remain listed in People and a non-geographic area-count HUD. This prevents
+subpixel veils or their name chips from reading as precise world-scale pins.
 
-- **Library:** Leaflet 1.9.4, self-hosted in `public/vendor/leaflet/`.
-- **Tiles:** OpenStreetMap's standard tiles, fetched and cached by the server (`/tiles/…`). The attribution "© OpenStreetMap" is a licence requirement and must stay visible.
-- **Changing the map style** means a different tile source (`TILE_UPSTREAM`), with its own licence and terms. It isn't just CSS.
-- **Dark mode** is a CSS inversion of the light tiles, not a dark style.
-- **Zoom:** from 3 (a continent) to 19. The map opens on Tehran, then fits to whoever is sharing.
+## 5. The visual language today (dashboard)
+
+`public/lib/game-map.css` defines the dashboard HUD; shared Leaflet files and
+other pages keep their existing appearance. The HUD has thin bright edges,
+clipped corners, inline original SVG icons, condensed uppercase Latin type,
+and amber-to-pink accents. Body/Persian text uses Vazirmatn without spacing.
+
+| Token | Dashboard value | Role |
+|---|---|---|
+| `--ink` / `--paper` | `#edf6f3` / `#0a1720` | Text / panel ground |
+| `--quiet` | `#b4c7cd` | Secondary text |
+| `--accent` | `#ffd68a` | Controls, headings and focus |
+| `--me` / `--me-stale` | `#5bc5ff` / `#b4d4ec` | Self states |
+| `--live` / `--stale` | `#62efae` / `#b6c5ca` | Other states |
+| `--danger` | `#ff6b78` | SOS only; pale red text on dark backing |
+| `--place` | `#b2a1ff` | Private places/fences |
+
+State marks have contrasting pale and dark outlines. Red/red-orange ground
+is reserved for SOS; purple ground for places. Sky/HUD may be warm or violet.
+Road hierarchy uses pale pink/magenta, turquoise water, deep teal parks and
+muted pastel buildings. Pin Day / Golden hour / Night or follow locally
+computed solar elevation. Lighting checks run at three-minute intervals.
+
+Auto switches from globe to a tilted city with zoom. Map is flat, north-up,
+Mercator. Chase requires a visible sharing self, uses heading-up, and becomes
+north-up when heading is unknown. Lite removes sky, extrusion and road glow.
+Camera changes are immediate under reduced motion; ordinary transitions are
+short and finite. No continuous decorative animation or idle map repaint loop.
+Phone pixel ratio is capped at 1.5, antialiasing is off, and the radar initially
+defaults off on narrow screens. See [demo measurements](game-map/README.md)
+for the software-rendering stress result and the physical-device follow-up.
 
 ---
 
@@ -616,19 +591,42 @@ These are product decisions about privacy and safety. Changing one is a conversa
 
 ### 8.1 How the front end is built
 
-- Plain HTML files, with CSS and JavaScript **inline in each file**. JavaScript is written in older ES5 style, for old in-app browsers. No build, no npm packages in the browser, no framework.
-- Shared pieces:
-  - `public/lib/people-map.js` and `.css`: dots, blurs, glide, heading fan;
-  - `public/lib/path-time.js`: path and time maths.
-- **The design will be hand-built in this setup.** Leaflet can do custom markers (HTML `divIcon`), custom panes and SVG styling. Complex component systems will be costly.
+- Plain HTML, no framework or application build step.
+- `public/index.html`: ES5-style panel/API/privacy logic, unchanged selectors.
+- `public/lib/map-bootstrap.js`: ES5 feature detection and remembered Classic choice.
+- `game-start.mjs`, `game-map.mjs`, `game-style.mjs`: lazy ESM MapLibre v6 renderer,
+  drawing adapter, solar calculation and styles. WebGL2 is required.
+- The adapter supports the same people, trails, veils, fences and placement
+  interactions. SVG overlays project ground geometry at the current pitch,
+  while HTML blips and names remain above buildings.
+- `people-map.js/.css` remain unchanged for Classic and `live.html`;
+  `path-time.js` supplies the common path/time/heading math.
+- Startup/GPU failure, absent module/WebGL2 support or selecting Classic
+  starts the complete Leaflet dashboard. The renderer choice is per-browser.
+- The import-free `src/tile-path.js` remains compatible with the Worker.
+  Static `.mjs`, `.pbf`, `.woff2`, `.json`, `.wasm` types are explicit and tested.
 
-### 8.2 Nothing may load from another site
+### 8.2 No resource may load from another site
 
-- The pages are used on networks that filter traffic. A font from Google, an icon set from a CDN, or an analytics script is one more thing that can fail to load and take the page with it.
-- Everything must be in the repository and served by the app.
-- The one existing exception is Telegram's own login widget on the sign-in page, which only exists when configured.
-- **A custom typeface** must be delivered as files with a licence that allows self-hosting (OFL is ideal), and covering Persian if Persian is in scope. Vazirmatn is an example. Oswald is already delivered this way (`public/vendor/fonts`, with its licence), for the district name's Latin line.
-- **Icons** should be inline SVG.
+MapLibre 6.11.1 (BSD-3), the RTL plugin (BSD-2 + ICU), OFL Barlow/Vazirmatn
+fonts and glyphs, and public-domain Natural Earth land are vendored with
+licences. There are no third-party runtime resources. Source links and exact
+regeneration commands: [`public/vendor/README.md`](../public/vendor/README.md).
+Run `npm ci && npm run glyphs` to regenerate committed glyph PBFs, including
+Arabic presentation forms. Real “مشهد” and “تهران” shaping is browser-tested.
+
+Natural Earth 1:110m provides global land/coastline, including outside the
+regional import. Local authenticated `/carto/z/x/y.mvt` tiles use `ST_AsMVT`,
+4096 extent, 192 buffer, independent feature budgets and bounded/coalesced
+caching. Gzip is negotiated; empty/no-import tiles remain valid. SVG tiles
+stay available to Classic. Raster `/tiles/` is off by default in WebGL. Classic keeps its worldwide
+server-side vector-to-SVG fallback and district-name service. The GPX dialog
+keeps a separate Leaflet preview, including when the dashboard uses WebGL.
+The existing sign-in widget exception in §8.2 remains outside this dashboard.
+
+Road text is symbol-placed along lines; district/place symbols collide rather
+than overlap. Labels are strings to the renderer, never injected HTML. Any
+name crossing into a DOM tooltip/chip/card must still go through `esc()`.
 
 ### 8.3 Things that break silently if renamed
 
@@ -637,6 +635,7 @@ These are product decisions about privacy and safety. Changing one is a conversa
 - **The Layers panel:** `layersbtn`, `layersPanel`, `cartographyStatus`, and the `data-layer` and `data-feature` attributes on its checkboxes. The feature names (`roads`, `rail`, `landuse`, `parks`, `water`, `buildings`) are what the server's `/carto/…?layers=` accepts.
 - **Element ids the scripts look up.**
   - Dashboard: `map`, `list`, `count`, `hint`, `recentre`, `newfence`, `circlebtn`, `signout`, `conn`, `circle`, and ids inside the Circle panel (`mkinvite`, `invitebox`, `livelist`, `zonelist`, `mkzone`, `devices`, `mkcode`, `codebox`, `copyinvite`).
+  - Dashboard panels/layers: `layersbtn`, `layersPanel`, `peoplebtn`, `peoplebadge`, `peoplePanel`, `peopleclose`, `panelcount`, `detailPanel`, `detailclose`, `cartographyStatus`, `cartographyFeatures`, `data-layer`, `data-feature`.
   - Live page: `who`, `when`, `state`, `follow`, `notice`.
   - Share page: `who`, `when`, `gpx`.
   - Sign-in: `oidc`, `widget`, `or`, `bot`.

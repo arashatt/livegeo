@@ -2,6 +2,11 @@
 // vanish on disconnect; no imported map or application tables are changed.
 import assert from 'node:assert/strict';
 import pg from 'pg';
+import { benchmarkVectorTiles } from './vector-benchmark.mjs';
+import { VECTOR_SQL, makeVectorTiles } from '../src/postgis-vector.js';
+import { VectorTile } from '@mapbox/vector-tile';
+import Pbf from 'pbf';
+import { gzipSync } from 'node:zlib';
 import { CARTOGRAPHY_SQL, makeCartography } from '../src/cartography.js';
 import { makeDistrict, makePlacesPostgis, placeSql } from '../src/district.js';
 import { makeVectorCartography } from '../src/cartography-vector.js';
@@ -38,6 +43,17 @@ try {
       SELECT id, way, way_area, NULL, NULL, NULL, NULL, 'yes'
       FROM planet_osm_polygon CROSS JOIN generate_series(10, 2000) id WHERE osm_id=1;
   `);
+  await db.query(`
+    CREATE EXTENSION IF NOT EXISTS hstore;
+    ALTER TABLE planet_osm_polygon ADD COLUMN name text, ADD COLUMN tags hstore;
+    ALTER TABLE planet_osm_line ADD COLUMN name text, ADD COLUMN tags hstore, ADD COLUMN bridge text, ADD COLUMN tunnel text, ADD COLUMN layer integer;
+    CREATE TEMP TABLE planet_osm_point (osm_id bigint, way geometry(Geometry,3857), name text, place text, tags hstore);
+    UPDATE planet_osm_line SET name='<img src=x onerror=alert(1)>',bridge='yes',layer=1 WHERE osm_id=2;
+    UPDATE planet_osm_polygon SET tags='"height"=>"42 m"'::hstore WHERE osm_id=10;
+    UPDATE planet_osm_polygon SET tags='"building:levels"=>"5"'::hstore WHERE osm_id=11;
+    UPDATE planet_osm_polygon SET tags='"height"=>"bad", "building:levels"=>"1e8"'::hstore WHERE osm_id=12;
+    INSERT INTO planet_osm_point SELECT 1, ST_Centroid(ST_TileEnvelope(15,100,100)), 'مشهد', 'city', NULL;
+  `);
   const { rows } = await db.query(CARTOGRAPHY_SQL, [15, 100, 100]);
   const road = rows.find((row) => row.subtype === 'primary');
   assert.ok(road, 'road survives dense building features');
@@ -55,6 +71,21 @@ try {
   assert.equal(empty, null, 'outside the imported extent stays transparent');
   // Test a different hemisphere: the query has no city-specific bounds.
   assert.equal(await carto.tile(15, 25000, 25000), null);
+  const vectors=makeVectorTiles({query:(...args)=>db.query(...args)});
+  const got=await vectors.tile(15,100,100);
+  assert.ok(got.raw.length,'MVT contains local geometry');
+  const tile=new VectorTile(new Pbf(got.raw));
+  assert.equal(tile.layers.buildings.length,1800);
+  assert.equal(tile.layers.roads.length,2);
+  const properties=Array.from({length:tile.layers.buildings.length},(_,i)=>tile.layers.buildings.feature(i).properties);
+  assert.ok(properties.some((p)=>p.height===42));assert.ok(properties.some((p)=>p.height===15));assert.ok(properties.some((p)=>p.height===6));
+  const named=Array.from({length:tile.layers.roads.length},(_,i)=>tile.layers.roads.feature(i).properties).find(p=>p.class==='primary');
+  assert.equal(named.name,'<img src=x onerror=alert(1)>');assert.equal(named.bridge,1);assert.equal(named.layer,1);
+  assert.equal(tile.layers.places.feature(0).properties.name,'مشهد');
+  assert.deepEqual(Object.keys(new VectorTile(new Pbf((await vectors.tile(15,100,100,['roads'])).raw)).layers),['roads']);
+  assert.equal((await vectors.tile(15,110,110)).empty,true);
+  assert.equal((await vectors.tile(15,25000,25000)).empty,true);
+  console.log('PostGIS MVT: decoded geometry, names, height/level/defaults, layer attributes, selections, density budget and empty coverage passed');
   console.log('PostGIS cartography: geometry, orientation, edge buffer, budgets, selections and coverage passed');
 
   // The same features from a vector tile, as a server with no import draws
@@ -90,9 +121,7 @@ try {
   // server runs, against a few places around Vaduz.
   await db.query('CREATE EXTENSION IF NOT EXISTS hstore');
   await db.query(`
-    CREATE TEMP TABLE planet_osm_point (
-      osm_id bigint, way geometry(Point,3857), name text, place text, tags hstore
-    );
+    TRUNCATE planet_osm_point;
     INSERT INTO planet_osm_point VALUES
       (1, ST_Transform(ST_SetSRID(ST_MakePoint(9.5227962, 47.1392862), 4326), 3857), 'وادوتس', 'town', 'name:en=>Vaduz'),
       (2, ST_Transform(ST_SetSRID(ST_MakePoint(9.5274876, 47.1069940), 4326), 3857), 'Triesen', 'village', ''),
@@ -121,6 +150,7 @@ try {
   assert.deepEqual(await district.at(47.1069940, 9.5274876, 16), ['Triesen']);
   assert.deepEqual(await district.at(-33.9, 18.4, 16), [], 'outside the import: nothing, with no upstream');
   console.log('PostGIS district: place kinds by zoom, Latin names from tags, and the lookup passed');
+  await benchmarkVectorTiles(db);
 } finally {
   await db.end();
 }

@@ -7,8 +7,11 @@
   "scripts": {
     "start": "node src/index.js",
     "login": "node bin/login.mjs",
-    "test": "node test/test.mjs && node --test test/cartography.test.mjs test/cartography-vector.test.mjs test/district.test.mjs",
-    "test:cartography": "node test/cartography-postgis.mjs"
+    "test": "node test/test.mjs && node --test test/cartography.test.mjs test/cartography-vector.test.mjs test/district.test.mjs test/vector-tiles.test.mjs && node test/game-smoke.mjs",
+    "test:cartography": "node test/cartography-postgis.mjs",
+    "glyphs": "node bin/glyphs.mjs",
+    "test:browser": "node test/game-smoke.mjs",
+    "demo:game": "node bin/demo-game.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -16,5 +19,13 @@
   "dependencies": {
     "pg": "^8.23.0",
     "teleproto": "^1.229.0"
+  },
+  "devDependencies": {
+    "@mapbox/vector-tile": "2.0.4",
+    "@sakitam-gis/font-maker-cli": "1.0.0",
+    "geojson-vt": "4.0.3",
+    "pbf": "4.0.1",
+    "playwright-core": "1.58.2",
+    "vt-pbf": "3.1.3"
   }
 }

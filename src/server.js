@@ -3,6 +3,8 @@
 //
 // This page shows where people are, so it is never served without the token.
 
+import { parseVectorPath } from './tile-path.js';
+import { EMPTY_VECTOR, parseVectorLayers } from './postgis-vector.js';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +38,12 @@ const LOGIN_PAGE = resolve(PUBLIC, 'login.html');
 
 const STATIC_TYPES = {
   '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.pbf': 'application/x-protobuf',
+  '.woff2': 'font/woff2',
+  '.json': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.jpg': 'image/jpeg',
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
@@ -879,7 +887,7 @@ export function serve(positions, config, {
         || (req.method === 'GET' && (DEVICE_READS.has(url.pathname)
           || DEVICE_READ_PREFIXES.some((pre) => url.pathname.startsWith(pre))
           || parseTilePath(url.pathname)
-          || parseCartoPath(url.pathname)))
+          || parseCartoPath(url.pathname) || parseVectorPath(url.pathname)))
         || (url.pathname === '/api/stream' && req.method === 'POST');
       if (!allowed) return notFound();
     }
@@ -971,6 +979,25 @@ export function serve(positions, config, {
 
     // Styled vector geometry from the local OSM extract. It is deliberately
     // guarded like raster tiles: this service is not a public map-tile host.
+    const vector = parseVectorPath(url.pathname);
+    if (vector) {
+      const layers = parseVectorLayers(url.searchParams.get('layers'));
+      if (layers === null) return json(400, { error: 'unknown cartography layer' });
+      const got = (geo?.vectorTile && await geo.vectorTile(vector.z, vector.x, vector.y, layers)) || EMPTY_VECTOR;
+      const compressed = (req.headers['accept-encoding'] || '').split(',').some((item) => {
+        const [name, quality] = item.trim().split(';');
+        return name === 'gzip' && (!quality || Number(quality.trim().replace(/^q=/, '')) > 0);
+      });
+      res.writeHead(200, {
+        'content-type': 'application/vnd.mapbox-vector-tile',
+        'cache-control': got.empty ? 'private, max-age=30' : 'private, max-age=300',
+        'x-carto-source': got.empty ? 'empty' : 'postgis',
+        'vary': 'Accept-Encoding',
+        ...(compressed ? { 'content-encoding': 'gzip' } : {}),
+      });
+      res.end(compressed ? got.gzip : got.raw);
+      return;
+    }
     const carto = parseCartoPath(url.pathname);
     if (carto) {
       const layers = parseCartographyLayers(url.searchParams.get('layers'));

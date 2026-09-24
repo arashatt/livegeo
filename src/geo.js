@@ -14,6 +14,7 @@
 // the same way personOf is in directory.js.
 
 import pg from 'pg';
+import { makeVectorTiles } from './postgis-vector.js';
 import { makeCartography } from './cartography.js';
 import { makePlacesPostgis } from './district.js';
 import { readFile } from 'node:fs/promises';
@@ -54,6 +55,8 @@ export function makeGeo({ url, log = console } = {}) {
 
   const cartography = makeCartography({ query: (...args) => pool.query(...args), log });
   const places = makePlacesPostgis({ query: (...args) => pool.query(...args), log });
+
+  const vectors = makeVectorTiles({ query: (...args) => pool.query(...args), log });
 
   // Queries run against whatever osm2pgsql produced. If the extract was never
   // imported the tables are missing, which is a perfectly ordinary state —
@@ -165,6 +168,10 @@ export function makeGeo({ url, log = console } = {}) {
         log.error('geo: cannot describe a point —', e && e.message ? e.message : e);
         return '';
       }
+    },
+
+    async vectorTile(z, x, y, layers) {
+      return pool ? vectors.tile(z, x, y, layers) : null;
     },
 
     // Styling remains optional, just like the imported OSM data it uses.
