@@ -38,3 +38,8 @@ export function parseCartoPath(pathname) {
 export function tileUrl(template, { z, x, y }) {
   return template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
 }
+
+// MVT coordinates share the import-free boundary used by the edge.
+export function parseVectorPath(pathname) {
+  return parse(pathname, /^\/carto\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.mvt$/);
+}
