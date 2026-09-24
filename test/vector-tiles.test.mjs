@@ -7,7 +7,7 @@ import {readFile} from 'node:fs/promises';
 import {VectorTile} from '@mapbox/vector-tile';
 import Pbf from 'pbf';
 import {parseVectorPath} from '../src/tile-path.js';
-import {VECTOR_SQL,VECTOR_LAYERS,parseVectorLayers,makeVectorTiles,EMPTY_VECTOR} from '../src/vector-tiles.js';
+import {VECTOR_SQL,VECTOR_LAYERS,parseVectorLayers,makeVectorTiles,EMPTY_VECTOR} from '../src/postgis-vector.js';
 import {staticFile,serve} from '../src/server.js';
 import {Positions} from '../src/positions.js';
 import {defaults} from '../src/config.js';

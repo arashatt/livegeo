@@ -17,8 +17,9 @@ main = "src/index.js"
 # with nothing to indicate why.
 compatibility_date = "2026-09-01"
 
-# Only the vendored Leaflet files are uploaded. Pointing this at ../public
-# would publish index.html, which belongs behind the origin's token check.
+# Only the vendored files are uploaded: Leaflet, and the font for the district
+# name. Pointing this at ../public would publish index.html, which belongs
+# behind the origin's token check.
 [assets]
 directory = "../public/vendor"
 binding = "ASSETS"

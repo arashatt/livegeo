@@ -4,12 +4,15 @@
 // This page shows where people are, so it is never served without the token.
 
 import { parseVectorPath } from './tile-path.js';
-import { EMPTY_VECTOR, parseVectorLayers } from './vector-tiles.js';
+import { EMPTY_VECTOR, parseVectorLayers } from './postgis-vector.js';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { resolve, sep, extname } from 'node:path';
+import { resolve, sep, extname, join } from 'node:path';
 import { parseTilePath, parseCartoPath, makeTiles } from './tiles.js';
+import { makeDistrict } from './district.js';
+import { makeVectorUpstream } from './vector-tiles.js';
+import { makeVectorCartography } from './cartography-vector.js';
 import { EMPTY_CARTOGRAPHY, parseCartographyLayers } from './cartography.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
@@ -44,6 +47,8 @@ const STATIC_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  // Oswald, for the district name's Latin line (/vendor/fonts).
+  '.woff2': 'font/woff2',
 };
 
 // Resolves a request path inside public/, or returns null. The prefix check is
@@ -126,6 +131,14 @@ export function serve(positions, config, {
   // Where links sent from here point (address.js). Only its source is ever
   // said out loud, in /healthz.
   address = null,
+  // The name of where the middle of the map is (district.js): { at(lat, lon,
+  // zoom) }. Built from the config and the database unless given, which is
+  // what tests do.
+  district = null,
+  // Vector tiles from the upstream (vector-tiles.js): { enabled, tile(t) }.
+  // Built from the config unless given; the district name and the styled
+  // map layers both draw from it.
+  vectorTiles = null,
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -166,16 +179,26 @@ export function serve(positions, config, {
   }
 
   async function serveCartography(tile, res, layers) {
-    const svg = geo?.cartographyTile ? await geo.cartographyTile(tile.z, tile.x, tile.y, layers) : null;
-    // Transparent is a normal fallback: PostGIS is optional, and an install
-    // without an osm2pgsql extract should still show the raster basemap.
-    const body = svg || EMPTY_CARTOGRAPHY;
+    let svg = geo?.cartographyTile ? await geo.cartographyTile(tile.z, tile.x, tile.y, layers) : null;
+    let source = svg ? 'postgis' : 'empty';
+    // Where the import has nothing — or there is none, as on a server that
+    // only keeps history — the same features from the upstream's vector
+    // tiles (cartography-vector.js), drawn the same way.
+    if (!svg) {
+      svg = await vectorCarto.tile(tile.z, tile.x, tile.y, layers).catch((e) => {
+        log.error('carto: cannot draw from vector tiles —', e && e.message ? e.message : e);
+        return null;
+      });
+      if (svg) source = 'upstream';
+    }
+    // Transparent is a normal fallback: with neither, the raster basemap
+    // still shows.
     res.writeHead(200, {
       'content-type': 'image/svg+xml; charset=utf-8',
-      'cache-control': svg ? 'private, max-age=300' : 'private, max-age=30',
-      'x-carto-source': svg ? 'postgis' : 'empty',
+      'cache-control': source === 'postgis' ? 'private, max-age=300' : source === 'upstream' ? 'private, max-age=3600' : 'private, max-age=30',
+      'x-carto-source': source,
     });
-    res.end(body);
+    res.end(svg || EMPTY_CARTOGRAPHY);
   }
 
   async function serveStatic(url, req, res) {
@@ -206,6 +229,20 @@ export function serve(positions, config, {
     maxAge: config.tileMaxAge,
     log,
   });
+
+  const vectors = vectorTiles || makeVectorUpstream({
+    upstream: config.vectorUpstream,
+    cacheDir: join(config.tileCache || '/tmp/livegeo-tiles', 'vector'),
+    userAgent: config.tileUserAgent,
+    maxAge: config.vectorMaxAge,
+    log,
+  });
+  const districts = district || makeDistrict({
+    postgis: geo && geo.placesIn ? { places: (t) => geo.placesIn(t) } : null,
+    upstream: vectors,
+    log,
+  });
+  const vectorCarto = makeVectorCartography({ upstream: vectors, log });
 
   const send = (res, event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -981,6 +1018,27 @@ export function serve(positions, config, {
       const place = geo ? await geo.placeOf(lat, lon) : '';
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ place }));
+      return;
+    }
+
+    // The name of where the middle of the map is, for the corner of the map
+    // (district.js). Asked once the map has settled. The coordinates are
+    // where somebody is looking, so they are never logged.
+    if (url.pathname === '/api/district') {
+      const num = (key) => {
+        const v = url.searchParams.get(key);
+        return v === null || v.trim() === '' ? NaN : Number(v);
+      };
+      const lat = num('lat');
+      const lon = num('lon');
+      const zoom = num('z');
+      if (!(Math.abs(lat) <= 90) || !Number.isFinite(lon) || !(zoom >= 0 && zoom <= 24)) {
+        return json(400, { error: 'lat, lon and z are needed' });
+      }
+      // Leaflet's longitude keeps counting past the dateline.
+      const lines = await districts.at(lat, ((lon + 180) % 360 + 360) % 360 - 180, zoom).catch(() => []);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300' });
+      res.end(JSON.stringify({ lines }));
       return;
     }
 

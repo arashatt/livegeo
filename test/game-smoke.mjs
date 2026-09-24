@@ -35,6 +35,9 @@ try{
   assert.match(shaped,/[\ufb50-\ufeff]/);assert.notEqual(shaped,'مشهد تهران');
   await page.locator('.game-blip.self').focus();await page.keyboard.press('Enter');
   await page.waitForSelector('#detailPanel:not([hidden])');assert.match(await page.locator('#detailPanel').innerText(),/Alex/);
+  await page.locator('#detailPanel .gpxbtn').click();await page.waitForSelector('#gpxDialog[open]');
+  await page.waitForSelector('#gpxMap.leaflet-container');assert.equal(await page.locator('#gpxSave').isEnabled(),true);assert.match(await page.locator('#gpxText').textContent(),/trkpt/);
+  await page.locator('#gpxClose').click();assert.equal(await page.locator('#map.maplibregl-map').count(),1,'GPX preview leaves the WebGL dashboard intact');
   await page.locator('#detailclose').click();await page.mouse.move(500,100);
   await page.locator('#cameraMode').selectOption('map');assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getPitch()),0);assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getBearing()),0);
   await page.locator('#cameraMode').selectOption('chase');assert.ok(await page.evaluate(()=>window.livegeoMap.gl.getPitch())>50);

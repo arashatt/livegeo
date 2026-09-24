@@ -227,6 +227,8 @@ DATABASE_URL=                 # optional PostGIS — see «Places and history»
 TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
 TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
 TILE_MAX_AGE=2592000          # seconds before a cached tile is refetched
+VECTOR_UPSTREAM=              # district names and styled layers without an import; default OpenFreeMap
+VECTOR_MAX_AGE=604800         # seconds before a cached vector tile is refetched
 SHARE_TTL=604800              # how long a shared path link stays readable
 SOS_CALL=                     # who an SOS says to call; default Iran's 110 / 115
 CHECK_STOP=900                # seconds standing still before a check asks
@@ -544,64 +546,103 @@ A Worker passes the stream through unbuffered — it returns the upstream body
 rather than reading it — so this route was live before the POST change and is
 unaffected by it.
 
-## The basemap comes from here
+## The map comes from here
 
-The page makes no third-party requests. Leaflet is served from
-`public/vendor`, and map tiles come through `/tiles/{z}/{x}/{y}.png`, which
-fetches from OpenStreetMap once and then caches on disk.
+The dashboard is a self-hosted WebGL2 map using **MapLibre GL JS 6.11.1**.
+It has an automatic globe/city camera, a flat north-up Map mode, and Chase
+while you share. Day, golden-hour and night light follow a locally calculated
+sun; Layers can pin a theme or enable Lite mode. Streets glow by hierarchy,
+water is turquoise, parks teal, and buildings have illustrative heights.
 
-This is not about speed. The browser and the server are often on very
-different networks — the dashboard is frequently reached over an ssh tunnel
-from somewhere that filters heavily, while the server itself sits somewhere
-that does not. Proxying means the map works whenever the *server* can reach
-OSM, rather than requiring it of whoever is looking at the page.
+The camera initially fits everyone sharing. People, accuracy halos, private
+areas, trail gaps/times, fences and safety actions keep the same server data
+and permission logic as the Classic map. Person buttons remain above the 3D
+city. Private people are areas, never radar points. The optional radar reuses
+loaded road geometry and has no second WebGL renderer or tile stream.
 
-It also degrades the right way. If the upstream is unreachable and a tile was
-fetched before, the cached copy is served and the response says
-`x-tile-source: stale` — a slightly old map beats a grid of grey squares.
+**Classic map** in Layers is remembered in the browser. Leaflet also starts
+automatically without WebGL2/ES modules or if the GPU cannot initialise.
+The live-link and shared-path pages continue using their existing Leaflet
+renderers. Their shared drawing files have not changed.
 
-Tiles are behind the dashboard token like everything else, so this cannot be
-used as somebody else's free tile proxy.
+The WebGL map requests **no OSM raster tiles by default**. Natural Earth public
+domain land supplies global coverage. Local detail comes from the optional
+osm2pgsql/PostGIS import. Outside it, the status names the coverage limitation;
+Layers offers the off-by-default OSM raster as additional worldwide coverage.
+Classic uses the existing cached `/tiles/{z}/{x}/{y}.png` proxy. Its upstream
+is configured with `TILE_UPSTREAM`; cached tiles survive upstream outages.
 
-OSM's [tile usage policy](https://operations.osmfoundation.org/policies/tiles/)
-covers a private dashboard with a month-long cache. If this ever serves more
-than a handful of people, run your own renderer and point `TILE_UPSTREAM` at
-it — it is one environment variable, and the PostGIS extract from the next
-section is most of what a renderer needs anyway.
+All scripts, styles, glyphs, fonts, RTL shaping and land data are committed and
+served from this origin, with licences under `public/vendor/`. See
+[asset sources and exact glyph regeneration command](public/vendor/README.md).
+Barlow Condensed and Vazirmatn are OFL fonts. The self-hosted RTL plugin shapes
+Persian, including presentation-form glyphs. There are no CDN, analytics or
+external browser resource requests. OSM attribution remains visible.
 
 ### Styled OpenStreetMap layers
 
-The dashboard opens on a world view. **Layers** controls the worldwide street
-map and six independent detail overlays: roads, railways, urban areas and
-terrain, parks and woodland, water, and buildings. The palette uses teal
-ground, pink arterial roads, muted violet urban areas, jade parks and cyan
-water. It follows real OSM geometry, without decorative or invented roads.
+`/carto/{z}/{x}/{y}.mvt` uses `ST_AsMVT`, with the dashboard's authentication,
+correct vector MIME type, negotiated gzip, private caching and 4096-unit
+geometry with a 192-unit tile buffer. Seven layers: landuse, parks, water,
+buildings, rail, roads and places. Roads include class/name/bridge/tunnel/layer.
+Building heights use validated `height` or `building:levels` hstore tags,
+otherwise stable defaults by building type; heights are labelled illustrative.
+No terrain/elevation is included.
 
-The street map supplies labels and worldwide coverage. Detailed feature
-styling uses the local osm2pgsql import described under **Places and history**;
-it appears from zoom 8, with smaller roads and buildings added as you zoom in.
-No provider key or browser request to another host is required. Any imported
-region works. Outside its coverage, or without PostGIS, detail tiles are
-transparent and the street map remains visible. The Layers panel reports
-whether styled features are available at the current view.
+`?layers=roads,water` selects a subset. Omit `layers` for all, `layers=` for none;
+unknown names return 400. Queries keep independent limits: 350 landuse, 500
+parks, 400 water polygons + 500 water lines, 1800 buildings, 400 rail, 2400
+roads and 150 place labels. Regional details start at z8; buildings at z15.
+The cache holds 128 tiles for five minutes (empty tiles 30 seconds), coalesces
+concurrent requests and retains at most two compressed variants per tile.
+Missing imports retry after a minute, so an import needs no application restart.
 
-Feature switches affect the overlay; features printed into the underlying
-raster remain visible while **Street map & labels** is on. Land-cover tags
-provide the tan terrain tint; this is not an elevation or hillshade layer.
+Classic also retains the worldwide styled SVG fallback added on main:
+`src/cartography-vector.js` reads cached OpenMapTiles from `VECTOR_UPSTREAM`
+(default OpenFreeMap), via the server. `VECTOR_UPSTREAM=off` disables that
+upstream. The same cache supplies `/api/district`; WebGL's district readout
+uses it when the local `/api/place` has no name. The GPX dialog keeps its own
+Leaflet preview and the original preview/download/copy/send flow.
 
-`/carto/{z}/{x}/{y}.svg?layers=roads,water` selects a subset. Omit `layers`
-for all features, or use `layers=` for none. Requests require the same
-authentication as the dashboard. Geometry is clipped with a tile-edge buffer,
-cached independently of the selected styles, and refreshed after five minutes.
-Missing imports are retried after a minute, so importing data does not require
-an app restart. SVGs preserve polygon holes and correct the Y-axis inversion
-introduced by `ST_AsSVG` after `ST_AsMVTGeom`.
+The existing `/carto/{z}/{x}/{y}.svg` endpoint remains for Classic, with the
+same six feature toggles, geometry limits, holes and corrected Y axis. Its
+raster layer has separate features/labels. Purple remains reserved for places,
+and red for SOS. No decorative vehicles, people or moving lights are drawn.
 
 `npm test` includes rendering, caching, fallback and access-control regressions.
 CI also runs `npm run test:cartography` against PostGIS to verify real geometry,
 tile alignment, edge buffering and feature budgets. To run that check locally,
 set `CARTOGRAPHY_TEST_DATABASE_URL` to a disposable PostGIS database. The test
 uses temporary fixture tables and does not change an imported OSM dataset.
+
+### The district name
+
+Zoomed in to a town, the map names where its middle is, in the bottom-right
+corner, the way a game names the district you drive into: the neighbourhood,
+quarter or suburb, else the village, town or city. A name in another script
+comes with a Latin line under it (OSM's `name:en`), in spaced capitals. It
+fades out from zoom 11 outwards, where one name would cover a whole city.
+
+The page asks `/api/district?lat=…&lon=…&z=…` once the map has settled, and
+gets one or two lines of text back. The names are OpenStreetMap's place nodes,
+from the imported extract where there is one (see **Places and history**).
+Everywhere else they come from the `place` layer of vector tiles in the
+OpenMapTiles layout, from `VECTOR_UPSTREAM`, the same tiles the styled map
+layers draw from. That is
+[OpenFreeMap](https://openfreemap.org) by default: free, keyless, and covering
+the planet. Those tiles are proxied and cached on disk under
+`TILE_CACHE/vector` like the raster ones, so the browser still talks to
+nobody else, and a stale tile beats none. `VECTOR_UPSTREAM` is a TileJSON
+address or a `{z}/{x}/{y}` template, and `off` leaves only the import; a
+TileJSON may not point the server at a different host.
+
+Where somebody is looking is never logged. The upstream does see which tiles
+the server fetches, roughly which areas are looked at, just as OSM's tile
+servers do for the street map.
+
+The Latin line is set in Oswald (SIL OFL 1.1, `public/vendor/fonts`, from
+`@fontsource/oswald` 5.3.0). The name itself is in the system font, because
+it can be in any script.
 
 ## Handing a path to somebody
 
@@ -701,8 +742,26 @@ everything else, they go with you on `/stop`.
 
 ## Taking a path with you (GPX)
 
-Your own card has **A day as GPX**: pick a day and Download gives your path for
-it as a GPX 1.1 file — the format Strava, Garmin Connect, Komoot and OsmAnd import.
+Your own card has **A day as GPX…**. It opens a dialog with today in it, and ‹ › or
+the date field go to other days. The dialog shows what the file holds before
+anything is saved:
+
+- that day's path on a small map;
+- how far, from when to when, and how many readings;
+- how many breaks: the file starts a new segment at each one.
+
+Then:
+
+- **Download** saves it as a GPX 1.1 file, the format Strava, Garmin Connect,
+  Komoot and OsmAnd import.
+- **Send…** hands it to another app, where the phone allows sharing files.
+- **Copy** puts it on the clipboard.
+- **Show the file** shows the file itself.
+
+The last two exist because a download can silently fail in a phone's in-app
+browser. The dialog says plainly that the file is your exact path, private
+places included, so whoever gets it sees all of it.
+
 The day runs midnight to midnight where you are, and the file is named for it.
 It is your own path, or an admin's export: your circle sees your path on the
 map, but a file made to be kept is for the person who walked it.
@@ -1161,9 +1220,26 @@ are, which is enough for a uptime check.
 | `src/live.js` | live links: one person, followed from now, for a while |
 | `src/sos.js` | an SOS: who is told, and what they are told |
 | `src/checks.js` | check on me: when to ask, and when to tell; the judgement is one pure function |
+| `src/district.js` | the name of where the middle of the map is: place nodes from the import, else vector tiles from the upstream |
+| `src/cartography-vector.js` | the styled map layers from those vector tiles, where there is no import |
+| `src/vector-tiles.js` | the vector tile upstream (OpenFreeMap by default), proxied and cached on disk |
+| `src/mvt.js` | just enough of a vector tile reader for both |
 | `src/config.js` | environment, checked once at startup |
-| `public/index.html` | the map: Leaflet, OpenStreetMap tiles, one EventSource |
+| `public/index.html` | the dashboard: MapLibre/Classic adapter, local MVT, authenticated stream |
 | `public/live.html` | the page a live link opens |
 | `public/lib/people-map.js` | how a person is drawn — the glide, the beam, the blur — for both |
 | `bin/login.mjs` | the one interactive step |
 | `docs/DESIGN-HANDOFF.md` | the state of every screen, the rules a redesign must keep, and what is known to be wrong — for a UI/UX designer taking it over |
+
+### Dashboard verification and demo views
+
+`npm test` runs the existing application checks, SVG/MVT HTTP and cache tests,
+and a real Chromium smoke test. CI's existing Ubuntu image supplies Chrome;
+locally set `CHROMIUM_PATH` if Chrome is not in a standard location. Smoke
+checks WebGL, both Classic paths, Persian shaping, privacy, SOS, keyboard
+cards, escaping, cameras, layers, idle repaint count and phone legend layout.
+The existing CI/Deploy workflows are unchanged.
+
+[Demo screenshots, measurements and checks](docs/game-map/README.md) use only
+invented people and a generated city with local Telegram/tile stubs. Run
+`CHROMIUM_PATH=/path/to/chrome npm run demo:game` to reproduce them.

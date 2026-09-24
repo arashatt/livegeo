@@ -25,11 +25,11 @@ export function demoFeatures(){
   data.roads.push(line([[-80.171,25.754],[-80.162,25.763],[-80.154,25.779],[-80.14,25.794],[-80.129,25.82]],{class:'motorway',name:'COAST EXPRESSWAY',bridge:1,layer:1}));
   data.roads.push(line([[-80.13,25.755],[-80.128,25.773],[-80.129,25.798],[-80.127,25.817]],{class:'footway',name:'COAST WALK'}));
   data.rail.push(line([[-80.167,25.755],[-80.158,25.778],[-80.156,25.815]],{class:'rail'}));
-  for(let i=0;i<12;i++)for(let j=0;j<12;j++)for(let k=0;k<4;k++){
-    const w=-80.16955+i*.0033+(k%2)*.0015,s=25.7614+j*.0037+Math.floor(k/2)*.0017;
+  for(let i=0;i<12;i++)for(let j=0;j<12;j++)for(let k=0;k<9;k++){
+    const w=-80.16955+i*.0033+(k%3)*.00103,s=25.7614+j*.0037+Math.floor(k/3)*.00115;
     if(w>-.0-80.154&&w<-80.147&&s>25.785&&s<25.792)continue;
     const h=10+(i*7+j*13+k*19)%38+(i>5&&i<9&&j>4&&j<8?45:0);
-    data.buildings.push(rect(w,s,w+.00105,s+.0012,{class:'apartments',height:h,name:''}));
+    data.buildings.push(rect(w,s,w+.00070,s+.00077,{class:'apartments',height:h,name:''}));
   }
   for(const [name,x,y,c] of [['BAY DISTRICT',-80.143,25.792,'suburb'],['PALM QUARTER',-80.16,25.777,'suburb'],['مشهد',-80.134,25.785,'neighbourhood']])data.places.push(feature({type:'Point',coordinates:[x,y]},{name,class:c}));
   return data;
@@ -60,6 +60,7 @@ export async function startDemo(){
     if(url.pathname.startsWith('/api/history/'))return json({points:people.find((p)=>p.id===url.pathname.split('/').pop())?.trail||[]});
     if(url.pathname==='/api/fences'&&req.method==='GET')return json({fences:[{id:1,name:'Meeting point',ring:[[25.775,-80.143],[25.775,-80.139],[25.778,-80.139],[25.778,-80.143]]}]});
     if(url.pathname==='/api/zones'&&req.method==='GET')return json({zones:[{id:1,name:'Home',latitude:25.780,longitude:-80.154,radius:210}]});
+    if(url.pathname.startsWith('/api/gpx/')){res.setHeader('content-type','application/gpx+xml');res.setHeader('content-disposition','attachment; filename="demo-day.gpx"');return res.end('<?xml version="1.0"?><gpx version="1.1"><trk><trkseg><trkpt lat="25.780" lon="-80.147"><time>2026-09-24T10:00:00Z</time></trkpt><trkpt lat="25.783" lon="-80.145"><time>2026-09-24T10:05:00Z</time></trkpt></trkseg></trk></gpx>');}
     if(url.pathname==='/api/circle')return json({viewers:[],owners:[],canSee:[],canSeeYou:[]});
     if(url.pathname==='/api/devices')return json({devices:[]});
     if(url.pathname==='/api/live')return json({links:[]});

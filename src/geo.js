@@ -14,8 +14,9 @@
 // the same way personOf is in directory.js.
 
 import pg from 'pg';
-import { makeVectorTiles } from './vector-tiles.js';
+import { makeVectorTiles } from './postgis-vector.js';
 import { makeCartography } from './cartography.js';
+import { makePlacesPostgis } from './district.js';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -53,6 +54,7 @@ export function makeGeo({ url, log = console } = {}) {
   let state = url ? 'unreachable' : 'off';
 
   const cartography = makeCartography({ query: (...args) => pool.query(...args), log });
+  const places = makePlacesPostgis({ query: (...args) => pool.query(...args), log });
 
   const vectors = makeVectorTiles({ query: (...args) => pool.query(...args), log });
 
@@ -175,6 +177,12 @@ export function makeGeo({ url, log = console } = {}) {
     // Styling remains optional, just like the imported OSM data it uses.
     async cartographyTile(z, x, y, layers) {
       return pool ? cartography.tile(z, x, y, layers) : null;
+    },
+
+    // Place names in one tile, for the district name (district.js), or null
+    // for "ask the upstream".
+    async placesIn(tile) {
+      return pool ? places.places(tile) : null;
     },
 
     // The last known position of everyone seen recently — what the in-memory

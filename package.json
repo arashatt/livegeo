@@ -7,10 +7,11 @@
   "scripts": {
     "start": "node src/index.js",
     "login": "node bin/login.mjs",
-    "test": "node test/test.mjs && node --test test/cartography.test.mjs test/vector-tiles.test.mjs && node test/game-smoke.mjs",
+    "test": "node test/test.mjs && node --test test/cartography.test.mjs test/cartography-vector.test.mjs test/district.test.mjs test/vector-tiles.test.mjs && node test/game-smoke.mjs",
     "test:cartography": "node test/cartography-postgis.mjs",
     "glyphs": "node bin/glyphs.mjs",
-    "test:browser": "node test/game-smoke.mjs"
+    "test:browser": "node test/game-smoke.mjs",
+    "demo:game": "node bin/demo-game.mjs"
   },
   "engines": {
     "node": ">=20"

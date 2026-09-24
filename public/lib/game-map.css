@@ -44,3 +44,5 @@ body[data-renderer="classic"] .game-only,body[data-renderer="loading"] .game-onl
 
 @keyframes person-arrive{from{opacity:0}to{opacity:1}}.game-blip.arriving,.veil-ground.in{animation:person-arrive .35s ease-out}.veil-ground.leaving{opacity:0;transition:opacity .3s ease-out}
 @media(max-width:760px){.brand:after{display:none}#mapLegend[open]{height:220px}body.legend-open main{padding-bottom:0}body.legend-open main .map-shell{height:calc(100% - 220px)}}
+
+body[data-renderer="game"] #district{display:none}.gpx-head h2{font-family:Vazirmatn,sans-serif}.gpx-kicker,.gpx-fine,.gpx-facts dt{color:#b4c7cd}@media(max-width:760px){.gpx-dialog button,.gpx-dialog input{min-height:44px;min-width:44px}}

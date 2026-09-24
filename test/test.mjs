@@ -1283,7 +1283,7 @@ head('the leak matrix: every route, as every kind of viewer');
       '/auth/telegram/start', '/auth/telegram/callback'],
     shareToken: ['/share/', '/api/shared/'],
     liveToken: ['/live/', '/api/live-stream/'],
-    signedIn: ['/', '/index.html', '/api/me', '/api/place'],
+    signedIn: ['/', '/index.html', '/api/me', '/api/place', '/api/district'],
     filtered: ['/api/positions', '/api/stream'],
     canSee: ['/api/history/', '/api/person/', '/api/photo/'],
     selfOnly: ['/api/share/', '/api/forget/', '/api/gpx/', '/api/live', '/api/live/', '/api/sos', '/api/check'],
