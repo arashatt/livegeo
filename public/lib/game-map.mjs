@@ -59,6 +59,7 @@ class PointMark extends Layer {
     this.el.className=this.blip?'game-blip arriving':'game-marker '+(this.options.icon?.className||'');
     if(this.blip)this.el.innerHTML='<span class="blip-core"></span><span class="blip-state"></span>';
     else this.el.innerHTML=this.options.icon?.html||''; // callers use esc() for every external string
+    if(!this.blip&&this.options.icon?.iconSize){const [w,h]=this.options.icon.iconSize;if(w>0)this.el.style.width=w+'px';if(h>0)this.el.style.height=h+'px';}
     map.html.appendChild(this.el);this.wire(this.el);this.render();
   }
   setLatLng(point){this.point=ll(point);this.render();if(this.tip&&!this.tipOptions?.permanent)this.tip.setLatLng(this.point);return this;}
@@ -78,7 +79,7 @@ class PointMark extends Layer {
   render(){
     if(!this.map||!this.el)return;
     const point=this.map.project(this.point);this.el.style.transform=`translate(${point.x}px,${point.y}px) translate(-50%,-50%)`;
-    this.el.style.visibility=this.map.visible(this.point)?'':'hidden';
+    this.el.style.visibility=this.map.visible(this.point)&&!(!this.blip&&this.map.getZoom()<8)?'':'hidden';
     this.el.style.opacity=this.options.opacity??1;
     if(this.blip){this.el.style.setProperty('--blip',this.options.fillColor||'#ffffff');this.el.style.setProperty('--size',`${(this.options.radius||7)*2}px`);this.el.style.setProperty('--heading',`${(this.heading||0)-this.map.gl.getBearing()}deg`);this.el.style.zIndex=this.person?.sos?50:this.self?40:30;}
   }
@@ -86,7 +87,7 @@ class PointMark extends Layer {
 class Tip extends PointMark {
   constructor(options={}){super([0,0],{...options,interactive:false,icon:{className:'game-tip '+(options.className||'')}});}
   setContent(content){this.options.icon.html=content;if(this.el)this.el.innerHTML=content;return this;}
-  render(){super.render();if(this.el)this.el.style.marginTop='-24px';}
+  render(){super.render();if(this.el){this.el.style.marginTop='-24px';if(this.options.className==='fence-label'&&this.map.getZoom()<8)this.el.style.visibility='hidden';}}
 }
 function runsOf(points){if(!points.length)return [];return typeof points[0]?.[0]==='number'||points[0]?.lat!==undefined?[points.map(ll)]:points.map((r)=>r.map(ll));}
 class Shape extends Layer {
@@ -97,6 +98,9 @@ class Shape extends Layer {
   getBounds(){return BaseL.latLngBounds(this.runs.flat());}
   render(){
     if(!this.map||!this.el)return;
+    // Tiny areas cannot truthfully read as areas at world scale. Keep their
+    // presence in the non-geographic overview, with full detail on zoom-in.
+    this.el.style.visibility=this.map.getZoom()<8?'hidden':'';
     const d=this.runs.map((run)=>run.map((p,i)=>{const q=this.map.project(p);return `${i?'L':'M'}${q.x.toFixed(1)},${q.y.toFixed(1)}`;}).join(' ')+(this.polygon?'Z':'')).join(' ');
     this.el.setAttribute('d',d);const o=this.options;
     for(const [key,value] of Object.entries({'fill':this.polygon?(o.fillColor||o.color||'#ffffff'):'none','fill-opacity':o.fillOpacity??.1,'stroke':o.color||'#ffffff','stroke-opacity':o.opacity??1,'stroke-width':o.weight??2,'stroke-dasharray':o.dashArray||'none','stroke-linecap':'round','stroke-linejoin':'round'}))this.el.setAttribute(key,value);
@@ -130,6 +134,7 @@ class Veil extends Shape {
     const b=this.bounds,c=b.getCenter(),dy=(b.getNorth()-b.getSouth())/2,dx=(b.getEast()-b.getWest())/2;
     this.runs=[Array.from({length:72},(_,i)=>ll([c.lat+Math.cos(i*Math.PI/36)*dy,c.lng+Math.sin(i*Math.PI/36)*dx]))];
     super.render();if(!this.el)return;
+    this.el.style.visibility=this.map.getZoom()<8?'hidden':'';
     this.el.style.filter='url(#veil-soft)';
     if(this.className.includes('mine')){this.el.setAttribute('stroke','#b2a1ff');this.el.setAttribute('stroke-width','2');this.el.setAttribute('stroke-dasharray','6 7');this.el.style.filter='none';}
   }
@@ -203,6 +208,8 @@ class DashboardMap extends Events {
         if(fix!==this.lastChase){this.lastChase=fix;this.follow(mine);}
       }
     }
+    const privateCount=data.filter(p=>p.hidden).length;
+    const overview=document.getElementById('privateOverview');overview.textContent=privateCount+' private '+(privateCount===1?'area':'areas')+' · listed in People';overview.hidden=!privateCount||this.gl.getZoom()>=8;
     this.radar();
   }
   radar(){
@@ -226,7 +233,7 @@ class DashboardMap extends Events {
       let [x,y]=project(p.longitude,p.latitude),dx=x-mid,dy=y-mid;const d=Math.hypot(dx,dy),edge=d>94;
       if(edge){x=mid+dx/d*94;y=mid+dy/d*94;}
       ctx.fillStyle=p.colour;ctx.strokeStyle='#f1f9f5';ctx.lineWidth=2;ctx.beginPath();
-      if(p.sos){ctx.rect(x-5,y-5,10,10);}else if(p.mine&&p.heading!=null){ctx.moveTo(x,y-7);ctx.lineTo(x+5,y+5);ctx.lineTo(x,y+2);ctx.lineTo(x-5,y+5);ctx.closePath();}else ctx.arc(x,y,edge?3:4,0,Math.PI*2);
+      if(p.sos){ctx.rect(x-5,y-5,10,10);}else if(p.mine&&p.live&&p.heading!=null){ctx.moveTo(x,y-7);ctx.lineTo(x+5,y+5);ctx.lineTo(x,y+2);ctx.lineTo(x-5,y+5);ctx.closePath();}else ctx.arc(x,y,edge?3:4,0,Math.PI*2);
       ctx.fill();ctx.stroke();if(p.sos){ctx.font='bold 10px sans-serif';ctx.fillStyle='#ffffff';ctx.fillText('SOS',x+8,y+3);}
     }
     const n=project(center.longitude,center.latitude+.006);const a=Math.atan2(n[1]-mid,n[0]-mid);ctx.fillStyle='#f4e8c8';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText('N',mid+Math.cos(a)*97,mid+Math.sin(a)*97+4);
@@ -301,8 +308,9 @@ function peopleDrawing(map){
 export async function createGameMap(){
   setWorkerCount(2);
   await setRTLTextPlugin('/vendor/rtl/mapbox-gl-rtl-text.js',false);
-  const gl=new GLMap({container:'map',style:gameStyle(),center:[0,20],zoom:2.2,minZoom:1.2,maxZoom:19,maxPitch:75,attributionControl:{compact:true},canvasContextAttributes:{antialias:true},fadeDuration:0,renderWorldCopies:false});
-  try{await Promise.race([gl.once('load'),new Promise((_,reject)=>setTimeout(()=>reject(new Error('Map startup timed out')),20000))]);}catch(error){gl.remove();throw error;}
+  const gl=new GLMap({container:'map',style:gameStyle(),center:[0,20],zoom:2.2,minZoom:1.2,maxZoom:19,maxPitch:75,attributionControl:{compact:true},pixelRatio:Math.min(window.devicePixelRatio||1,1.5),canvasContextAttributes:{antialias:false},fadeDuration:0,renderWorldCopies:false});
+  let startupTimer;
+  try{await Promise.race([gl.once('load'),new Promise((_,reject)=>{startupTimer=setTimeout(()=>reject(new Error('Map startup timed out')),20000);})]);}catch(error){gl.remove();throw error;}finally{clearTimeout(startupTimer);}
   gl.addImage('windows',windowsImage(),{pixelRatio:1});
   const map=new DashboardMap(gl);window.livegeoMap=map;
   const facade={...BaseL,map:()=>map,tileLayer:()=>new Raster(),circleMarker:(p,o)=>new PointMark(p,o,true),marker:(p,o)=>new PointMark(p,o),divIcon:(o)=>o,

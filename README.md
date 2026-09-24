@@ -559,6 +559,9 @@ areas, trail gaps/times, fences and safety actions keep the same server data
 and permission logic as the Classic map. Person buttons remain above the 3D
 city. Private people are areas, never radar points. The optional radar reuses
 loaded road geometry and has no second WebGL renderer or tile stream.
+At world scale, private people appear only in a non-geographic area count and
+the People panel. Area/trail detail returns from zoom 8, keeping a tiny veil
+from looking like an exact location pin.
 
 **Classic map** in Layers is remembered in the browser. Leaflet also starts
 automatically without WebGL2/ES modules or if the GPU cannot initialise.

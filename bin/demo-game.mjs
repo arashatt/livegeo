@@ -12,7 +12,7 @@ await mkdir(out,{recursive:true});
 const browser=await chromium.launch({executablePath,headless:true,args}),page=await browser.newPage({viewport:{width:1440,height:900},reducedMotion:'reduce'}),errors=[],external=[];
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});page.on('request',r=>{if(/^https?:/.test(r.url())&&!r.url().startsWith(demo.origin+'/'))external.push(r.url());});
 const metrics={renderer:await browser.version(),cpuThrottle:4,graphics:'SwiftShader software WebGL2 (not a physical phone)',screenshots:[],externalRequests:external};
-async function settle(){await page.waitForFunction(()=>window.livegeoMap?.gl.areTilesLoaded(),{},{timeout:30000});await page.waitForTimeout(450);}
+async function settle(){await page.waitForFunction(()=>window.livegeoMap?.gl.areTilesLoaded(),{},{timeout:30000});await page.waitForTimeout(900);}
 async function camera(center,zoom,pitch,bearing=0,mode='auto',light='day'){
   await page.evaluate(({center,zoom,pitch,bearing,mode,light})=>{const m=window.livegeoMap;m.light=light;m.lighting(true);m.setCamera(mode);m.gl.jumpTo({center,zoom,pitch,bearing});}, {center,zoom,pitch,bearing,mode,light});await settle();
 }
@@ -37,11 +37,12 @@ try{
  await page.mouse.click(screen.x,screen.y);await page.waitForSelector('.game-tip.time-tip');await shot('desktop-trail-time');
  await page.locator('.game-blip.self').click();await page.waitForSelector('#detailPanel:not([hidden])');await shot('desktop-card');await page.locator('#detailclose').click();await page.mouse.click(550,120);
  // Real render-event counts, including expensive frames, after tiles/glyphs warm.
- for(const phone of [false,true]){
-  await page.setViewportSize(phone?{width:390,height:844}:{width:1440,height:900});await camera(demoCenter,16,70,-20);
+ for(const config of [{phone:false,lite:false},{phone:true,lite:false},{phone:true,lite:true}]){
+  const {phone,lite}=config;await page.evaluate(lite=>{const m=window.livegeoMap;m.lite=lite;m.lighting(true);},lite);
+  await page.setViewportSize(phone?{width:390,height:844}:{width:1440,height:900});await camera(demoCenter,16,lite?0:70,-20);
   const cdp=await page.context().newCDPSession(page);await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
-  const measurement=await page.evaluate(()=>new Promise(resolve=>{const m=window.livegeoMap.gl;let count=0;const start=performance.now(),frame=()=>count++;m.on('render',frame);m.once('moveend',()=>{m.off('render',frame);const ms=performance.now()-start;resolve({frames:count,ms:Math.round(ms),fps:Math.round(count/ms*10000)/10});});const c=m.getCenter();m.easeTo({center:[c.lng+.003,c.lat+.002],pitch:74,bearing:45,duration:4000,essential:true});}));
-  await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});metrics[phone?'phonePanTilt':'desktopPanTilt']=measurement;await settle();
+  const measurement=await page.evaluate(lite=>new Promise(resolve=>{const m=window.livegeoMap.gl;let count=0;const start=performance.now(),frame=()=>count++;m.on('render',frame);m.once('moveend',()=>{m.off('render',frame);const ms=performance.now()-start;resolve({frames:count,ms:Math.round(ms),fps:Math.round(count/ms*10000)/10});});const c=m.getCenter();m.easeTo({center:[c.lng+.003,c.lat+.002],pitch:lite?0:74,bearing:45,duration:4000,essential:true});}),lite);
+  await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});metrics[lite?'phoneLitePan':phone?'phonePanTilt':'desktopPanTilt']=measurement;await settle();
  }
  const idle=await page.evaluate(()=>new Promise(resolve=>{const m=window.livegeoMap.gl;let count=0;const fn=()=>count++;m.on('render',fn);setTimeout(()=>{m.off('render',fn);resolve(count);},2000);}));metrics.idleRepaintsIn2s=idle;metrics.consoleErrors=errors;
  const categories={js:0,fonts:0,glyphs:0,data:0};

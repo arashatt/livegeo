@@ -35,10 +35,23 @@ try{
   assert.match(shaped,/[\ufb50-\ufeff]/);assert.notEqual(shaped,'مشهد تهران');
   await page.locator('.game-blip.self').focus();await page.keyboard.press('Enter');
   await page.waitForSelector('#detailPanel:not([hidden])');assert.match(await page.locator('#detailPanel').innerText(),/Alex/);
+  // The real confirmation and emergency disclosure remain on the shared UI.
+  page.once('dialog',async d=>{assert.equal(d.type(),'confirm');assert.match(d.message(),/This calls nobody/);await d.dismiss();});
+  await page.locator('#detailPanel .sosbtn').click();assert.equal(demo.mutations.some(r=>r.path==='/api/sos'),false);
+  const disclosure=new Promise(resolve=>page.once('dialog',async d=>{page.once('dialog',async a=>{assert.match(a.message(),/This called nobody/);assert.match(a.message(),/110.*115/);await a.dismiss();resolve();});await d.accept();}));
+  await page.locator('#detailPanel .sosbtn').click();await disclosure;
+  assert.equal(demo.mutations.filter(r=>r.path==='/api/sos'&&r.method==='POST').length,1);
+  await page.locator('#detailPanel .safebtn').click();await page.waitForSelector('#detailPanel .sosbtn');
   await page.locator('#detailPanel .gpxbtn').click();await page.waitForSelector('#gpxDialog[open]');
   await page.waitForSelector('#gpxMap.leaflet-container');assert.equal(await page.locator('#gpxSave').isEnabled(),true);assert.match(await page.locator('#gpxText').textContent(),/trkpt/);
   await page.locator('#gpxClose').click();assert.equal(await page.locator('#map.maplibregl-map').count(),1,'GPX preview leaves the WebGL dashboard intact');
   await page.locator('#detailclose').click();await page.mouse.move(500,100);
+  await page.evaluate(()=>window.livegeoMap.gl.jumpTo({center:[25,22],zoom:2,pitch:0}));
+  await page.waitForFunction(()=>document.getElementById('districtReadout').textContent==='Your world');
+  assert.equal(await page.locator('.veil-ground:visible').count(),0,'private areas never shrink into world-scale pins');
+  assert.equal(await page.locator('#privateOverview').isVisible(),true);
+  await page.evaluate((center)=>window.livegeoMap.gl.jumpTo({center,zoom:16,pitch:70}),demoCenter);
+  await page.waitForFunction(()=>document.getElementById('districtReadout').textContent==='Bay District');
   await page.locator('#cameraMode').selectOption('map');assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getPitch()),0);assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getBearing()),0);
   await page.locator('#cameraMode').selectOption('chase');assert.ok(await page.evaluate(()=>window.livegeoMap.gl.getPitch())>50);
   // Unknown heading falls back to north-up; a hidden self exits Chase entirely.
@@ -54,6 +67,14 @@ try{
   await page.locator('[data-layer=trails]').uncheck();await page.locator('[data-layer=trails]').check();
   await page.locator('#layersbtn').click();
   await page.locator('#newfence').click();assert.equal(await page.locator('body.fencing').count(),1);await page.keyboard.press('Escape');assert.equal(await page.locator('body.fencing').count(),0);
+  for(const kind of ['fences','zones']){
+    if(kind==='fences')await page.locator('#newfence').click();else{await page.locator('#circlebtn').click();await page.locator('#mkzone').click();}
+    let prompt=0;const answers=[kind==='fences'?'Demo fence':'Demo private place',kind==='fences'?'150':'500'];
+    const reply=d=>{d.accept(answers[prompt++]);};page.on('dialog',reply);
+    const response=page.waitForResponse(r=>r.url().includes('/api/'+kind+'?')&&r.request().method()==='POST');await page.mouse.click(600,400);await response;
+    page.off('dialog',reply);assert.equal(prompt,2);const request=demo.mutations.find(r=>r.path==='/api/'+kind&&r.method==='POST');
+    assert.equal(request.query.name,answers[0]);assert.equal(request.query.radius,answers[1]);assert.ok(Number.isFinite(Number(request.query.lat)));assert.ok(Number.isFinite(Number(request.query.lon)));
+  }
   // Settle camera/data before counting the renderer's idle frames.
   await page.mouse.move(500,70);await page.evaluate(()=>window.livegeoMap.gl.stop());await page.waitForTimeout(1200);
   const idle=await page.evaluate(()=>new Promise(resolve=>{let count=0;const map=window.livegeoMap.gl,listen=()=>count++;map.on('render',listen);setTimeout(()=>{map.off('render',listen);resolve(count);},1100);}));
@@ -70,8 +91,12 @@ try{
   await page.locator('#peoplebtn').click();await page.locator('#list .person[data-id="5"]').click();await page.waitForSelector('#detailPanel:not([hidden])');
   assert.equal(await page.locator('.leaflet-marker-icon.veil-chip').count(),1);
   await browser.close();browser=null;
+  // A constructor failure after successful feature detection must also fall back.
+  page=await open();await page.route('**/vendor/maplibre/maplibre-gl.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function setWorkerCount(){};export async function setRTLTextPlugin(){};export class ScaleControl{};export class Map{constructor(){throw new Error("GPUInitializationError")}}'}));
+  await page.goto(demo.origin);await page.waitForFunction(()=>document.body.dataset.renderer==='classic');assert.match(await page.locator('#rendererNote').innerText(),/could not start/);
+  await browser.close();browser=null;
   page=await open(['--disable-3d-apis']);await page.goto(demo.origin);await page.waitForFunction(()=>document.body.dataset.renderer==='classic'&&document.querySelectorAll('#list .person').length===5);
   assert.equal(await page.locator('.leaflet-container').count(),1);assert.match(await page.locator('#rendererNote').innerText(),/unavailable/);
   assert.deepEqual(errors,[],'no console/application errors');assert.deepEqual(external,[],'no external requests');
-  console.log('Browser smoke: WebGL2, RTL, privacy, SOS, keyboard/card, camera, Lite, layers, escaping, idle=0, phone legend, selected and disabled-GPU Classic; zero errors/external requests');
+  console.log('Browser smoke: WebGL2, RTL, privacy, SOS confirmation, placement, keyboard/card/GPX, camera, Lite, layers, escaping, idle=0, phone legend, selected/disabled/failed-GPU Classic; zero errors/external requests');
 }finally{if(browser)await browser.close();await demo.close();}

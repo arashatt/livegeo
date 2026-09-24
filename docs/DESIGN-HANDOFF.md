@@ -422,6 +422,9 @@ The collapsed legend sits below cards. On a 390px phone it opens in reserved
 space below a resized map, not over the map. District text describes the
 rounded/debounced view centre; a centre inside a privacy area says “Private
 area” without a place lookup.
+Below zoom 8, areas, trails and ground labels are suppressed; private people
+remain listed in People and a non-geographic area-count HUD. This prevents
+subpixel veils or their name chips from reading as precise world-scale pins.
 
 ## 5. The visual language today (dashboard)
 
@@ -451,6 +454,9 @@ Mercator. Chase requires a visible sharing self, uses heading-up, and becomes
 north-up when heading is unknown. Lite removes sky, extrusion and road glow.
 Camera changes are immediate under reduced motion; ordinary transitions are
 short and finite. No continuous decorative animation or idle map repaint loop.
+Phone pixel ratio is capped at 1.5, antialiasing is off, and the radar initially
+defaults off on narrow screens. See [demo measurements](game-map/README.md)
+for the software-rendering stress result and the physical-device follow-up.
 
 ---
 

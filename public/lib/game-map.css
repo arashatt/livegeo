@@ -46,3 +46,8 @@ body[data-renderer="classic"] .game-only,body[data-renderer="loading"] .game-onl
 @media(max-width:760px){.brand:after{display:none}#mapLegend[open]{height:220px}body.legend-open main{padding-bottom:0}body.legend-open main .map-shell{height:calc(100% - 220px)}}
 
 body[data-renderer="game"] #district{display:none}.gpx-head h2{font-family:Vazirmatn,sans-serif}.gpx-kicker,.gpx-fine,.gpx-facts dt{color:#b4c7cd}@media(max-width:760px){.gpx-dialog button,.gpx-dialog input{min-height:44px;min-width:44px}}
+html{height:100%;overflow:hidden}body{position:fixed;inset:0;width:100%}
+
+.private-overview{position:absolute;left:24px;top:80px;padding:9px 12px;border:1px solid #92a9b1;background:#0a1c29e8;color:#e7f0e8;z-index:600;font:600 14px Barlow,sans-serif;letter-spacing:.03em;text-transform:uppercase}@media(max-width:760px){.private-overview{left:12px;top:126px;max-width:230px;font-size:12px}}
+.maplibregl-ctrl-attrib-button{background-repeat:no-repeat;background-position:center;background-size:24px 24px}
+@media(max-width:760px){.maplibregl-ctrl-attrib-button{top:auto;bottom:0}.maplibregl-ctrl-attrib.maplibregl-compact{padding-right:44px}.maplibregl-ctrl-attrib.maplibregl-compact-show{padding-right:44px}}

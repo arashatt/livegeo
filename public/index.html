@@ -556,6 +556,7 @@
       <button id="tilt" type="button" aria-label="Toggle tilt">TILT<small id="tiltValue">0°</small></button>
       <div class="zoom-pair"><button id="zoomIn" type="button" aria-label="Zoom in">+</button><button id="zoomOut" type="button" aria-label="Zoom out">−</button></div><span id="zoomValue">Z3</span>
     </div>
+    <div id="privateOverview" class="private-overview game-only" role="status" hidden></div>
     <div class="district-hud game-only"><span class="eyebrow">In view</span><strong id="districtReadout">Your world</strong><span id="lightReadout">Sun · Auto</span></div>
     <section id="radar" aria-label="Radar, approximate point positions" class="game-only" hidden><canvas id="radarCanvas" width="216" height="216" aria-hidden="true"></canvas><span id="radarCaption"></span></section>
     <details id="mapLegend"><summary>Map legend</summary><div class="legend-body">
@@ -2390,11 +2391,11 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
     clearTimeout(gameDistrictTimer);
     var generation = ++gameDistrictGeneration;
     if (!game || document.hidden) return;
+    var c = map.getCenter(), privateView = false;
+    people.forEach(function (e) { if (e.veil && e.veil.getBounds().contains(c)) privateView = true; });
+    if (privateView) { gameDistrictKey = ''; document.getElementById('districtReadout').textContent = 'Private area'; return; }
+    if (map.getZoom() < 10) { gameDistrictKey = ''; document.getElementById('districtReadout').textContent = 'Your world'; return; }
     gameDistrictTimer = setTimeout(function () {
-      var c = map.getCenter(), privateView = false;
-      people.forEach(function (e) { if (e.veil && e.veil.getBounds().contains(c)) privateView = true; });
-      if (privateView) { document.getElementById('districtReadout').textContent = 'Private area'; return; }
-      if (map.getZoom() < 10) { document.getElementById('districtReadout').textContent = 'Your world'; return; }
       var lat = Number(c.lat.toFixed(3)), lon = Number(c.lng.toFixed(3)), key = lat + ',' + lon;
       if (key === gameDistrictKey) return;
       gameDistrictKey = key;

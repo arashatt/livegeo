@@ -61,10 +61,10 @@ export async function startDemo(){
     if(url.pathname==='/api/fences'&&req.method==='GET')return json({fences:[{id:1,name:'Meeting point',ring:[[25.775,-80.143],[25.775,-80.139],[25.778,-80.139],[25.778,-80.143]]}]});
     if(url.pathname==='/api/zones'&&req.method==='GET')return json({zones:[{id:1,name:'Home',latitude:25.780,longitude:-80.154,radius:210}]});
     if(url.pathname.startsWith('/api/gpx/')){res.setHeader('content-type','application/gpx+xml');res.setHeader('content-disposition','attachment; filename="demo-day.gpx"');return res.end('<?xml version="1.0"?><gpx version="1.1"><trk><trkseg><trkpt lat="25.780" lon="-80.147"><time>2026-09-24T10:00:00Z</time></trkpt><trkpt lat="25.783" lon="-80.145"><time>2026-09-24T10:05:00Z</time></trkpt></trkseg></trk></gpx>');}
-    if(url.pathname==='/api/circle')return json({viewers:[],owners:[],canSee:[],canSeeYou:[]});
+    if(url.pathname==='/api/circle')return json({canSeeMe:[],iCanSee:[]});
     if(url.pathname==='/api/devices')return json({devices:[]});
     if(url.pathname==='/api/live')return json({links:[]});
-    if(url.pathname.startsWith('/api/')){mutations.push({method:req.method,path:url.pathname,query:Object.fromEntries(url.searchParams)});return json({ok:true});}
+    if(url.pathname.startsWith('/api/')){mutations.push({method:req.method,path:url.pathname,query:Object.fromEntries(url.searchParams)});return json(url.pathname==='/api/sos'?{until:Math.floor(Date.now()/1000)+3600,told:2,call:'110 (police) or 115 (ambulance)'}:{ok:true});}
     const tile=parseVectorPath(url.pathname);
     if(tile){const tiles={};for(const [key,index] of Object.entries(indexes)){if(key==='buildings'&&tile.z<15)continue;const t=index.getTile(tile.z,tile.x,tile.y);if(t)tiles[key]=t;}
       const raw=Buffer.from(vtpbf.fromGeojsonVt(tiles, {version:2}));res.writeHead(200,{'content-type':'application/vnd.mapbox-vector-tile','content-encoding':'gzip','x-carto-source':'postgis'});return res.end(gzipSync(raw));}
