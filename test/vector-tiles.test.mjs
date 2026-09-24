@@ -35,7 +35,7 @@ test('bounded query, gzip variants, coalescing, expiry, empty tile and recovery'
   assert.equal((VECTOR_SQL.match(/way && buffered/g)||[]).length,8);
 });
 test('MVT endpoint authentication, gzip negotiation, MIME and empty caching',async()=>{
-  const {server}=serve(new Positions(),{...defaults(),dashboardToken:'test-only',port:0,host:'127.0.0.1'},{log:quiet,geo:{vectorTile:async()=>EMPTY_VECTOR}});
+  const {server}=serve(new Positions(),{...defaults(),dashboardToken:'test-only',port:0,host:'127.0.0.1'},{log:quiet,geo:{vectorTile:async()=>EMPTY_VECTOR},vectorTiles:{enabled:false,tile:async()=>null}});
   await once(server,'listening');const port=server.address().port;
   const get=(path,headers={})=>new Promise((resolve,reject)=>{request({hostname:'127.0.0.1',port,path,headers},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}));}).on('error',reject).end();});
   try{
