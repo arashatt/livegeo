@@ -13,6 +13,7 @@ import { parseTilePath, parseCartoPath, makeTiles } from './tiles.js';
 import { makeDistrict } from './district.js';
 import { makeVectorUpstream } from './vector-tiles.js';
 import { makeVectorCartography } from './cartography-vector.js';
+import { makeGameVector } from './game-vector.js';
 import { EMPTY_CARTOGRAPHY, parseCartographyLayers } from './cartography.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
@@ -243,6 +244,7 @@ export function serve(positions, config, {
     log,
   });
   const vectorCarto = makeVectorCartography({ upstream: vectors, log });
+  const gameVector = makeGameVector({ upstream: vectors, log });
 
   const send = (res, event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -983,15 +985,25 @@ export function serve(positions, config, {
     if (vector) {
       const layers = parseVectorLayers(url.searchParams.get('layers'));
       if (layers === null) return json(400, { error: 'unknown cartography layer' });
-      const got = (geo?.vectorTile && await geo.vectorTile(vector.z, vector.x, vector.y, layers)) || EMPTY_VECTOR;
+      let got = (geo?.vectorTile && await geo.vectorTile(vector.z, vector.x, vector.y, layers)) || EMPTY_VECTOR;
+      let source = got.empty ? 'empty' : 'postgis';
+      // Without an import, the same layers from the upstream's vector tiles
+      // (game-vector.js), so the 3D map still has a city to draw.
+      if (got.empty && layers.length) {
+        const bridged = await gameVector.tile(vector.z, vector.x, vector.y, layers).catch((e) => {
+          log.error('game map: cannot make a tile from vector tiles —', e && e.message ? e.message : e);
+          return null;
+        });
+        if (bridged) { got = bridged; source = 'upstream'; }
+      }
       const compressed = (req.headers['accept-encoding'] || '').split(',').some((item) => {
         const [name, quality] = item.trim().split(';');
         return name === 'gzip' && (!quality || Number(quality.trim().replace(/^q=/, '')) > 0);
       });
       res.writeHead(200, {
         'content-type': 'application/vnd.mapbox-vector-tile',
-        'cache-control': got.empty ? 'private, max-age=30' : 'private, max-age=300',
-        'x-carto-source': got.empty ? 'empty' : 'postgis',
+        'cache-control': got.empty ? 'private, max-age=30' : source === 'upstream' ? 'private, max-age=3600' : 'private, max-age=300',
+        'x-carto-source': source,
         'vary': 'Accept-Encoding',
         ...(compressed ? { 'content-encoding': 'gzip' } : {}),
       });
