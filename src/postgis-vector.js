@@ -16,13 +16,15 @@ WITH tile AS (SELECT ST_TileEnvelope($1,$2,$3) AS geom),
 bounds AS (SELECT geom, ST_Expand(geom,(ST_XMax(geom)-ST_XMin(geom))*12/256) AS buffered,
   (ST_XMax(geom)-ST_XMin(geom))/256 AS pixel FROM tile),
 features AS (
- (SELECT 'landuse' AS source_layer, CASE WHEN "natural" IN ('bare_rock','scree','shingle','sand') THEN 'terrain' ELSE 'urban' END AS class,
+ (SELECT 'landuse' AS source_layer, CASE WHEN "natural" IN ('bare_rock','scree','shingle','sand') THEN 'terrain'
+    WHEN landuse IN ('farmland','farmyard','orchard','vineyard') THEN 'field' ELSE 'urban' END AS class,
     way, 3 AS dimension, name, tags, NULL::text AS building, NULL::text AS bridge, NULL::text AS tunnel, NULL::text AS level
   FROM planet_osm_polygon,bounds WHERE $1>=10 AND way && buffered AND way_area>pixel*pixel*4
-    AND (landuse IN ('residential','commercial','industrial','retail') OR "natural" IN ('bare_rock','scree','shingle','sand'))
+    AND (landuse IN ('residential','commercial','industrial','retail','farmland','farmyard','orchard','vineyard') OR "natural" IN ('bare_rock','scree','shingle','sand'))
   ORDER BY way_area DESC,osm_id LIMIT 350)
  UNION ALL
- (SELECT 'parks','park',way,3,name,tags,NULL,NULL,NULL,NULL FROM planet_osm_polygon,bounds
+ (SELECT 'parks',CASE WHEN landuse='forest' OR "natural"='wood' THEN 'wood'
+    WHEN landuse IN ('grass','meadow') OR "natural" IN ('scrub','heath') THEN 'grass' ELSE 'park' END,way,3,name,tags,NULL,NULL,NULL,NULL FROM planet_osm_polygon,bounds
   WHERE way && buffered AND way_area>pixel*pixel*4 AND (leisure IN ('park','garden','nature_reserve','golf_course')
     OR landuse IN ('forest','grass','meadow','recreation_ground','village_green') OR "natural" IN ('wood','scrub','heath'))
   ORDER BY way_area DESC,osm_id LIMIT 500)
@@ -50,12 +52,22 @@ features AS (
   ORDER BY CASE WHEN highway IN ('motorway','motorway_link','trunk','trunk_link') THEN 0
     WHEN highway IN ('primary','primary_link') THEN 1 WHEN highway IN ('secondary','secondary_link') THEN 2 ELSE 3 END,osm_id LIMIT 2400)
  UNION ALL
- (SELECT 'places',place,way,1,name,tags,NULL,NULL,NULL,NULL FROM planet_osm_point,bounds
+ (SELECT 'places',CASE WHEN place IS NOT NULL THEN place
+    WHEN aeroway='aerodrome' THEN 'airport' WHEN amenity IN ('university','college') THEN 'university'
+    WHEN amenity IN ('hospital','clinic') THEN 'hospital' WHEN amenity='bus_station' THEN 'bus'
+    WHEN railway IN ('station','halt') THEN 'station' WHEN amenity='place_of_worship' THEN 'worship'
+    WHEN leisure IN ('park','garden') THEN 'park' WHEN "natural"='peak' THEN 'peak' ELSE 'landmark' END,
+    way,1,name,tags,NULL,NULL,NULL,NULL FROM planet_osm_point,bounds
   WHERE way && buffered AND name IS NOT NULL AND (place IN ('city','town') OR ($1>=11 AND place IN ('village','suburb','quarter'))
-    OR ($1>=14 AND place IN ('neighbourhood','hamlet','locality')))
+    OR ($1>=14 AND place IN ('neighbourhood','hamlet','locality'))
+    OR ($1>=11 AND (aeroway='aerodrome' OR "natural"='peak'))
+    OR ($1>=12 AND (amenity IN ('university','college','hospital','clinic','bus_station','place_of_worship')
+      OR railway IN ('station','halt') OR leisure IN ('park','garden') OR historic IN ('monument','memorial') OR tourism='attraction')))
   ORDER BY CASE place WHEN 'city' THEN 0 WHEN 'town' THEN 1 ELSE 2 END,osm_id LIMIT 150)
 ), clipped AS (
  SELECT source_layer,class,left(name,160) AS name,
+   CASE WHEN source_layer='places' THEN CASE WHEN class IN ('airport','university','hospital','bus','station','worship','park','peak','landmark') THEN 'landmark' ELSE 'place' END END AS kind,
+   CASE WHEN source_layer='places' THEN CASE class WHEN 'city' THEN 0 WHEN 'town' THEN 1 WHEN 'suburb' THEN 2 ELSE 100 END END AS rank,
    CASE WHEN coalesce(bridge,'no') NOT IN ('no','0','false') THEN 1 ELSE 0 END AS bridge,
    CASE WHEN coalesce(tunnel,'no') NOT IN ('no','0','false') THEN 1 ELSE 0 END AS tunnel,
    CASE WHEN level ~ '^-?[0-9]{1,2}$' THEN level::int ELSE 0 END AS layer,

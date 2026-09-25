@@ -1,5 +1,5 @@
-import {Map as GLMap, ScaleControl, setWorkerCount, setRTLTextPlugin} from '/vendor/maplibre/maplibre-gl.mjs';
-import {gameStyle, sunAt, windowsImage} from './game-style.mjs';
+import {Map as GLMap, ScaleControl, setWorkerCount, setRTLTextPlugin} from '/lib/map-assets/maplibre/maplibre-gl.mjs';
+import {gameStyle, sunAt, windowsImage, landmarkImage} from './game-style.mjs';
 const BaseL=window.L, reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const NS='http://www.w3.org/2000/svg';
 const svg=(tag)=>document.createElementNS(NS,tag);
@@ -155,7 +155,7 @@ class Raster extends Layer {
 
 class DashboardMap extends Events {
   constructor(gl){
-    super();this.gl=gl;this.layers=new Set();this.camera='auto';this.data=[];this.spotlight=null;
+    super();this.gl=gl;this.layers=new Set();this.camera='map';this.data=[];this.spotlight=null;
     this.html=document.createElement('div');this.html.className='game-overlays';
     this.ground=svg('svg');this.ground.classList.add('game-ground');this.ground.innerHTML='<defs><filter id="veil-soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="10"/></filter></defs>';
     gl.getContainer().append(this.ground,this.html);
@@ -185,18 +185,19 @@ class DashboardMap extends Events {
   redraw(){if(document.hidden)return;this.ground.setAttribute('viewBox',`0 0 ${this.getSize().x} ${this.getSize().y}`);this.layers.forEach((l)=>l.render?.());}
   autoCamera(){
     if(this.camera!=='auto'||document.hidden)return;
-    const z=this.gl.getZoom(),pitch=this.lite?0:z<10?0:z<14?(z-10)*10:Math.min(74,48+(z-14)*12);
+    const z=this.gl.getZoom(),pitch=this.lite?0:z<14?0:Math.min(58,(z-14)*24);
     if(Math.abs(this.gl.getPitch()-pitch)>.5)this.gl.easeTo({pitch,duration:reduced?0:450});
   }
   setCamera(mode){
     const mine=this.data.find((p)=>p.mine&&p.live&&!p.hidden);
     if(mode==='chase'&&!mine)return;
-    this.camera=mode;this.gl.setProjection({type:mode==='map'?'mercator':'globe'});this.features?.sync();document.getElementById('cameraMode').value=mode;
+    this.camera=mode;remember('camera',mode==='chase'?'map':mode);this.gl.setProjection({type:mode==='map'?'mercator':'globe'});this.features?.sync();document.getElementById('cameraMode').value=mode;
+    if(mode!=='chase')this.gl.setPadding({top:0,bottom:0,left:0,right:0});
     if(mode==='map')this.gl.easeTo({pitch:0,bearing:0,duration:reduced?0:500});
     else if(mode==='chase')this.follow(mine);else this.autoCamera();
     this.updateHud();
   }
-  follow(p){if(!p||document.hidden)return;this.gl.easeTo({center:[p.longitude,p.latitude],bearing:p.heading??0,pitch:this.lite?0:74,zoom:Math.max(16,this.gl.getZoom()),padding:{top:100,bottom:0,left:0,right:0},duration:reduced?0:650});}
+  follow(p){if(!p||document.hidden)return;this.gl.easeTo({center:[p.longitude,p.latitude],bearing:p.heading??0,pitch:this.lite?0:58,zoom:Math.max(16,this.gl.getZoom()),padding:{top:100,bottom:0,left:0,right:0},duration:reduced?0:650});}
   syncPeople(data,spotlight){
     this.data=data;this.spotlight=spotlight;
     const mine=data.find((p)=>p.mine&&p.live&&!p.hidden);
@@ -240,7 +241,8 @@ class DashboardMap extends Events {
     document.getElementById('radarCaption').textContent=(center.mine?'You':center.name||'Spotlight')+' · 800 m';
   }
   bindControls(){
-    this.lite=saved('lite','false')==='true';this.light=saved('light','auto');if(!['auto','day','golden','night'].includes(this.light))this.light='auto';
+    this.camera=saved('camera','map')==='auto'?'auto':'map';this.gl.setProjection({type:this.camera==='map'?'mercator':'globe'});document.getElementById('cameraMode').value=this.camera;
+    this.lite=saved('lite','false')==='true';this.light=saved('light','day');if(!['auto','day','golden','night'].includes(this.light))this.light='day';
     this.radarOn=saved('radar',innerWidth<761?'false':'true')==='true';
     document.getElementById('cameraMode').onchange=(e)=>this.setCamera(e.target.value);
     document.getElementById('lightMode').value=this.light;
@@ -250,7 +252,7 @@ class DashboardMap extends Events {
     document.getElementById('radarToggle').checked=this.radarOn;
     document.getElementById('radarToggle').onchange=(e)=>{this.radarOn=e.target.checked;remember('radar',String(this.radarOn));this.radar();};
     document.getElementById('compass').onclick=()=>this.gl.easeTo({bearing:0,duration:reduced?0:400});
-    document.getElementById('tilt').onclick=()=>{this.setCamera('auto');this.gl.easeTo({pitch:this.gl.getPitch()>20?0:74,duration:reduced?0:400});};
+    document.getElementById('tilt').onclick=()=>{this.setCamera('auto');this.gl.easeTo({pitch:this.gl.getPitch()>20?0:58,duration:reduced?0:400});};
     document.getElementById('zoomIn').onclick=()=>this.gl.zoomIn({duration:reduced?0:250});
     document.getElementById('zoomOut').onclick=()=>this.gl.zoomOut({duration:reduced?0:250});
     this.gl.on('moveend',()=>{if(Date.now()-(this.litAt||0)>180000)this.lighting();});
@@ -261,7 +263,7 @@ class DashboardMap extends Events {
     if(document.hidden)return;const c=this.gl.getCenter(),sun=sunAt(c.lat,c.lng);this.litAt=Date.now();
     const phase=this.light==='auto'?sun.phase:this.light;
     if(force||phase!==this.phase){
-      this.phase=phase;const style=gameStyle(phase,this.lite);this.gl.setSky(style.sky);
+      this.phase=phase;const style=gameStyle(phase,this.lite,this.reliefAvailable!==false);this.gl.setSky(style.sky);
       for(const layer of style.layers)if(this.gl.getLayer(layer.id)){
         for(const [k,v] of Object.entries(layer.paint||{}))this.gl.setPaintProperty(layer.id,k,v);
       }
@@ -275,17 +277,19 @@ class DashboardMap extends Events {
     document.body.dataset.light=phase;this.updateHud();
   }
   updateHud(){
+    document.body.dataset.camera=this.camera;
+    document.querySelector('#compass svg').style.transform='rotate('+(-this.gl.getBearing())+'deg)';
     document.getElementById('compassValue').textContent=String(Math.round((this.gl.getBearing()+360)%360)).padStart(3,'0')+'°';
     document.getElementById('tiltValue').textContent=Math.round(this.gl.getPitch())+'°';
     document.getElementById('zoomValue').textContent='Z'+this.gl.getZoom().toFixed(1);
   }
   report(){if(!this.status)return;const any=this.gl.querySourceFeatures('city',{sourceLayer:'roads'}).length||this.gl.querySourceFeatures('city',{sourceLayer:'water'}).length;
-    this.status(!this.features.visible?'Local details are off.':this.gl.getZoom()<8?'World coastline · zoom in to explore':any?'Local OSM detail · heights are illustrative':'No local detail here · world coastline remains available');}
+    this.status(!this.features.visible?'Map details are off.':this.gl.getZoom()<8?'World coastline · zoom in to explore':any?'OSM detail · heights are illustrative':'No detail available here · world coastline remains visible');}
 }
 function featureSwitches(map,status){
-  const state={visible:true,selected:new Set(['water','landuse','parks','buildings','roads','rail','places']),
-    sync(){for(const l of map.gl.getStyle().layers){if(!l['source-layer'])continue;const feature=l['source-layer'];const effects=['buildings','roof-light','roads-glow'].includes(l.id);const show=this.visible&&this.selected.has(feature)&&!(map.lite&&effects)&&!(map.camera==='map'&&['buildings','roof-light'].includes(l.id));map.gl.setLayoutProperty(l.id,'visibility',show?'visible':'none');}map.report();},
-    setVisible(on){this.visible=on;this.sync();},setFeature(name,on){if(!['water','landuse','parks','buildings','roads','rail','places'].includes(name))return;on?this.selected.add(name):this.selected.delete(name);this.sync();}};
+  const state={visible:true,selected:new Set(['water','landuse','parks','buildings','roads','rail','places','relief']),
+    sync(){for(const l of map.gl.getStyle().layers){const feature=l.source==='relief'?'relief':l['source-layer'];if(!feature)continue;const effects=['buildings','roof-light','roads-glow','relief-color','relief-shade'].includes(l.id);const show=this.visible&&this.selected.has(feature)&&!(map.lite&&effects)&&!(feature==='relief'&&map.reliefAvailable===false)&&!(map.camera==='map'&&['buildings','roof-light'].includes(l.id));map.gl.setLayoutProperty(l.id,'visibility',show?'visible':'none');}map.report();},
+    setVisible(on){this.visible=on;this.sync();},setFeature(name,on){if(!['water','landuse','parks','buildings','roads','rail','places','relief'].includes(name))return;on?this.selected.add(name):this.selected.delete(name);this.sync();}};
   map.status=status;map.features=state;state.sync();return state;
 }
 function peopleDrawing(map){
@@ -307,12 +311,19 @@ function peopleDrawing(map){
 }
 export async function createGameMap(){
   setWorkerCount(2);
-  await setRTLTextPlugin('/vendor/rtl/mapbox-gl-rtl-text.js',false);
-  const gl=new GLMap({container:'map',style:gameStyle(),center:[0,20],zoom:2.2,minZoom:1.2,maxZoom:19,maxPitch:75,attributionControl:{compact:true},pixelRatio:Math.min(window.devicePixelRatio||1,1.5),canvasContextAttributes:{antialias:false},fadeDuration:0,renderWorldCopies:false});
+  await setRTLTextPlugin('/lib/map-assets/rtl/mapbox-gl-rtl-text.js',false);
+  const config=await fetch('/api/map-config').then(r=>r.ok?r.json():{}).catch(()=>({}));
+  const relief=config.relief!==false;
+  const gl=new GLMap({container:'map',style:gameStyle('day',false,relief),center:[0,20],zoom:2.2,minZoom:1.2,maxZoom:19,maxPitch:75,attributionControl:{compact:true},pixelRatio:Math.min(window.devicePixelRatio||1,1.5),canvasContextAttributes:{antialias:false},fadeDuration:0,renderWorldCopies:false});
+  gl.on('styleimagemissing',event=>{if(/^poi-(airport|university|hospital|station|worship|landmark|park|water|peak|bus)$/.test(event.id))gl.addImage(event.id,landmarkImage(event.id.slice(4)));});
   let startupTimer;
   try{await Promise.race([gl.once('load'),new Promise((_,reject)=>{startupTimer=setTimeout(()=>reject(new Error('Map startup timed out')),20000);})]);}catch(error){gl.remove();throw error;}finally{clearTimeout(startupTimer);}
   gl.addImage('windows',windowsImage(),{pixelRatio:1});
-  const map=new DashboardMap(gl);window.livegeoMap=map;
+  for(const kind of ['airport','university','hospital','station','worship','landmark','park','water','peak','bus'])if(!gl.hasImage('poi-'+kind))gl.addImage('poi-'+kind,landmarkImage(kind));
+  const map=new DashboardMap(gl);window.livegeoMap=map;map.reliefAvailable=relief;
+  const toggle=document.querySelector('[data-feature=relief]');toggle.checked=relief;toggle.disabled=!relief;
+  if(!relief)document.getElementById('reliefStatus').textContent='Relief is disabled on this server.';
+  gl.on('error',event=>{if(event.sourceId==='relief'){map.reliefAvailable=false;map.features?.sync();document.getElementById('reliefStatus').textContent='Relief is temporarily unavailable.';}});
   const facade={...BaseL,map:()=>map,tileLayer:()=>new Raster(),circleMarker:(p,o)=>new PointMark(p,o,true),marker:(p,o)=>new PointMark(p,o),divIcon:(o)=>o,
     polyline:(p,o)=>new Shape(p,o),polygon:(p,o)=>new Shape(p,o,true),circle:(p,o)=>new Circle(p,o),tooltip:(o)=>new Tip(o),layerGroup:()=>new Group(),
     control:{scale:()=>({addTo(){gl.addControl(new ScaleControl({maxWidth:140,unit:'metric'}),'bottom-left');return this;}})}};

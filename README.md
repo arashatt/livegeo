@@ -549,10 +549,11 @@ unaffected by it.
 ## The map comes from here
 
 The dashboard is a self-hosted WebGL2 map using **MapLibre GL JS 6.11.1**.
-It has an automatic globe/city camera, a flat north-up Map mode, and Chase
-while you share. Day, golden-hour and night light follow a locally calculated
-sun; Layers can pin a theme or enable Lite mode. Streets glow by hierarchy,
-water is turquoise, parks teal, and buildings have illustrative heights.
+It starts as a flat, north-up **Map** in daylight, following the original map
+poster reference: pink road hierarchy, teal ground, green parks, cyan water,
+a left-hand map key and a compass. **3D · auto** and **Chase** remain optional
+cameras. Layers offers Day, Golden hour, Night, automatic solar light and Lite.
+Buildings are subtle footprints in Map, with illustrative heights in 3D.
 
 The camera initially fits everyone sharing. People, accuracy halos, private
 areas, trail gaps/times, fences and safety actions keep the same server data
@@ -569,14 +570,20 @@ The live-link and shared-path pages continue using their existing Leaflet
 renderers. Their shared drawing files have not changed.
 
 The WebGL map requests **no OSM raster tiles by default**. Natural Earth public
-domain land supplies global coverage. Local detail comes from the optional
-osm2pgsql/PostGIS import. Outside it, the status names the coverage limitation;
-Layers offers the off-by-default OSM raster as additional worldwide coverage.
+domain land supplies global coverage. Detailed geometry uses the optional
+osm2pgsql/PostGIS import first, then adapts the existing cached OpenMapTiles
+source wherever the local tile is empty. The source is OpenFreeMap by default;
+`VECTOR_UPSTREAM=off` disables that fallback. Roads, land cover, buildings,
+place names and selected landmarks retain the same style across regions.
+Layers also offers the off-by-default OSM raster map.
 Classic uses the existing cached `/tiles/{z}/{x}/{y}.png` proxy. Its upstream
 is configured with `TILE_UPSTREAM`; cached tiles survive upstream outages.
 
 All scripts, styles, glyphs, fonts, RTL shaping and land data are committed and
-served from this origin, with licences under `public/vendor/`. See
+served from this origin, with licences under `public/vendor/`. MapLibre, fonts,
+glyphs, RTL and land data use the `/lib/map-assets/` alias so an existing
+Cloudflare Worker with an older `/vendor/` bundle still receives them from
+the app deployment. The alias checks its vendor root and uses ETag revalidation. See
 [asset sources and exact glyph regeneration command](public/vendor/README.md).
 Barlow Condensed and Vazirmatn are OFL fonts. The self-hosted RTL plugin shapes
 Persian, including presentation-form glyphs. There are no CDN, analytics or
@@ -584,13 +591,31 @@ external browser resource requests. OSM attribution remains visible.
 
 ### Styled OpenStreetMap layers
 
-`/carto/{z}/{x}/{y}.mvt` uses `ST_AsMVT`, with the dashboard's authentication,
+`/carto/{z}/{x}/{y}.mvt` uses `ST_AsMVT` locally, with the dashboard's authentication,
 correct vector MIME type, negotiated gzip, private caching and 4096-unit
 geometry with a 192-unit tile buffer. Seven layers: landuse, parks, water,
 buildings, rail, roads and places. Roads include class/name/bridge/tunnel/layer.
 Building heights use validated `height` or `building:levels` hstore tags,
 otherwise stable defaults by building type; heights are labelled illustrative.
-No terrain/elevation is included.
+The worldwide adapter clips/reprojects tiles up to zoom 19 from upstream zoom
+14, preserves polygon holes, caps features before encoding and coalesces/cache
+requests. It uses the same seven layers and never fetches resources from the
+browser. Source outages return valid empty tiles with a short retry delay.
+**Mountain relief** adds stepped elevation colors and shaded ridges/valleys
+from global Mapzen Terrarium tiles. `/relief/{z}/{x}/{y}.png` is authenticated,
+proxied and cached by the app; no browser contacts the data provider. Source
+zoom is capped at 12 and the style begins at zoom 5. Map projection stays flat,
+so privacy areas and point/trail placement use their existing geometry.
+
+`TERRAIN_UPSTREAM` accepts a Terrarium XYZ template or `off`;
+`TERRAIN_MAX_AGE` defaults to 30 days. The default is the public, keyless AWS
+Terrain Tiles dataset. Only valid 256px RGB/RGBA elevation PNGs of at most 1 MiB
+are accepted, redirects are rejected, requests time out after 8 seconds,
+repeated misses back off for a minute and stale tiles remain usable. Requests
+coalesce; the in-memory cache holds 64 tiles and disk pruning runs on writes
+at a 128 MiB / 768-tile target. Lite disables relief rendering. Failures leave
+the map usable and show a status in Layers, rather than inventing elevation.
+Provider credits are linked on-map at `/lib/terrain-credits.html`.
 
 `?layers=roads,water` selects a subset. Omit `layers` for all, `layers=` for none;
 unknown names return 400. Queries keep independent limits: 350 landuse, 500
@@ -1243,6 +1268,8 @@ checks WebGL, both Classic paths, Persian shaping, privacy, SOS, keyboard
 cards, escaping, cameras, layers, idle repaint count and phone legend layout.
 The existing CI/Deploy workflows are unchanged.
 
-[Demo screenshots, measurements and checks](docs/game-map/README.md) use only
+[Current reference implementation and verification](docs/reference-map/README.md) document
+the flat-map correction. Run `node bin/demo-reference.mjs` to reproduce them.
+The [earlier 3D demo and measurements](docs/game-map/README.md) use only
 invented people and a generated city with local Telegram/tile stubs. Run
 `CHROMIUM_PATH=/path/to/chrome npm run demo:game` to reproduce them.

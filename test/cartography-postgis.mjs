@@ -47,12 +47,13 @@ try {
     CREATE EXTENSION IF NOT EXISTS hstore;
     ALTER TABLE planet_osm_polygon ADD COLUMN name text, ADD COLUMN tags hstore;
     ALTER TABLE planet_osm_line ADD COLUMN name text, ADD COLUMN tags hstore, ADD COLUMN bridge text, ADD COLUMN tunnel text, ADD COLUMN layer integer;
-    CREATE TEMP TABLE planet_osm_point (osm_id bigint, way geometry(Geometry,3857), name text, place text, tags hstore);
+    CREATE TEMP TABLE planet_osm_point (osm_id bigint, way geometry(Geometry,3857), name text, place text, tags hstore, amenity text, aeroway text, railway text, leisure text, "natural" text, historic text, tourism text);
     UPDATE planet_osm_line SET name='<img src=x onerror=alert(1)>',bridge='yes',layer=1 WHERE osm_id=2;
     UPDATE planet_osm_polygon SET tags='"height"=>"42 m"'::hstore WHERE osm_id=10;
     UPDATE planet_osm_polygon SET tags='"building:levels"=>"5"'::hstore WHERE osm_id=11;
     UPDATE planet_osm_polygon SET tags='"height"=>"bad", "building:levels"=>"1e8"'::hstore WHERE osm_id=12;
-    INSERT INTO planet_osm_point SELECT 1, ST_Centroid(ST_TileEnvelope(15,100,100)), 'مشهد', 'city', NULL;
+    INSERT INTO planet_osm_point(osm_id,way,name,place,tags) SELECT 1, ST_Centroid(ST_TileEnvelope(15,100,100)), 'مشهد', 'city', NULL;
+    INSERT INTO planet_osm_point(osm_id,way,name,amenity) SELECT 2, ST_Centroid(ST_TileEnvelope(15,100,100)), 'Demo University', 'university';
   `);
   const { rows } = await db.query(CARTOGRAPHY_SQL, [15, 100, 100]);
   const road = rows.find((row) => row.subtype === 'primary');
@@ -82,6 +83,7 @@ try {
   const named=Array.from({length:tile.layers.roads.length},(_,i)=>tile.layers.roads.feature(i).properties).find(p=>p.class==='primary');
   assert.equal(named.name,'<img src=x onerror=alert(1)>');assert.equal(named.bridge,1);assert.equal(named.layer,1);
   assert.equal(tile.layers.places.feature(0).properties.name,'مشهد');
+  assert.equal(tile.layers.places.feature(1).properties.kind,'landmark');assert.equal(tile.layers.places.feature(1).properties.class,'university');
   assert.deepEqual(Object.keys(new VectorTile(new Pbf((await vectors.tile(15,100,100,['roads'])).raw)).layers),['roads']);
   assert.equal((await vectors.tile(15,110,110)).empty,true);
   assert.equal((await vectors.tile(15,25000,25000)).empty,true);
@@ -122,7 +124,7 @@ try {
   await db.query('CREATE EXTENSION IF NOT EXISTS hstore');
   await db.query(`
     TRUNCATE planet_osm_point;
-    INSERT INTO planet_osm_point VALUES
+    INSERT INTO planet_osm_point(osm_id,way,name,place,tags) VALUES
       (1, ST_Transform(ST_SetSRID(ST_MakePoint(9.5227962, 47.1392862), 4326), 3857), 'وادوتس', 'town', 'name:en=>Vaduz'),
       (2, ST_Transform(ST_SetSRID(ST_MakePoint(9.5274876, 47.1069940), 4326), 3857), 'Triesen', 'village', ''),
       (3, ST_Transform(ST_SetSRID(ST_MakePoint(9.5236000, 47.1408000), 4326), 3857), 'Ebenholz', 'neighbourhood', ''),

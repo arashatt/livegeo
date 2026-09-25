@@ -1,5 +1,5 @@
-@font-face{font-family:Barlow;src:url('/vendor/fonts/BarlowCondensed-SemiBold.woff2') format('woff2');font-weight:600;font-display:swap}
-@font-face{font-family:Vazirmatn;src:url('/vendor/fonts/Vazirmatn-Regular.woff2') format('woff2');font-weight:400;font-display:swap}
+@font-face{font-family:Barlow;src:url('/lib/map-assets/fonts/BarlowCondensed-SemiBold.woff2') format('woff2');font-weight:600;font-display:swap}
+@font-face{font-family:Vazirmatn;src:url('/lib/map-assets/fonts/Vazirmatn-Regular.woff2') format('woff2');font-weight:400;font-display:swap}
 :root{--ink:#edf6f3;--paper:#0a1720;--quiet:#b4c7cd;--hairline:#4e6c77;--accent:#ffd68a;--me:#5bc5ff;--me-stale:#b4d4ec;--live:#62efae;--stale:#b6c5ca;--danger:#ff6b78;--place:#b2a1ff}
 body{font-family:Vazirmatn,system-ui,sans-serif;background:#07151e;color:var(--ink)}
 header{height:62px;padding:0 24px;background:#091720;border-bottom:1px solid #57717b;gap:18px;position:relative;z-index:900}
@@ -51,3 +51,30 @@ html{height:100%;overflow:hidden}body{position:fixed;inset:0;width:100%}
 .private-overview{position:absolute;left:24px;top:80px;padding:9px 12px;border:1px solid #92a9b1;background:#0a1c29e8;color:#e7f0e8;z-index:600;font:600 14px Barlow,sans-serif;letter-spacing:.03em;text-transform:uppercase}@media(max-width:760px){.private-overview{left:12px;top:126px;max-width:230px;font-size:12px}}
 .maplibregl-ctrl-attrib-button{background-repeat:no-repeat;background-position:center;background-size:24px 24px}
 @media(max-width:760px){.maplibregl-ctrl-attrib-button{top:auto;bottom:0}.maplibregl-ctrl-attrib.maplibregl-compact{padding-right:44px}.maplibregl-ctrl-attrib.maplibregl-compact-show{padding-right:44px}}
+
+/* A map poster composition: title and key at left, controls at right. */
+header{background:#072732;border-bottom-color:#397583;height:56px;padding:0 24px}
+header:after{height:2px;background:#f880ce}.brand h1{font-size:24px;color:#f6f1e9}.brand:after{content:'LIVE ATLAS';color:#91cbd0}.brand{gap:14px}
+.map-toolbar{left:auto;right:24px;top:20px}.map-toolbar .ghost{background:#083443f2;border-color:#5a919c;box-shadow:0 4px 14px #00202a40}
+.camera-select{top:78px;right:24px;gap:8px}.camera-select select{background:#083443f2;border-color:#5a919c}
+.game-controls{top:142px}.game-controls button{background:#083443eF;border-color:#5a919c}.game-controls #compass{position:relative;height:82px;display:flex;flex-direction:column;align-items:center;gap:0;border-color:transparent;background:none;color:#f78bce;text-shadow:0 1px 4px #00202a}
+#compass svg{height:44px;width:44px;order:1;filter:drop-shadow(0 1px 2px #00202a)}#compass span{font-size:19px;line-height:19px}#compass small{order:2;font-size:10px}
+.district-hud{left:28px;right:auto;top:30px;bottom:auto;text-align:left;text-shadow:0 2px 3px #07313c,0 0 15px #07313c;max-width:330px}
+.district-hud .eyebrow{color:#b4d9d7;font-size:12px;letter-spacing:.18em}.district-hud strong{font-size:44px;line-height:1.05;color:#fff2f5;margin-top:5px;letter-spacing:.02em}.district-hud #lightReadout{color:#f5a7d4;font-size:12px;margin-top:9px}
+.cartography-key{position:absolute;left:28px;top:174px;width:182px;padding:16px 17px;background:#063343eF;border:1px solid #4a8e9d;border-radius:7px;z-index:600;color:#e6f0ed;box-shadow:0 6px 20px #00344330}
+.cartography-key h2{font:600 15px Barlow,sans-serif;letter-spacing:.13em;text-transform:uppercase;padding-bottom:10px;margin-bottom:8px;border-bottom:1px solid #396573;color:#f3a8d4}
+.cartography-key div{display:flex;align-items:center;gap:12px;min-height:29px;font-size:11px;white-space:nowrap}.cartography-key i{display:block;width:24px;flex:none;border-top:3px solid #f2b8d0}.cartography-key .key-highway{border-top:4px solid #fa69c0}.cartography-key .key-minor{border-top:2px solid #c6d5d4}.cartography-key .key-rail{border-top:2px dashed #dae0db}.cartography-key .key-area{height:12px;border:1px solid #96bfc280}.key-urban{background:#7b81a3}.key-park{background:#2b956a}.key-terrain{background:#bfa075}.key-water{background:#16a9c4}.cartography-key p{font-size:10px;line-height:1.7;color:#a3c8ce;margin-top:12px}
+.people-panel,.layers-panel{left:auto;right:24px;top:78px;z-index:820}.people-panel{max-height:calc(100% - 125px)}.people-panel,.detail-panel,.layers-panel,#circle{border-color:#578693;border-top-color:#e4a0c9;border-radius:5px;background:#082c3af7}.detail-panel{top:78px;z-index:825}.panel-heading strong,.detail-head span,.layers-title,.layer-features legend{color:#f1b4d9}
+#radar{left:auto;right:24px;bottom:40px;width:166px;background:#073444;border-color:#508e9b;border-radius:5px;box-shadow:0 4px 20px #001e2c50}#radarCanvas{width:156px;height:156px}#radarCaption{font-size:11px;color:#d0e8e5;border-color:#477985}
+#mapLegend{left:28px;right:auto;bottom:52px;width:182px;background:#073443f5;border-color:#508e9b;border-top-color:#e4a0c9;border-radius:5px}#mapLegend summary{font-size:14px;padding:12px}#mapLegend[open]{width:256px}#mapLegend .legend-body{font-size:11px}
+.private-overview{top:130px;left:28px;max-width:300px;background:#083443eF;border-color:#6b9ca5;font-size:12px}.maplibregl-ctrl-scale{background:#083443d9;border-color:#e8eae0;color:#f2f3e6}
+@media(max-width:1100px) and (min-width:761px){.district-hud{max-width:240px}.district-hud strong{font-size:35px}.brand:after{display:none}}
+@media(max-height:700px) and (min-width:761px){.cartography-key{top:155px;padding:11px 16px}.cartography-key div{min-height:24px}.cartography-key p{display:none}.district-hud{top:25px}.district-hud strong{font-size:36px}}
+@media(max-width:760px){
+ header{height:56px;padding:0 12px}.brand h1{font-size:22px}.brand:after{display:none}.cartography-key{display:none}
+ .map-toolbar{left:12px;right:auto;top:12px}.camera-select{top:68px;left:12px;right:auto}.game-controls{top:68px;right:12px}.game-controls #compass{height:76px}
+ .district-hud{top:132px;left:14px;right:auto;bottom:auto;max-width:240px}.district-hud .eyebrow{font-size:10px}.district-hud strong{font-size:28px;max-width:240px;margin-top:4px}.district-hud #lightReadout{font-size:10px;margin-top:6px}
+ .people-panel{left:8px;right:8px;top:auto;bottom:8px;max-height:40%}.layers-panel{left:8px;right:8px;top:66px}.detail-panel{top:auto;bottom:8px}.private-overview{left:14px;top:227px;max-width:240px;font-size:11px}
+ #radar{right:12px;left:auto;bottom:48px;width:138px}#radarCanvas{width:128px;height:128px}#radarCaption{font-size:10px}
+ #mapLegend{left:12px;right:auto;bottom:48px;width:150px}#mapLegend summary{font-size:12px}#mapLegend[open]{left:0;right:0;bottom:0;width:auto;border-radius:0;z-index:790}.maplibregl-ctrl-bottom-left{left:12px}
+}

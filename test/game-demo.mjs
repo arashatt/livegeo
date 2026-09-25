@@ -4,6 +4,8 @@ import {once} from 'node:events';
 import {readFile} from 'node:fs/promises';
 import {gzipSync} from 'node:zlib';
 import {staticFile} from '../src/server.js';
+import {terrainFixture} from './terrain-fixture.mjs';
+import {parseTerrainPath} from '../src/tile-path.js';
 import {parseVectorPath} from '../src/tile-path.js';
 import geojsonvt from 'geojson-vt';
 import vtpbf from 'vt-pbf';
@@ -32,6 +34,30 @@ export function demoFeatures(){
     data.buildings.push(rect(w,s,w+.00070,s+.00077,{class:'apartments',height:h,name:''}));
   }
   for(const [name,x,y,c] of [['BAY DISTRICT',-80.143,25.792,'suburb'],['PALM QUARTER',-80.16,25.777,'suburb'],['مشهد',-80.134,25.785,'neighbourhood']])data.places.push(feature({type:'Point',coordinates:[x,y]},{name,class:c}));
+  // A wider invented region makes the reference's city-scale hierarchy visible.
+  // Curves, parcels and labels here are fixtures, never production geography.
+  const point=(u,v)=>[-80.157+u*.071,25.785+v*.062];
+  const blob=(cx,cy,rx,ry,seed)=>Array.from({length:48},(_,i)=>{const a=i*Math.PI/24,r=1+.055*Math.sin(a*7+seed)+.025*Math.cos(a*11);return point(cx+Math.cos(a)*rx*r,cy+Math.sin(a)*ry*r);});
+  data.landuse.unshift(polygon(blob(0,0,1,.91,2),{class:'urban'}));
+  for(let i=0;i<16;i++){
+    const a=i*2.4,r=.36+(i%4)*.18,x=Math.cos(a)*r,y=Math.sin(a)*r;
+    data.parks.push(polygon(blob(x,y,.045+(i%3)*.015,.04+(i%2)*.035,i),{class:i%3?'park':'wood'}));
+  }
+  data.parks.push(polygon(blob(-.86,.7,.32,.35,3),{class:'wood'}));
+  data.landuse.push(polygon(blob(-.85,-.53,.2,.12,1),{class:'airport'}),polygon(blob(-1.05,.24,.17,.28,2),{class:'terrain'}));
+  // Neighbourhood streets vary gently in angle; major rings and radials connect them.
+  for(let k=-35;k<=35;k++)for(const vertical of [false,true]){
+    const v=k/38,edge=Math.sqrt(Math.max(0,1-v*v))*.96,pts=[];
+    for(let i=0;i<=20;i++){const u=-edge+i*edge/10,w=v+.025*Math.sin(u*5+v*3);pts.push(point(vertical?w:u,vertical?u:w));}
+    data.roads.push(line(pts,{class:k%9===0?'secondary':k%4===0?'tertiary':'residential',name:k%9===0?'GARDEN AVENUE':''}));
+  }
+  for(const [r,kind] of [[.55,'primary'],[1,'motorway']])data.roads.push(line([...blob(0,0,r,r*.91,1),blob(0,0,r,r*.91,1)[0]],{class:kind,name:kind==='motorway'?'BAY RING':'CENTRAL DRIVE'}));
+  for(let j=0;j<7;j++){const a=j*Math.PI*2/7;data.roads.push(line(Array.from({length:24},(_,i)=>{const r=i/18;return point(Math.cos(a)*r+Math.sin(r*3)*.035,Math.sin(a)*r);}),{class:'primary',name:j===3?'UNIVERSITY AVENUE':''}));}
+  data.water.push(polygon(blob(.94,.33,.13,.21,1),{class:'area'}));
+  data.water.push(line(Array.from({length:80},(_,i)=>point(-1.3+i*.035,.58+Math.sin(i*.09)*.16)),{class:'river'}));
+  data.rail.push(line(Array.from({length:40},(_,i)=>point(-1.2+i*.064,-.64+Math.sin(i*.08)*.17)),{class:'rail'}));
+  for(const [name,x,y,c] of [['WEST GARDENS',-.58,.38,'suburb'],['NORTHBANK',.12,.57,'suburb'],['OLD TOWN',-.56,-.32,'suburb'],['SOUTH BAY',.1,-.65,'suburb']])data.places.push(feature({type:'Point',coordinates:point(x,y)},{name,class:c,kind:'place'}));
+  for(const [name,x,y,c] of [['Bay University',-.46,.1,'university'],['Central Station',.13,-.48,'station'],['Regional Airport',-.85,-.53,'airport'],['Civic Hospital',.45,.44,'hospital'],['Garden Monument',-.12,.25,'landmark']])data.places.push(feature({type:'Point',coordinates:point(x,y)},{name,class:c,kind:'landmark'}));
   return data;
 }
 export function demoPeople(){
@@ -44,19 +70,22 @@ export function demoPeople(){
     {id:'5',name:'Jamie · private',latitude:25.787,longitude:-80.151,accuracy:220,hidden:true,liveUntil:now+3000,at:now-25,trail:[...path(-80.154,25.783,.0003,.0004),{latitude:25.7838,longitude:-80.1536,at:now-5,gap:true}]},
   ];
 }
-export async function startDemo(){
-  const data=demoFeatures(),indexes=Object.fromEntries(Object.entries(data).map(([key,features])=>[key,geojsonvt({type:'FeatureCollection',features},{maxZoom:19,indexMaxZoom:6,tolerance:1,extent:4096,buffer:192})]));
-  let people=demoPeople();const streams=new Set(),requests=[],mutations=[];
+export async function startDemo({features=demoFeatures(),positions=demoPeople(),elevation=null,district='Bay District'}={}){
+  const data=features,indexes=Object.fromEntries(Object.entries(data).map(([key,features])=>[key,geojsonvt({type:'FeatureCollection',features},{maxZoom:19,indexMaxZoom:6,tolerance:1,extent:4096,buffer:192})]));
+  let people=positions;const streams=new Set(),requests=[],mutations=[];
   const server=createServer(async(req,res)=>{
     const url=new URL(req.url,'http://localhost');requests.push(url.pathname+url.search);
     const json=(d)=>{res.setHeader('content-type','application/json');res.end(JSON.stringify(d));};
+    const relief=parseTerrainPath(url.pathname);
+    if(relief){const bytes=elevation?(await elevation.get(relief))?.bytes:terrainFixture(relief);if(!bytes){res.writeHead(503);return res.end('relief unavailable');}res.writeHead(200,{'content-type':'image/png'});return res.end(bytes);}
+    if(url.pathname==='/api/map-config')return json({relief:true});
     if(url.pathname==='/api/me')return json({id:'1',admin:true,circles:true,live:true,sos:true,checks:true,sosCall:'110 (police) or 115 (ambulance)'});
     if(url.pathname==='/api/positions')return json({people});
     if(url.pathname==='/api/stream'){
       res.writeHead(200,{'content-type':'text/event-stream','cache-control':'no-store'});res.write('event: hello\ndata: '+JSON.stringify({people})+'\n\n');streams.add(res);req.on('close',()=>streams.delete(res));return;
     }
     if(url.pathname.startsWith('/api/person/')){const p=people.find((p)=>p.id===url.pathname.split('/').pop());return json({id:p?.id,name:p?.name||'Demo',username:'',photo:false});}
-    if(url.pathname==='/api/place')return json({place:'Bay Drive, Bay District'});
+    if(url.pathname==='/api/place')return json({place:'In view, '+district});
     if(url.pathname.startsWith('/api/history/'))return json({points:people.find((p)=>p.id===url.pathname.split('/').pop())?.trail||[]});
     if(url.pathname==='/api/fences'&&req.method==='GET')return json({fences:[{id:1,name:'Meeting point',ring:[[25.775,-80.143],[25.775,-80.139],[25.778,-80.139],[25.778,-80.143]]}]});
     if(url.pathname==='/api/zones'&&req.method==='GET')return json({zones:[{id:1,name:'Home',latitude:25.780,longitude:-80.154,radius:210}]});

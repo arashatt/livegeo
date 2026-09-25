@@ -8,7 +8,7 @@ For the UI/UX designer taking over the look and feel of livegeo. This document c
 - what is known to be wrong or missing;
 - how to work with the code.
 
-Original handoff: 23 September 2026. Dashboard renderer/vocabulary/constraints updated for the WebGL redesign on 24 September 2026. Historical screenshots below describe the earlier UI; current demo views are in [game-map](game-map/README.md).
+Original handoff: 23 September 2026. Dashboard renderer/vocabulary/constraints updated for the WebGL redesign on 24 September 2026. Historical screenshots below describe the earlier UI; current reference implementation notes are in [reference-map](reference-map/README.md). The [game-map](game-map/README.md) captures are historical.
 
 Screenshots are in [`docs/design-handoff/`](design-handoff/). They were taken on a local copy with made-up people (Leo, May, Kai) and **placeholder map tiles** (the grid city). The current dashboard styles its local OSM geometry itself; the raster street map is optional.
 
@@ -415,7 +415,8 @@ pages use Leaflet. Meanings and server privacy decisions are shared.
 | Your private place | Ground area, dashed purple rim, “Private · name” | Only the server-authorised owner data is drawn |
 | Fence | Purple polygon and name below people/trails | Click/delete and placement/Esc flows retained |
 | Spotlight | Others and the ground dim; selected trail lights | Empty-map click clears; people remain above buildings |
-| Buildings | Extrusions with roof highlights; lit window pattern at night | Heights are illustrative; tags then stable type defaults |
+| Mountain relief | Stepped green-to-tan elevation tint and shaded ridges from real DEM tiles | Flat cartographic shading; no terrain mesh moves people or privacy areas |
+| Buildings | Flat footprints by default; optional 3D roof highlights and night windows | Heights are illustrative; tags then stable type defaults |
 | Radar | Flat heading-up map around self or a spotlight point; edge-clamped points | Hidden without a point centre; private people omitted; no extra tile stream |
 
 The collapsed legend sits below cards. On a 390px phone it opens in reserved
@@ -429,9 +430,10 @@ subpixel veils or their name chips from reading as precise world-scale pins.
 ## 5. The visual language today (dashboard)
 
 `public/lib/game-map.css` defines the dashboard HUD; shared Leaflet files and
-other pages keep their existing appearance. The HUD has thin bright edges,
-clipped corners, inline original SVG icons, condensed uppercase Latin type,
-and amber-to-pink accents. Body/Persian text uses Vazirmatn without spacing.
+other pages keep their existing appearance. The original reference now guides
+the dashboard: a flat map with title/key at left, controls and compass at right,
+and a small optional radar. Teal panels have thin cyan borders and pink accents.
+Latin headings use Barlow Condensed; body/Persian text uses Vazirmatn without spacing.
 
 | Token | Dashboard value | Role |
 |---|---|---|
@@ -445,15 +447,18 @@ and amber-to-pink accents. Body/Persian text uses Vazirmatn without spacing.
 
 State marks have contrasting pale and dark outlines. Red/red-orange ground
 is reserved for SOS; purple ground for places. Sky/HUD may be warm or violet.
-Road hierarchy uses pale pink/magenta, turquoise water, deep teal parks and
-muted pastel buildings. Pin Day / Golden hour / Night or follow locally
-computed solar elevation. Lighting checks run at three-minute intervals.
+Road hierarchy uses pale pink/magenta, cyan water, green parks/woodland and
+muted blue/periwinkle urban fills; purple ground remains reserved for private places/fences.
+Day is the default. Pin Golden hour / Night or follow locally computed solar
+elevation. Lighting checks run at three-minute intervals.
 
-Auto switches from globe to a tilted city with zoom. Map is flat, north-up,
-Mercator. Chase requires a visible sharing self, uses heading-up, and becomes
+Map is the default: flat, north-up, Mercator. Optional 3D · auto switches
+from globe to a city with at most 58 degrees of automatic tilt. Chase requires a visible sharing self, uses heading-up, and becomes
 north-up when heading is unknown. Lite removes sky, extrusion and road glow.
 Camera changes are immediate under reduced motion; ordinary transitions are
-short and finite. No continuous decorative animation or idle map repaint loop.
+short and finite. Mountain relief uses a stepped elevation ramp beneath land use,
+parks, water and roads, plus directional hillshade. Lite disables it. No
+continuous decorative animation or idle map repaint loop.
 Phone pixel ratio is capped at 1.5, antialiasing is off, and the radar initially
 defaults off on narrow screens. See [demo measurements](game-map/README.md)
 for the software-rendering stress result and the physical-device follow-up.
@@ -610,7 +615,9 @@ These are product decisions about privacy and safety. Changing one is a conversa
 
 MapLibre 6.11.1 (BSD-3), the RTL plugin (BSD-2 + ICU), OFL Barlow/Vazirmatn
 fonts and glyphs, and public-domain Natural Earth land are vendored with
-licences. There are no third-party runtime resources. Source links and exact
+licences. `/lib/map-assets/` resolves within that vendor directory, with
+ETag revalidation, so the app deploy also updates assets through an existing
+Worker. There are no third-party browser runtime resources. Source links and exact
 regeneration commands: [`public/vendor/README.md`](../public/vendor/README.md).
 Run `npm ci && npm run glyphs` to regenerate committed glyph PBFs, including
 Arabic presentation forms. Real “مشهد” and “تهران” shaping is browser-tested.
@@ -618,11 +625,25 @@ Arabic presentation forms. Real “مشهد” and “تهران” shaping is b
 Natural Earth 1:110m provides global land/coastline, including outside the
 regional import. Local authenticated `/carto/z/x/y.mvt` tiles use `ST_AsMVT`,
 4096 extent, 192 buffer, independent feature budgets and bounded/coalesced
-caching. Gzip is negotiated; empty/no-import tiles remain valid. SVG tiles
+caching. Empty local tiles fall back to the configured/cached worldwide
+OpenMapTiles source via `src/world-vector.js`, retaining bounds, holes and
+layer/feature limits while overzooming from source zoom 14. Selected world POIs
+use original neutral icons; medical facilities never use SOS red. Gzip is
+negotiated; unavailable tiles remain valid empty MVT. SVG tiles
 stay available to Classic. Raster `/tiles/` is off by default in WebGL. Classic keeps its worldwide
 server-side vector-to-SVG fallback and district-name service. The GPX dialog
 keeps a separate Leaflet preview, including when the dashboard uses WebGL.
 The existing sign-in widget exception in §8.2 remains outside this dashboard.
+
+`/relief/z/x/y.png` serves cached 256px Mapzen Terrarium DEMs, capped at source
+zoom 12, through the same dashboard authentication. `TERRAIN_UPSTREAM=off`
+disables them; the client reads `/api/map-config`. The cache enforces PNG/size
+validation, an 8-second timeout, coalescing, minute-long failure backoff, stale
+fallback, 64 in-memory tiles and periodic disk pruning to 128 MiB / 768 tiles.
+Credits for each provider are available via the on-map terrain link. Relief
+is drawn by color-relief/hillshade layers, never `setTerrain()`, preserving the
+projection and privacy/occlusion rules for overlays. Local POI nodes and world
+vector POIs add neutral original landmarks; red stays reserved for SOS.
 
 Road text is symbol-placed along lines; district/place symbols collide rather
 than overlap. Labels are strings to the renderer, never injected HTML. Any

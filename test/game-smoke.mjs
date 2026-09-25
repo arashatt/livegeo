@@ -19,9 +19,16 @@ async function open(extra=[]){
   return page;
 }
 try{
-  let page=await open();await page.goto(demo.origin);
+  let page=await open();
+  // Production's existing Worker owns /vendor; new assets must work via the origin alias.
+  await page.route('**/vendor/**',route=>route.request().url().includes('/leaflet/')?route.continue():route.abort());
+  await page.goto(demo.origin);
   await page.waitForFunction(()=>document.body.dataset.renderer==='game'&&document.querySelectorAll('.game-blip').length===4,{},{timeout:30000});
-  await page.evaluate((center)=>window.livegeoMap.gl.jumpTo({center,zoom:16,bearing:15,pitch:70}),demoCenter);
+  assert.equal(await page.locator('#cameraMode').inputValue(),'map');
+  assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getPitch()),0,'reference map is flat by default');
+  assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayoutProperty('buildings','visibility')),'none');
+  await page.locator('#cameraMode').selectOption('auto');
+  await page.evaluate((center)=>window.livegeoMap.gl.jumpTo({center,zoom:16,bearing:15,pitch:58}),demoCenter);
   await page.waitForFunction(()=>window.livegeoMap.gl.areTilesLoaded());
   assert.equal(demo.requests.filter(r=>r.startsWith('/tiles/')).length,0,'WebGL never asks for raster by default');
   assert.ok(await page.locator('.veil-ground').count()>=2);
@@ -29,9 +36,11 @@ try{
   assert.equal(await page.locator('.game-blip.sos').count(),1);
   assert.equal(await page.locator('.game-blip.self.arrow').count(),1);
   assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayer('buildings').type),'fill-extrusion');
+  assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayer('relief-shade').type),'hillshade');
+  assert.equal(await page.evaluate(()=>Boolean(window.livegeoMap.gl.getTerrain())),false,'relief never moves privacy overlays onto a 3D terrain mesh');
   assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getCanvas().getContext('webgl2')!==null),true);
   // Real shaping and the committed presentation-form glyphs are exercised, not just plugin download.
-  const shaped=await page.evaluate(async()=>{await import('/vendor/rtl/mapbox-gl-rtl-text.js');const plugin=await window['mapbox-gl-rtl-text'];const text=plugin.applyArabicShaping('مشهد تهران');return plugin.processBidirectionalText(text,[])[0];});
+  const shaped=await page.evaluate(async()=>{await import('/lib/map-assets/rtl/mapbox-gl-rtl-text.js');const plugin=await window['mapbox-gl-rtl-text'];const text=plugin.applyArabicShaping('مشهد تهران');return plugin.processBidirectionalText(text,[])[0];});
   assert.match(shaped,/[\ufb50-\ufeff]/);assert.notEqual(shaped,'مشهد تهران');
   await page.locator('.game-blip.self').focus();await page.keyboard.press('Enter');
   await page.waitForSelector('#detailPanel:not([hidden])');assert.match(await page.locator('#detailPanel').innerText(),/Alex/);
@@ -62,7 +71,8 @@ try{
   await page.waitForSelector('.game-blip.self');await page.locator('.game-blip.self').click();assert.equal(await page.locator('#detailPanel img[src=x]').count(),0);assert.equal(await page.evaluate(()=>window.INJECTED),undefined);await page.locator('#detailclose').click();
   await page.locator('#layersbtn').click();await page.locator('#lightMode').selectOption('night');
   assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getPaintProperty('buildings','fill-extrusion-pattern')),'windows');
-  await page.locator('#liteMode').check();assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayoutProperty('buildings','visibility')),'none');await page.locator('#liteMode').uncheck();
+  await page.locator('[data-feature=relief]').uncheck();assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayoutProperty('relief-color','visibility')),'none');await page.locator('[data-feature=relief]').check();
+  await page.locator('#liteMode').check();assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayoutProperty('relief-shade','visibility')),'none');assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayoutProperty('buildings','visibility')),'none');await page.locator('#liteMode').uncheck();
   await page.locator('[data-feature=roads]').uncheck();assert.equal(await page.evaluate(()=>window.livegeoMap.gl.getLayoutProperty('roads','visibility')),'none');await page.locator('[data-feature=roads]').check();
   await page.locator('[data-layer=trails]').uncheck();await page.locator('[data-layer=trails]').check();
   await page.locator('#layersbtn').click();
@@ -92,7 +102,7 @@ try{
   assert.equal(await page.locator('.leaflet-marker-icon.veil-chip').count(),1);
   await browser.close();browser=null;
   // A constructor failure after successful feature detection must also fall back.
-  page=await open();await page.route('**/vendor/maplibre/maplibre-gl.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function setWorkerCount(){};export async function setRTLTextPlugin(){};export class ScaleControl{};export class Map{constructor(){throw new Error("GPUInitializationError")}}'}));
+  page=await open();await page.route('**/lib/map-assets/maplibre/maplibre-gl.mjs',route=>route.fulfill({contentType:'text/javascript',body:'export function setWorkerCount(){};export async function setRTLTextPlugin(){};export class ScaleControl{};export class Map{constructor(){throw new Error("GPUInitializationError")}}'}));
   await page.goto(demo.origin);await page.waitForFunction(()=>document.body.dataset.renderer==='classic');assert.match(await page.locator('#rendererNote').innerText(),/could not start/);
   await browser.close();browser=null;
   page=await open(['--disable-3d-apis']);await page.goto(demo.origin);await page.waitForFunction(()=>document.body.dataset.renderer==='classic'&&document.querySelectorAll('#list .person').length===5);

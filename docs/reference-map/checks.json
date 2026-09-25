@@ -1,0 +1,30 @@
+{
+  "screenshots": [
+    {
+      "name": "desktop-atlas.jpg",
+      "bytes": 248972
+    },
+    {
+      "name": "desktop-streets.jpg",
+      "bytes": 150728
+    },
+    {
+      "name": "desktop-layers.jpg",
+      "bytes": 148581
+    },
+    {
+      "name": "phone-atlas.jpg",
+      "bytes": 80964
+    },
+    {
+      "name": "phone-streets.jpg",
+      "bytes": 56608
+    },
+    {
+      "name": "phone-legend.jpg",
+      "bytes": 58994
+    }
+  ],
+  "consoleErrors": [],
+  "externalRequests": []
+}

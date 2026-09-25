@@ -1,0 +1,12 @@
+{
+  "source": "Mapzen Terrain Tiles / USGS elevation near Mashhad",
+  "center": [
+    59.47,
+    36.34
+  ],
+  "zoom": 10.8,
+  "contains": "Elevation only; no OSM street snapshot or production locations",
+  "terrainTiles": 35,
+  "bytes": 159888,
+  "errors": []
+}

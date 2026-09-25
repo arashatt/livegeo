@@ -525,7 +525,7 @@
   @media (prefers-reduced-motion:reduce){ .district{transition:none} }
 
 </style>
-<link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css">
+<link rel="stylesheet" href="/lib/map-assets/maplibre/maplibre-gl.css">
 <link rel="stylesheet" href="/lib/game-map.css">
 </head>
 <body>
@@ -550,16 +550,28 @@
       <button class="ghost" id="recentre" type="button" hidden><svg class="hud-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><path d="M12 1v5m0 12v5M1 12h5m12 0h5"/></svg>Recentre</button>
     </div>
 
-    <label class="camera-select game-only">Camera <select id="cameraMode"><option value="auto">Auto</option><option value="map">Map</option><option value="chase" disabled>Chase</option></select></label>
+    <label class="camera-select game-only">Camera <select id="cameraMode"><option value="map">Map</option><option value="auto">3D · auto</option><option value="chase" disabled>Chase</option></select></label>
     <div class="game-controls game-only" aria-label="Camera controls">
-      <button id="compass" type="button" aria-label="Face north">N<small id="compassValue">000°</small></button>
+      <button id="compass" type="button" aria-label="Face north"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 2 25 15 38 20 25 25 20 38 15 25 2 20 15 15Z" fill="#fb7dce"/><path d="M20 2 20 20 2 20 15 15ZM20 20 38 20 25 25 20 38Z" fill="#0b3246"/></svg><span>N</span><small id="compassValue">000°</small></button>
       <button id="tilt" type="button" aria-label="Toggle tilt">TILT<small id="tiltValue">0°</small></button>
       <div class="zoom-pair"><button id="zoomIn" type="button" aria-label="Zoom in">+</button><button id="zoomOut" type="button" aria-label="Zoom out">−</button></div><span id="zoomValue">Z3</span>
     </div>
     <div id="privateOverview" class="private-overview game-only" role="status" hidden></div>
-    <div class="district-hud game-only"><span class="eyebrow">In view</span><strong id="districtReadout">Your world</strong><span id="lightReadout">Sun · Auto</span></div>
+    <div class="district-hud game-only"><span class="eyebrow">Live atlas / in view</span><strong id="districtReadout">Your world</strong><span id="lightReadout">Day</span></div>
+    <section class="cartography-key game-only" aria-label="Cartography legend">
+      <h2>Map key</h2>
+      <div><i class="key-highway"></i>Highway</div>
+      <div><i class="key-main"></i>Main road</div>
+      <div><i class="key-minor"></i>Minor road</div>
+      <div><i class="key-rail"></i>Railway</div>
+      <div><i class="key-area key-urban"></i>Urban area</div>
+      <div><i class="key-area key-park"></i>Park / woodland</div>
+      <div><i class="key-area key-terrain"></i>Mountain relief</div>
+      <div><i class="key-area key-water"></i>Water</div>
+      <p>Names and landmarks<br>from OpenStreetMap</p>
+    </section>
     <section id="radar" aria-label="Radar, approximate point positions" class="game-only" hidden><canvas id="radarCanvas" width="216" height="216" aria-hidden="true"></canvas><span id="radarCaption"></span></section>
-    <details id="mapLegend"><summary>Map legend</summary><div class="legend-body">
+    <details id="mapLegend"><summary>People &amp; privacy</summary><div class="legend-body">
       <div class="legend-row"><i class="legend-symbol" style="--symbol:#5bc5ff"></i>You · arrow when moving</div>
       <div class="legend-row"><i class="legend-symbol" style="--symbol:#b4d4ec"></i>You · not live Ⅱ</div>
       <div class="legend-row"><i class="legend-symbol" style="--symbol:#62efae"></i>Sharing live</div>
@@ -569,7 +581,7 @@
       <div class="legend-row"><i class="legend-path"></i>Trail · gaps stay hidden</div>
       <div class="legend-row"><i class="legend-symbol private"></i>Purple rim · your place</div>
       <p>Halos show reported accuracy. A fan or arrow shows a recent heading. Purple outlines mark fences. ≈ means an estimated time; faded trail ends have no pins.</p>
-      <p class="game-only">Building heights are illustrative. Radar excludes private people. Local detail follows the available OSM import.</p>
+      <p class="game-only">3D building heights are illustrative. Radar excludes private people.</p>
     </div></details>
     <aside class="people-panel" id="peoplePanel" aria-label="People">
       <div class="panel-heading">
@@ -584,8 +596,8 @@
 
     <section class="layers-panel" id="layersPanel" aria-label="Map layers" hidden>
       <div class="layers-title">Your world</div>
-      <label class="settings-row">Renderer <select id="rendererMode"><option value="game">3D map</option><option value="classic">Classic map</option></select></label>
-      <p class="layer-note" id="rendererNote">Self-hosted map · no outside requests</p>
+      <label class="settings-row">Renderer <select id="rendererMode"><option value="game">Vector map</option><option value="classic">Classic map</option></select></label>
+      <p class="layer-note" id="rendererNote">Roads, places and live updates</p>
       <div class="game-only">
         <label class="settings-row">Light <select id="lightMode"><option value="auto">Auto · sun</option><option value="day">Day</option><option value="golden">Golden hour</option><option value="night">Night</option></select></label>
         <label class="layer-option"><input id="radarToggle" type="checkbox"><span>Radar</span><small>Points only</small></label>
@@ -593,19 +605,21 @@
       </div><hr class="settings-divider">
       <div class="layers-title">Map layers</div>
       <label class="layer-option"><input type="checkbox" data-layer="raster" checked><span>OSM raster map</span><small>Worldwide</small></label>
-      <label class="layer-option"><input type="checkbox" data-layer="cartography" checked><span>Local map details</span></label>
+      <label class="layer-option"><input type="checkbox" data-layer="cartography" checked><span>Styled map</span></label>
       <p class="layer-note layer-status" id="cartographyStatus" role="status">Zoom in for styled map details.</p>
+      <label class="layer-option game-only"><input type="checkbox" data-feature="relief" checked><i class="map-swatch" style="--swatch:#b6a07a" aria-hidden="true"></i><span>Mountain relief</span></label>
+      <p class="layer-note game-only" id="reliefStatus">Elevation shading · ridges and valleys</p>
       <fieldset class="layer-features" id="cartographyFeatures">
         <legend>Map features</legend>
         <label class="layer-option"><input type="checkbox" data-feature="roads" checked><i class="map-swatch roads" aria-hidden="true"></i><span>Roads &amp; highways</span></label>
         <label class="layer-option"><input type="checkbox" data-feature="rail" checked><i class="map-swatch rail" aria-hidden="true"></i><span>Railways</span></label>
-        <label class="layer-option"><input type="checkbox" data-feature="landuse" checked><i class="map-swatch" style="--swatch:linear-gradient(90deg,#334749 50%,#b79b78 50%)" aria-hidden="true"></i><span>Urban areas &amp; terrain</span></label>
-        <label class="layer-option"><input type="checkbox" data-feature="parks" checked><i class="map-swatch" style="--swatch:#4b967e" aria-hidden="true"></i><span>Parks &amp; woodland</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="landuse" checked><i class="map-swatch" style="--swatch:linear-gradient(90deg,#7b81a3 50%,#b6a07a 50%)" aria-hidden="true"></i><span>Urban areas &amp; terrain</span></label>
+        <label class="layer-option"><input type="checkbox" data-feature="parks" checked><i class="map-swatch" style="--swatch:#2b956a" aria-hidden="true"></i><span>Parks &amp; woodland</span></label>
         <label class="layer-option"><input type="checkbox" data-feature="water" checked><i class="map-swatch" style="--swatch:#1caaca" aria-hidden="true"></i><span>Water</span></label>
         <label class="layer-option"><input type="checkbox" data-feature="buildings" checked><i class="map-swatch" style="--swatch:#8a9b99" aria-hidden="true"></i><span>Buildings</span><small>Street zoom</small></label>
-        <label class="layer-option game-only"><input type="checkbox" data-feature="places" checked><span>Place &amp; district names</span></label>
+        <label class="layer-option game-only"><input type="checkbox" data-feature="places" checked><span>Place names &amp; landmarks</span></label>
       </fieldset>
-      <p class="layer-note">Detailed streets and buildings depend on the local OSM import. OSM raster has separate features and labels.</p>
+      <p class="layer-note">Detail varies with OpenStreetMap coverage and zoom. OSM raster has separate features and labels.</p>
       <div class="layers-title">Live overlays</div>
       <label class="layer-option"><input type="checkbox" data-layer="trails" checked><span>Movement trails</span></label>
       <label class="layer-option"><input type="checkbox" data-layer="fences" checked><span>Geofences</span></label>

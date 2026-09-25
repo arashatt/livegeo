@@ -1,4 +1,7 @@
-# Dashboard demo and verification
+# Earlier 3D dashboard demo and verification
+
+These captures precede the flat-map correction. See the [current reference
+layout](../reference-map/README.md) for updated appearance, defaults and coverage.
 
 These images contain invented people and a generated coastal grid. No production
 account, address, location, session, token or tile service was used. `startDemo()`

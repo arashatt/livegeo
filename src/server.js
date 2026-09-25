@@ -3,7 +3,7 @@
 //
 // This page shows where people are, so it is never served without the token.
 
-import { parseVectorPath } from './tile-path.js';
+import { parseVectorPath, parseTerrainPath } from './tile-path.js';
 import { EMPTY_VECTOR, parseVectorLayers } from './postgis-vector.js';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -13,6 +13,8 @@ import { parseTilePath, parseCartoPath, makeTiles } from './tiles.js';
 import { makeDistrict } from './district.js';
 import { makeVectorUpstream } from './vector-tiles.js';
 import { makeVectorCartography } from './cartography-vector.js';
+import { makeWorldVector } from './world-vector.js';
+import { makeTerrainTiles } from './terrain-tiles.js';
 import { EMPTY_CARTOGRAPHY, parseCartographyLayers } from './cartography.js';
 import { COOKIE, sameToken, tokenOf } from './token.js';
 import { SESSION_COOKIE, mint, readSession, checkWidget, seal, unseal } from './login.js';
@@ -96,9 +98,16 @@ export function staticFile(pathname) {
   let rel;
   try { rel = decodeURIComponent(pathname); } catch { return null; }
   if (rel.includes('\0')) return null;
+  // New dashboard assets follow the app deployment through an existing Worker.
+  // The Worker's separately uploaded /vendor bundle may predate MapLibre.
+  if(rel.startsWith('/lib/map-assets/')){
+    const root=resolve(PUBLIC,'vendor'),asset=resolve(root,rel.slice('/lib/map-assets/'.length));
+    if(!asset.startsWith(root+sep))return null;
+    const type=STATIC_TYPES[extname(asset).toLowerCase()];return type?{file:asset,type}:null;
+  }
   const file = resolve(PUBLIC, '.' + (rel.startsWith('/') ? rel : `/${rel}`));
   if (file !== PUBLIC && !file.startsWith(PUBLIC + sep)) return null;
-  const type = STATIC_TYPES[extname(file).toLowerCase()];
+  const type = file===resolve(PUBLIC,'lib/terrain-credits.html')?'text/html; charset=utf-8':STATIC_TYPES[extname(file).toLowerCase()];
   return type ? { file, type } : null;
 }
 
@@ -139,6 +148,7 @@ export function serve(positions, config, {
   // Built from the config unless given; the district name and the styled
   // map layers both draw from it.
   vectorTiles = null,
+  terrainTiles = null,
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -243,6 +253,8 @@ export function serve(positions, config, {
     log,
   });
   const vectorCarto = makeVectorCartography({ upstream: vectors, log });
+  const worldVector = makeWorldVector({ upstream: vectors, log });
+  const terrain = terrainTiles || makeTerrainTiles({upstream:config.terrainUpstream,cacheDir:join(config.tileCache || '/tmp/livegeo-tiles','terrain'),maxAge:config.terrainMaxAge,userAgent:config.tileUserAgent,log});
 
   const send = (res, event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -977,13 +989,23 @@ export function serve(positions, config, {
       return;
     }
 
-    // Styled vector geometry from the local OSM extract. It is deliberately
+    if(url.pathname==='/api/map-config')return json(200,{relief:terrain.enabled});
+    const elevation=parseTerrainPath(url.pathname);
+    if(elevation){
+      const got=await terrain.get(elevation);
+      if(!got){res.writeHead(503,{'content-type':'text/plain','cache-control':'private, max-age=60','retry-after':'60'});res.end('relief unavailable');return;}
+      res.writeHead(200,{'content-type':'image/png','cache-control':'private, max-age=2592000','x-terrain-source':got.from});res.end(got.bytes);return;
+    }
+
+    // Styled vector geometry, local OSM first then the cached worldwide source.
+    // It is deliberately
     // guarded like raster tiles: this service is not a public map-tile host.
     const vector = parseVectorPath(url.pathname);
     if (vector) {
       const layers = parseVectorLayers(url.searchParams.get('layers'));
       if (layers === null) return json(400, { error: 'unknown cartography layer' });
-      const got = (geo?.vectorTile && await geo.vectorTile(vector.z, vector.x, vector.y, layers)) || EMPTY_VECTOR;
+      let got = (geo?.vectorTile && await geo.vectorTile(vector.z, vector.x, vector.y, layers)) || EMPTY_VECTOR;
+      if(got.empty && layers.length) got = await worldVector.tile(vector.z, vector.x, vector.y, layers);
       const compressed = (req.headers['accept-encoding'] || '').split(',').some((item) => {
         const [name, quality] = item.trim().split(';');
         return name === 'gzip' && (!quality || Number(quality.trim().replace(/^q=/, '')) > 0);
@@ -991,7 +1013,7 @@ export function serve(positions, config, {
       res.writeHead(200, {
         'content-type': 'application/vnd.mapbox-vector-tile',
         'cache-control': got.empty ? 'private, max-age=30' : 'private, max-age=300',
-        'x-carto-source': got.empty ? 'empty' : 'postgis',
+        'x-carto-source': got.empty ? 'empty' : got.source || 'postgis',
         'vary': 'Accept-Encoding',
         ...(compressed ? { 'content-encoding': 'gzip' } : {}),
       });

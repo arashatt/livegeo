@@ -43,3 +43,9 @@ export function tileUrl(template, { z, x, y }) {
 export function parseVectorPath(pathname) {
   return parse(pathname, /^\/carto\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.mvt$/);
 }
+
+// Elevation detail is capped independently from streets and raster maps.
+export function parseTerrainPath(pathname) {
+  const tile=parse(pathname, /^\/relief\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.png$/);
+  return tile && tile.z<=12 ? tile : null;
+}

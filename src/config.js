@@ -52,6 +52,9 @@ export function defaults() {
     // else. A TileJSON address, or a {z}/{x}/{y} template; 'off' leaves only
     // an import to draw from.
     vectorUpstream: process.env.VECTOR_UPSTREAM || 'https://tiles.openfreemap.org/planet',
+    // Terrarium elevation tiles; 'off' disables shaded relief.
+    terrainUpstream: process.env.TERRAIN_UPSTREAM || 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+    terrainMaxAge: Number(process.env.TERRAIN_MAX_AGE || 30 * 24 * 3600),
     vectorMaxAge: Number(process.env.VECTOR_MAX_AGE || 7 * 24 * 3600),
 
     // A position nobody has updated for this long stops being shown.

@@ -35,7 +35,7 @@ test('bounded query, gzip variants, coalescing, expiry, empty tile and recovery'
   assert.equal((VECTOR_SQL.match(/way && buffered/g)||[]).length,8);
 });
 test('MVT endpoint authentication, gzip negotiation, MIME and empty caching',async()=>{
-  const {server}=serve(new Positions(),{...defaults(),dashboardToken:'test-only',port:0,host:'127.0.0.1'},{log:quiet,geo:{vectorTile:async()=>EMPTY_VECTOR}});
+  const {server}=serve(new Positions(),{...defaults(),vectorUpstream:'off',dashboardToken:'test-only',port:0,host:'127.0.0.1'},{log:quiet,geo:{vectorTile:async()=>EMPTY_VECTOR}});
   await once(server,'listening');const port=server.address().port;
   const get=(path,headers={})=>new Promise((resolve,reject)=>{request({hostname:'127.0.0.1',port,path,headers},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}));}).on('error',reject).end();});
   try{
@@ -52,6 +52,8 @@ test('MVT endpoint authentication, gzip negotiation, MIME and empty caching',asy
 test('new static resources have correct types and remain confined to public',()=>{
   for(const [ext,type] of [['mjs','text/javascript'],['pbf','application/x-protobuf'],['woff2','font/woff2'],['json','application/json'],['wasm','application/wasm']])assert.ok(staticFile('/vendor/a.'+ext).type.startsWith(type));
   assert.equal(staticFile('/%2e%2e/package.json'),null);assert.equal(staticFile('/vendor/file.exe'),null);
+  assert.equal(staticFile('/lib/map-assets/maplibre/maplibre-gl.mjs').file,staticFile('/vendor/maplibre/maplibre-gl.mjs').file);
+  for(const path of ['/lib/map-assets/../index.html','/lib/map-assets/%2e%2e/%2e%2e/package.json','/lib/map-assets/file.exe'])assert.equal(staticFile(path),null);
 });
 test('sun phases follow location and date, including both hemispheres',()=>{
   assert.equal(sunAt(0,0,new Date('2026-03-20T12:00:00Z')).phase,'day');
