@@ -30,6 +30,7 @@ jobs:
   build:
     name: Build the APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.name }}
       signing: ${{ steps.key.outputs.kind }}
@@ -140,6 +141,9 @@ jobs:
     name: Start it on an emulator
     needs: build
     runs-on: ubuntu-latest
+    # A good run takes under five minutes, and ci/smoke.sh gives every step a
+    # limit of its own; this is for the emulator or the runner hanging.
+    timeout-minutes: 20
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -239,6 +243,7 @@ jobs:
     needs: [build, smoke]
     if: github.event_name == 'workflow_dispatch' && inputs.release != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

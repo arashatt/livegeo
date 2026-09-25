@@ -12,6 +12,24 @@ apk=$(ls livegeo-*.apk | head -n 1)
 shots=${SHOTS:-shots}
 mkdir -p "$shots"
 
+# The job's own output, which fail() writes to even from inside a call whose
+# output is thrown away.
+exec 3>&1 4>&2
+
+# Every adb call has a time limit. One that never returns (an install the
+# device never answers, a dump that waits on the screen for ever) fails the
+# run, saying which and with what was on screen, instead of holding the job
+# until GitHub stops it hours later.
+ADB=$(command -v adb)
+adb() {
+  local status=0 limit=120
+  # Saying what went wrong is quick, or not worth waiting for.
+  if [ -n "${failing:-}" ]; then limit=20; fi
+  timeout "$limit" "$ADB" "$@" || status=$?
+  if [ "$status" = 124 ] && [ -z "${failing:-}" ]; then fail "adb $* did not answer within $limit s"; fi
+  return "$status"
+}
+
 # What is on screen, the web view's page included. A dump that fails (the
 # screen never idle) says nothing, rather than what the last one said.
 dump() {
@@ -23,11 +41,19 @@ shot() { adb exec-out screencap -p > "$shots/$1.png" || true; }
 alive() { adb shell pidof "$pkg" >/dev/null; }
 crashed() { adb logcat -d | grep -E "FATAL EXCEPTION|Process: $pkg, PID" && return 0 || return 1; }
 fail() {
-  echo "::error::$1"
-  dump | grep -o 'text="[^"]*"' | head -40 || true
-  adb logcat -d | grep -E "$pkg|AndroidRuntime|chromium" | tail -80 || true
+  trap - ERR
+  failing=1
+  {
+    echo "::error::$1"
+    dump | grep -o 'text="[^"]*"' | head -40 || true
+    adb logcat -d | grep -E "$pkg|AndroidRuntime|chromium" | tail -80 || true
+  } >&3 2>&4
+  # From inside a pipeline or a $(…), exit would end only that part.
+  if [ "$BASHPID" != "$$" ]; then kill -TERM "$$"; fi
   exit 1
 }
+# Anything else that fails stops the run the same way, quoting the line.
+trap 'status=$? line=$LINENO; fail "stopped at line $line (exit $status): $(sed -n "${line}p" "$0" | sed "s/^ *//")"' ERR
 # Waits up to $2 seconds for the screen to show text matching $1.
 await_text() {
   for _ in $(seq 1 "$2"); do
@@ -37,7 +63,8 @@ await_text() {
   return 1
 }
 share() {
-  adb shell "am start -W -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT '$1' -n $pkg/.MainActivity" >/dev/null
+  adb shell "am start -W -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT '$1' -n $pkg/.MainActivity" >/dev/null \
+    || fail 'the link could not be shared to the app'
 }
 
 adb install -r "$apk"
