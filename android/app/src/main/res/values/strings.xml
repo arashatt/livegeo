@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LiveGeo</string>
+
+    <!-- Loading -->
+    <string name="title">LIVEGEO</string>
+    <string name="subtitle">LIVE MAP</string>
+    <string name="status_connecting">CONNECTING TO YOUR MAP</string>
+    <string name="status_city">LOADING THE CITY</string>
+    <string name="status_people">PLACING PEOPLE</string>
+    <string name="status_ready">READY</string>
+    <string-array name="tips">
+        <item>TIP · Two fingers tilt and turn the 3D camera.</item>
+        <item>TIP · Go live to put yourself on your circle\'s map.</item>
+        <item>TIP · Report a jam, a crash or a closed road with Report.</item>
+        <item>TIP · Inside a private place, your circle sees a blur, not you.</item>
+        <item>TIP · SOS shows your circle exactly where you are.</item>
+        <item>TIP · Tap somebody to see where they went today.</item>
+        <item>TIP · If the map moves, send /login to the bot again.</item>
+    </string-array>
+
+    <!-- Connecting -->
+    <string name="connect_title">CONNECT YOUR MAP</string>
+    <string name="connect_body">1 · In Telegram, send /login to your LiveGeo bot.\n2 · Share the link it sends you to LiveGeo, or copy it and tap Paste link.\n\nThe link carries your map\'s address, and the app remembers it.</string>
+    <string name="moved_title">YOUR MAP MOVED</string>
+    <string name="moved_body">Its address changes when the server restarts. Send /login to the bot again and share the new link here.</string>
+    <string name="down_title">MAP NOT ANSWERING</string>
+    <string name="down_body">The address is right, but the server behind it is not answering. Try again in a minute. If it keeps failing, send /login to the bot for a fresh link.</string>
+    <string name="offline_title">NO CONNECTION</string>
+    <string name="offline_body">This device is offline. Try again when it is back.</string>
+    <string name="paste">PASTE LINK</string>
+    <string name="open">OPEN</string>
+    <string name="telegram">OPEN TELEGRAM</string>
+    <string name="retry">TRY AGAIN</string>
+    <string name="address_hint">https://…</string>
+    <string name="no_link">No map link there. Copy the link the bot sent you first.</string>
+    <string name="not_https">Only an https:// address can be your map.</string>
+    <string name="back_again">Press back again to leave</string>
+
+    <!-- Sharing -->
+    <string name="go_live_title">GO LIVE FOR</string>
+    <string name="for_hour">1 hour</string>
+    <string name="for_four_hours">4 hours</string>
+    <string name="until_stopped">Until I stop</string>
+    <string name="stop_title">STOP SHARING?</string>
+    <string name="stop_body">Your circle will see where you were last, not where you are.</string>
+    <string name="stop">Stop</string>
+    <string name="keep">Keep sharing</string>
+    <string name="cancel">Cancel</string>
+    <string name="pairing">Connecting this device to your map…</string>
+    <string name="pair_failed">This device could not join your map: %1$s</string>
+    <string name="needs_location">Going live needs the location permission.</string>
+    <string name="sharing_channel">Sharing your location</string>
+    <string name="sharing_title">You are live on the map</string>
+    <string name="sharing_until_stopped">until you stop</string>
+    <string name="unpaired">This device was removed from your map, so sharing stopped.</string>
+
+    <!-- Files -->
+    <string name="saved">Saved</string>
+    <string name="save_failed">Could not save the file</string>
+    <string name="share_with">Share with</string>
+</resources>

@@ -22,6 +22,15 @@ object Wire {
         return JSONObject().put("fixes", list).toString()
     }
 
+    /** The six digits from POST /api/devices/code. */
+    fun code(json: String): String = JSONObject(json).getString("code")
+
+    /** The person GET /api/me describes, or null for none. */
+    fun id(json: String): String? {
+        val o = JSONObject(json)
+        return if (o.isNull("id")) null else o.get("id").toString().ifBlank { null }
+    }
+
     fun pairRequest(code: String, name: String, platform: String): String =
         JSONObject().put("code", code).put("name", name).put("platform", platform).toString()
 

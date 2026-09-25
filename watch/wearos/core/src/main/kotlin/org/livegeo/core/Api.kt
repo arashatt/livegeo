@@ -88,6 +88,49 @@ class Api(
         }
     }
 
+    /**
+     * A pairing code for whoever [cookie] signs in as. The phone app is
+     * already signed in to the map in its web view, so it pairs itself with
+     * that session instead of having six digits read off one screen and
+     * typed into another. The session cookie goes to this one call only.
+     */
+    fun code(cookie: String): Result<String> = runCatching {
+        val headers = mapOf("accept" to "application/json", "cookie" to cookie)
+        val r = try {
+            transport.send("POST", "$root/api/devices/code", headers, "{}")
+        } catch (e: IOException) {
+            throw Failure.Offline(e)
+        }
+        when (r.status) {
+            200 -> Wire.code(r.body)
+            401, 403 -> throw Failure.Server(r.status, "sign in to the map first")
+            404 -> throw Failure.Server(404, Wire.error(r.body)?.takeIf { it != "not found" }
+                ?: "this map cannot pair devices for this sign-in")
+            429 -> throw Failure.Limited(Wire.error(r.body) ?: "too many tries, wait a little")
+            else -> throw Failure.Server(r.status, Wire.error(r.body) ?: "HTTP ${r.status}")
+        }
+    }
+
+    /**
+     * Who [cookie] signs in as, or null when it is not a person (the shared
+     * dashboard token). The phone checks this before going live, so a phone
+     * paired while one person was signed in never reports as them for
+     * somebody else.
+     */
+    fun whoIs(cookie: String): Result<String?> = runCatching {
+        val headers = mapOf("accept" to "application/json", "cookie" to cookie)
+        val r = try {
+            transport.send("GET", "$root/api/me", headers, null)
+        } catch (e: IOException) {
+            throw Failure.Offline(e)
+        }
+        when (r.status) {
+            200 -> Wire.id(r.body)
+            401, 403 -> throw Failure.Server(r.status, "sign in to the map first")
+            else -> throw Failure.Server(r.status, Wire.error(r.body) ?: "HTTP ${r.status}")
+        }
+    }
+
     fun report(fixes: List<Fix>): Result<IngestResult> = runCatching {
         val r = call("POST", "/api/ingest", Wire.fixes(fixes))
         if (r.status == 200) Wire.ingest(r.body) else throw failFor(r)

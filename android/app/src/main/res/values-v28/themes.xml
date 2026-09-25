@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Full-bleed around a notch, like a game. The map itself is kept clear
+         of the cutout (MainActivity), so nothing on it hides behind one. -->
+    <style name="Theme.Livegeo" parent="Base.Theme.Livegeo">
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

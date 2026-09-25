@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The status-bar icon while sharing: a point, broadcasting. White only, as
+     Android draws it in the bar's own colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.5,12a2.5,2.5 0 1,0 5,0a2.5,2.5 0 1,0 -5,0" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M7.05,7.05a7,7 0 0,0 0,9.9M16.95,7.05a7,7 0 0,1 0,9.9M4.22,4.22a11,11 0 0,0 0,15.56M19.78,4.22a11,11 0 0,1 0,15.56" />
+</vector>

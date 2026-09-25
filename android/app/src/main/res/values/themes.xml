@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark from the first frame: the window is the page's paper colour, so
+         there is never a white flash before the map. -->
+    <style name="Base.Theme.Livegeo" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/paper</item>
+        <item name="android:colorBackground">@color/paper</item>
+        <item name="android:statusBarColor">@color/paper_deep</item>
+        <item name="android:navigationBarColor">@color/paper_deep</item>
+        <item name="android:colorPrimary">@color/paper</item>
+        <item name="android:colorPrimaryDark">@color/paper_deep</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:textColorPrimary">@color/ink</item>
+        <item name="android:textColorSecondary">@color/quiet</item>
+        <item name="android:alertDialogTheme">@style/Dialog.Livegeo</item>
+    </style>
+
+    <style name="Theme.Livegeo" parent="Base.Theme.Livegeo" />
+
+    <style name="Dialog.Livegeo" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorBackground">@color/paper</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:textColorPrimary">@color/ink</item>
+        <item name="android:textColorSecondary">@color/quiet</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
+    </style>
+</resources>

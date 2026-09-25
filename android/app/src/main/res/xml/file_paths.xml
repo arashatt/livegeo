@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Files the page hands to another app: written here, shared, and
+         overwritten by the next one. -->
+    <cache-path name="shared" path="shared/" />
+</paths>

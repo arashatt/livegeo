@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A radar: amber sweep, and three blips in the map's own colours for you,
+     somebody live, and an SOS. Drawn inside the adaptive icon's safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFD68A"
+        android:fillAlpha="0.28"
+        android:pathData="M54,54 L54,24 A30,30 0 0,1 79.98,39 Z" />
+    <path
+        android:strokeColor="#4E6C77"
+        android:strokeWidth="1"
+        android:pathData="M54,24 L54,84 M24,54 L84,54" />
+    <path
+        android:strokeColor="#4E6C77"
+        android:strokeWidth="1.2"
+        android:pathData="M34,54 a20,20 0 1,0 40,0 a20,20 0 1,0 -40,0 M44,54 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+    <path
+        android:strokeColor="#FFD68A"
+        android:strokeWidth="2.6"
+        android:pathData="M24,54 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0" />
+    <path
+        android:strokeColor="#FFD68A"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M54,54 L79.98,39" />
+    <path
+        android:fillColor="#62EFAE"
+        android:pathData="M64.8,44 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0" />
+    <path
+        android:fillColor="#5BC5FF"
+        android:pathData="M39.4,64 a2.6,2.6 0 1,0 5.2,0 a2.6,2.6 0 1,0 -5.2,0" />
+    <path
+        android:fillColor="#FF6B78"
+        android:pathData="M62.8,69 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+    <path
+        android:fillColor="#FFD68A"
+        android:pathData="M51.6,54 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
+</vector>

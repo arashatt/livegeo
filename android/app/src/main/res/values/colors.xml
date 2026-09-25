@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The map page's own palette (public/lib/game-map.css), so the app and
+         the page it holds read as one thing. -->
+    <color name="paper">#0A1720</color>
+    <color name="paper_deep">#050D13</color>
+    <color name="panel">#E60A1B27</color>
+    <color name="ink">#EDF6F3</color>
+    <color name="quiet">#B4C7CD</color>
+    <color name="hairline">#4E6C77</color>
+    <color name="accent">#FFD68A</color>
+    <color name="live">#62EFAE</color>
+    <color name="me">#5BC5FF</color>
+    <color name="danger">#FF6B78</color>
+    <color name="place">#B2A1FF</color>
+    <color name="sunset">#F880CE</color>
+</resources>

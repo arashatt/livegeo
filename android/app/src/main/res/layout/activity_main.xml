@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The map, and the two screens that stand in front of it: loading, and
+     connecting (first run, or when the map could not be reached). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/paper">
+
+    <WebView
+        android:id="@+id/web"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <FrameLayout
+        android:id="@+id/loading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/paper"
+        android:clickable="true"
+        android:focusable="true">
+
+        <org.livegeo.app.RadarView
+            android:id="@+id/radar"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:importantForAccessibility="no" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <View
+                android:layout_width="72dp"
+                android:layout_height="3dp"
+                android:layout_marginBottom="14dp"
+                android:background="@drawable/sunset_line" />
+
+            <TextView
+                android:id="@+id/title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/barlow_condensed_semibold"
+                android:letterSpacing="0.16"
+                android:shadowColor="#CC000000"
+                android:shadowDy="3"
+                android:shadowRadius="12"
+                android:text="@string/title"
+                android:textColor="@color/ink"
+                android:textSize="58sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/barlow_condensed_semibold"
+                android:letterSpacing="0.6"
+                android:text="@string/subtitle"
+                android:textColor="@color/accent"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:orientation="vertical"
+            android:paddingLeft="32dp"
+            android:paddingTop="16dp"
+            android:paddingRight="32dp"
+            android:paddingBottom="36dp">
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:fontFamily="@font/barlow_condensed_semibold"
+                android:letterSpacing="0.22"
+                android:text="@string/status_connecting"
+                android:textColor="@color/ink"
+                android:textSize="14sp" />
+
+            <ProgressBar
+                android:id="@+id/progress"
+                style="@android:style/Widget.ProgressBar.Horizontal"
+                android:layout_width="match_parent"
+                android:layout_height="4dp"
+                android:indeterminate="false"
+                android:max="100"
+                android:progressDrawable="@drawable/progress" />
+
+            <TextView
+                android:id="@+id/tip"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:minLines="2"
+                android:textColor="@color/quiet"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <ScrollView
+        android:id="@+id/connect"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/paper"
+        android:fillViewport="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center_vertical"
+            android:orientation="vertical"
+            android:paddingLeft="28dp"
+            android:paddingTop="40dp"
+            android:paddingRight="28dp"
+            android:paddingBottom="40dp">
+
+            <View
+                android:layout_width="64dp"
+                android:layout_height="3dp"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/sunset_line" />
+
+            <TextView
+                android:id="@+id/connectTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/barlow_condensed_semibold"
+                android:letterSpacing="0.08"
+                android:text="@string/connect_title"
+                android:textColor="@color/ink"
+                android:textSize="34sp" />
+
+            <TextView
+                android:id="@+id/connectBody"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="24dp"
+                android:lineSpacingExtra="4dp"
+                android:text="@string/connect_body"
+                android:textColor="@color/quiet"
+                android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/paste"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:background="@drawable/btn_primary"
+                android:fontFamily="@font/barlow_condensed_semibold"
+                android:letterSpacing="0.14"
+                android:stateListAnimator="@null"
+                android:text="@string/paste"
+                android:textColor="@color/paper"
+                android:textSize="18sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/address"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/field"
+                    android:hint="@string/address_hint"
+                    android:imeOptions="actionGo"
+                    android:importantForAutofill="no"
+                    android:inputType="textUri"
+                    android:paddingLeft="14dp"
+                    android:paddingRight="14dp"
+                    android:singleLine="true"
+                    android:textColor="@color/ink"
+                    android:textColorHint="@color/hairline"
+                    android:textSize="16sp" />
+
+                <Button
+                    android:id="@+id/go"
+                    android:layout_width="wrap_content"
+                    android:layout_height="52dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/btn_secondary"
+                    android:fontFamily="@font/barlow_condensed_semibold"
+                    android:letterSpacing="0.12"
+                    android:minWidth="88dp"
+                    android:stateListAnimator="@null"
+                    android:text="@string/open"
+                    android:textColor="@color/ink"
+                    android:textSize="16sp" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/telegram"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="14dp"
+                android:background="@drawable/btn_secondary"
+                android:fontFamily="@font/barlow_condensed_semibold"
+                android:letterSpacing="0.12"
+                android:stateListAnimator="@null"
+                android:text="@string/telegram"
+                android:textColor="@color/ink"
+                android:textSize="16sp"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/retry"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="14dp"
+                android:background="@drawable/btn_secondary"
+                android:fontFamily="@font/barlow_condensed_semibold"
+                android:letterSpacing="0.12"
+                android:stateListAnimator="@null"
+                android:text="@string/retry"
+                android:textColor="@color/ink"
+                android:textSize="16sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>

@@ -1,0 +1,207 @@
+name: Android app
+
+# The phone app (android/), built here because nowhere else this project runs
+# has the Android SDK: not the server, not where the code is written.
+#
+# Every push that touches the app, or the core it shares with the watch,
+# builds the APK and starts it on an emulator. A release is a manual run:
+# Actions → Android app → Run workflow, with a version such as 1.0.0. That
+# signs the APK and publishes it on the repository's Releases page.
+on:
+  push:
+    paths: ['android/**', 'watch/wearos/core/**', '.github/workflows/android.yml']
+  pull_request:
+    paths: ['android/**', 'watch/wearos/core/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Publish as a release with this version, e.g. 1.0.0. Empty builds without publishing.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the APK
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.name }}
+      signing: ${{ steps.key.outputs.kind }}
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test the core
+        run: ./gradlew --no-daemon :core:test
+
+      - id: version
+        name: Version
+        env:
+          RELEASE: ${{ inputs.release }}
+          RUN: ${{ github.run_number }}
+        run: |
+          name="${RELEASE:-0.0.$RUN}"
+          name="${name#v}"
+          if ! printf '%s' "$name" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$name' is not a version like 1.0.0"
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      # Android installs an update only over an app signed with the same key,
+      # so a key kept in the repository's secrets is what lets one release
+      # install over the last (README, «The Android app»). Without it, a key
+      # made for this run only: the APK installs, but a later one, signed
+      # with another key, will not install over it without removing it first.
+      - id: key
+        name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          store="$RUNNER_TEMP/livegeo.jks"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$store"
+            {
+              echo "LIVEGEO_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "LIVEGEO_KEY_ALIAS=${KEY_ALIAS:-livegeo}"
+              echo "LIVEGEO_KEY_PASSWORD=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+            } >> "$GITHUB_ENV"
+            echo "kind=repository" >> "$GITHUB_OUTPUT"
+            echo "Signing with the repository's key."
+          else
+            pass=$(openssl rand -hex 24)
+            echo "::add-mask::$pass"
+            keytool -genkeypair -noprompt -keystore "$store" -storetype PKCS12 \
+              -storepass "$pass" -keypass "$pass" -alias livegeo \
+              -keyalg RSA -keysize 3072 -validity 10000 -dname "CN=LiveGeo"
+            {
+              echo "LIVEGEO_KEYSTORE_PASSWORD=$pass"
+              echo "LIVEGEO_KEY_ALIAS=livegeo"
+              echo "LIVEGEO_KEY_PASSWORD=$pass"
+            } >> "$GITHUB_ENV"
+            echo "kind=temporary" >> "$GITHUB_OUTPUT"
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret, so this APK is signed with a key made for this run only. It installs, but the next one will not install over it. See README, The Android app."
+          fi
+          echo "LIVEGEO_KEYSTORE=$store" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          LIVEGEO_VERSION_CODE: ${{ github.run_number }}
+          LIVEGEO_VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Name, check and fingerprint it
+        env:
+          VERSION: ${{ steps.version.outputs.name }}
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          test -f "$apk"
+          out="livegeo-$VERSION.apk"
+          cp "$apk" "$out"
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$tools/apksigner" verify --print-certs "$out" | grep -E 'Signer #1 certificate (DN|SHA-256)'
+          "$tools/aapt2" dump badging "$out" | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):"
+          sha256sum "$out" | tee "$out.sha256"
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: livegeo-android
+          path: |
+            android/livegeo-*.apk
+            android/livegeo-*.apk.sha256
+            android/ci/smoke.sh
+          if-no-files-found: error
+
+  smoke:
+    name: Start it on an emulator
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: livegeo-android
+          path: app
+
+      - name: Hardware acceleration for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Android 10, without Google Play services: like the car head units and
+      # the phones sold without Google this is also meant for.
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          working-directory: app
+          script: SHOTS="$PWD/shots" bash ci/smoke.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: livegeo-android-screens
+          path: app/shots/
+          if-no-files-found: ignore
+
+  release:
+    name: Publish the release
+    needs: [build, smoke]
+    if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: livegeo-android
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SIGNING: ${{ needs.build.outputs.signing }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          apk="livegeo-$VERSION.apk"
+          test -f "$apk"
+          if [ "$SIGNING" = repository ]; then
+            updates="Signed with the project's key: it installs over an earlier release signed with the same key."
+          else
+            updates="Signed with a key made for this build only: if an earlier release is installed, remove it first. Once the project's signing key is in the repository's secrets, releases install over each other."
+          fi
+          cat > notes.md <<NOTES
+          LiveGeo for Android $VERSION: the live 3D map, full-screen, and a Go live button that shares this device's location.
+
+          **Install:** download \`$apk\` on the phone or head unit and open it. Android asks once to allow installing apps from wherever it was opened (the browser, Telegram, a file manager).
+
+          **Connect:** in Telegram send \`/login\` to your LiveGeo bot, then share the link it sends to LiveGeo (or copy it and tap *Paste link*). When the server restarts and the map's address changes, do the same again.
+
+          **Needs:** Android 7 or later. No Google Play services, so it runs on car head units and phones sold without Google.
+
+          $updates
+
+          SHA-256: \`$(cut -d' ' -f1 "$apk.sha256")\`
+          NOTES
+          gh release create "android-v$VERSION" "$apk" "$apk.sha256" \
+            --repo "$REPO" --target "$SHA" \
+            --title "LiveGeo for Android $VERSION" --notes-file notes.md
