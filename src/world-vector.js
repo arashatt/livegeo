@@ -49,8 +49,34 @@ function properties(source,p,kind){
 }
 const groupOf=(kind,type)=>kind.layer==='water'?(type===3?'water-area':'water-line'):kind.layer;
 
+// A fast wheel zoom asks for a view's tiles at every level it passes, and
+// gives most of them up a moment later. So the CPU-heavy part of a build runs
+// one at a time, the newest request first (the view being looked at now), and
+// a build nobody is still waiting for is not done at all. Parents are kept
+// for a whole zoom's worth of tiles, not refetched halfway through it.
+const PARENTS=24,BUILT=128,QUEUED=256;
+export const UNAVAILABLE=Object.freeze({unavailable:true});
 export function makeWorldVector({upstream,now=Date.now,log=console}={}){
-  const parents=new Map(),loading=new Map(),cache=new Map(),pending=new Map();
+  const parents=new Map(),loading=new Map(),cache=new Map(),pending=new Map(),queue=[];
+  let running=false;
+  // Runs `work` when its turn comes, newest first; `wanted()` says whether
+  // anybody still is.
+  function turn(work,wanted){
+    return new Promise((resolve,reject)=>{
+      if(queue.length>=QUEUED)queue.shift().resolve(null);
+      queue.push({work,wanted,resolve,reject});next();
+    });
+  }
+  function next(){
+    if(running||!queue.length)return;
+    const job=queue.pop();running=true;
+    // A turn of the event loop between builds, so streams and new requests
+    // are heard while a zoom's tiles are being made.
+    setImmediate(()=>{
+      Promise.resolve().then(()=>job.wanted()?job.work():null).then(job.resolve,job.reject)
+        .finally(()=>{running=false;next();});
+    });
+  }
   async function parent(tile){
     const key=`${tile.z}/${tile.x}/${tile.y}`,hit=parents.get(key);
     if(hit&&hit.until>now())return hit.records;
@@ -66,17 +92,20 @@ export function makeWorldVector({upstream,now=Date.now,log=console}={}){
           if(kind)records.push({source,feature,bounds:feature.bbox()});
         }
       }
-      if(parents.size>=6)parents.delete(parents.keys().next().value);
+      if(parents.size>=PARENTS)parents.delete(parents.keys().next().value);
       parents.set(key,{records,until:now()+300000});return records;
     })().catch(error=>{
-      if(parents.size>=6)parents.delete(parents.keys().next().value);
-      parents.set(key,{records:null,until:now()+30000});
+      if(parents.size>=PARENTS)parents.delete(parents.keys().next().value);
+      parents.set(key,{records:null,until:now()+5000});
       log.error('geo: cannot read world vector cartography —',error?.message||error);return null;
     }).finally(()=>loading.delete(key));loading.set(key,task);return task;
   }
-  async function build(z,x,y){
+  async function build(z,x,y,wanted){
     const pz=Math.min(z,VECTOR_MAX_ZOOM),scale=2**(z-pz),tile={z:pz,x:Math.floor(x/scale),y:Math.floor(y/scale)};
     const records=await parent(tile);if(!records)return null;
+    return turn(()=>assemble(z,x,y,tile,scale,records),wanted);
+  }
+  function assemble(z,x,y,tile,scale,records){
     const grouped={};
     for(const {source,feature:f,bounds:b} of records){
       const kind=kindOf(source,f.properties,f.type,z);if(!kind)continue;
@@ -102,18 +131,25 @@ export function makeWorldVector({upstream,now=Date.now,log=console}={}){
     }
     return {layers,variants:new Map(),until:now()+300000};
   }
-  return {async tile(z,x,y,wanted=VECTOR_LAYERS){
+  // `signal.aborted` turns true when whoever asked has gone. Several asking
+  // for one tile share a build, which goes ahead while any of them waits.
+  // UNAVAILABLE when the source could not be read: not an empty tile, which
+  // the browser would keep and show as nothing where there is something.
+  return {async tile(z,x,y,wanted=VECTOR_LAYERS,{signal=null}={}){
     if(!upstream||upstream.enabled===false||z<8||z>19||![z,x,y].every(Number.isInteger)||x<0||y<0||x>=2**z||y>=2**z||!Array.isArray(wanted)||!wanted.length||wanted.some(n=>!VECTOR_LAYERS.includes(n)))return EMPTY_VECTOR;
     const key=`${z}/${x}/${y}`;let hit=cache.get(key);
     try{
       if(!hit||hit.until<=now()){
-        if(!pending.has(key)){
-          if(pending.size>=32)return EMPTY_VECTOR;
-          pending.set(key,build(z,x,y).then(result=>{if(result){if(cache.size>=64)cache.delete(cache.keys().next().value);cache.set(key,result);}return result;}).finally(()=>pending.delete(key)));
+        let job=pending.get(key);
+        if(!job){
+          const waiting=new Set();
+          job={waiting,promise:build(z,x,y,()=>!waiting.size||[...waiting].some(w=>!w||!w.aborted)).then(result=>{if(result){if(cache.size>=BUILT)cache.delete(cache.keys().next().value);cache.set(key,result);}return result;}).finally(()=>pending.delete(key))};
+          pending.set(key,job);
         }
-        hit=await pending.get(key);
+        job.waiting.add(signal);
+        try{hit=await job.promise;}finally{job.waiting.delete(signal);}
       }
-      if(!hit)return EMPTY_VECTOR;
+      if(!hit)return signal?.aborted?EMPTY_VECTOR:UNAVAILABLE;
       const names=VECTOR_LAYERS.filter(n=>wanted.includes(n)),variant=names.join(',');
       if(hit.variants.has(variant))return hit.variants.get(variant);
       const selected=Object.fromEntries(names.filter(n=>hit.layers[n]).map(n=>[n,hit.layers[n]]));

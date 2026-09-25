@@ -1012,8 +1012,21 @@ export function serve(positions, config, {
     if (vector) {
       const layers = parseVectorLayers(url.searchParams.get('layers'));
       if (layers === null) return json(400, { error: 'unknown cartography layer' });
+      // A map zoomed quickly past this tile gives it up; the build is then
+      // not done for nobody (world-vector.js).
+      const signal = { aborted: false };
+      res.on('close', () => { if (!res.writableEnded) signal.aborted = true; });
       let got = (geo?.vectorTile && await geo.vectorTile(vector.z, vector.x, vector.y, layers)) || EMPTY_VECTOR;
-      if(got.empty && layers.length) got = await worldVector.tile(vector.z, vector.x, vector.y, layers);
+      if(got.empty && layers.length) got = await worldVector.tile(vector.z, vector.x, vector.y, layers, { signal });
+      if (signal.aborted) return;
+      // The source could not be read just now. Not an empty tile, which the
+      // browser would keep for its lifetime and draw as nothing: an error
+      // nobody caches, so the tile is asked for again when next in view.
+      if (got.unavailable) {
+        res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '5' });
+        res.end('tile unavailable');
+        return;
+      }
       const compressed = (req.headers['accept-encoding'] || '').split(',').some((item) => {
         const [name, quality] = item.trim().split(';');
         return name === 'gzip' && (!quality || Number(quality.trim().replace(/^q=/, '')) > 0);

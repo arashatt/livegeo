@@ -79,3 +79,5 @@ header:after{height:2px;background:#f880ce}.brand h1{font-size:24px;color:#f6f1e
  #mapLegend{left:12px;right:auto;bottom:48px;width:150px}#mapLegend summary{font-size:12px}#mapLegend[open]{left:0;right:0;bottom:0;width:auto;border-radius:0;z-index:790}.maplibregl-ctrl-bottom-left{left:12px}
 }
 @media(max-width:760px){body[data-renderer="game"] #district{right:12px;bottom:48px}body[data-renderer="game"] .map-shell:has(#radar:not([hidden])) #district{bottom:var(--district-lift,214px)}}
+/* While the camera moves, blurred shapes rest: a blur is recomputed whenever what it blurs moves, which in a zoom is every frame. */
+.game-ground.moving path{filter:none!important}.game-ground.moving path.soft{visibility:hidden}.game-overlays.moving .fade-end{filter:none}

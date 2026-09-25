@@ -613,7 +613,21 @@ otherwise stable defaults by building type; heights are labelled illustrative.
 The worldwide adapter clips/reprojects tiles up to zoom 19 from upstream zoom
 14, preserves polygon holes, caps features before encoding and coalesces/cache
 requests. It uses the same seven layers and never fetches resources from the
-browser. Source outages return valid empty tiles with a short retry delay.
+browser.
+
+**Fast zooms.** A quick wheel zoom asks for every level's tiles on the way and
+gives most of them up a moment later. The server builds one tile at a time,
+newest request first (the view being looked at now), and skips a build nobody
+is waiting for any more. It keeps 24 decoded source tiles, so a zoom never
+refetches them halfway. When the source cannot be read, the answer is a
+`503` with `no-store`, never an empty tile: MapLibre keeps an empty tile for
+as long as it stays in view, which left holes that never filled in. A failed
+source is retried after 5 seconds. The 3D map asks again for failed tiles
+still in view, after 3 s and then less often, up to every 30 s. The client
+stops at z16: nothing in the data needs more, and MapLibre enlarges z16
+tiles past that. The wheel, a trackpad pinch and a drag work over people,
+pins and labels as well as over the bare map. A press that turned into a
+drag does not also open what it started on.
 **Mountain relief** adds stepped elevation colors and shaded ridges/valleys
 from global Mapzen Terrarium tiles. `/relief/{z}/{x}/{y}.png` is authenticated,
 proxied and cached by the app; no browser contacts the data provider. Source

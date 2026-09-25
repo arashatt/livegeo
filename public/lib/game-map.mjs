@@ -43,7 +43,13 @@ class Layer extends Events {
       if(name==='click'&&!e.cancelBubble&&!e._stopped)this.map.fire('click',event);
       if(name==='click')e.stopPropagation();
     };
-    el.addEventListener('click',(e)=>send('click',e));
+    el.addEventListener('click',(e)=>{
+      // Pressed here and dragged: that panned the map (DashboardMap), it
+      // did not pick this out. A key's click (detail 0) always counts.
+      const down=this.map.pressed;this.map.pressed=null;
+      if(down&&e.detail&&Math.hypot(e.clientX-down.x,e.clientY-down.y)>4){e.stopPropagation();return;}
+      send('click',e);
+    });
     const enter=(e)=>{this.fire('mouseover',{originalEvent:e});if(this.tipContent&&!this.tipOptions?.permanent){this.tip=new Tip(this.tipOptions).setLatLng(this.tipPosition()).setContent(this.tipContent).addTo(this.map);}};
     const leave=(e)=>{this.fire('mouseout',{originalEvent:e});if(this.tip&&!this.tipOptions?.permanent){this.map.removeLayer(this.tip);this.tip=null;}};
     el.addEventListener('mouseenter',enter);el.addEventListener('mouseleave',leave);el.addEventListener('focus',enter);el.addEventListener('blur',leave);
@@ -101,10 +107,24 @@ class Shape extends Layer {
     // Tiny areas cannot truthfully read as areas at world scale. Keep their
     // presence in the non-geographic overview, with full detail on zoom-in.
     this.el.style.visibility=this.map.getZoom()<8?'hidden':'';
-    const d=this.runs.map((run)=>run.map((p,i)=>{const q=this.map.project(p);return `${i?'L':'M'}${q.x.toFixed(1)},${q.y.toFixed(1)}`;}).join(' ')+(this.polygon?'Z':'')).join(' ');
+    // Redrawn on every frame of a zoom, so only what the screen can show: a
+    // point within a pixel and a half of the last one drawn adds nothing but
+    // work. A day's path is a thousand fixes; zoomed out it is a few dozen.
+    const d=this.runs.map((run)=>{
+      let out='',last=null;
+      for(let i=0;i<run.length;i++){
+        const q=this.map.project(run[i]);
+        if(last&&i<run.length-1&&Math.abs(q.x-last.x)<1.5&&Math.abs(q.y-last.y)<1.5)continue;
+        out+=`${last?'L':'M'}${q.x.toFixed(1)},${q.y.toFixed(1)}`;last=q;
+      }
+      return out+(this.polygon&&out?'Z':'');
+    }).join(' ');
     this.el.setAttribute('d',d);const o=this.options;
-    for(const [key,value] of Object.entries({'fill':this.polygon?(o.fillColor||o.color||'#ffffff'):'none','fill-opacity':o.fillOpacity??.1,'stroke':o.color||'#ffffff','stroke-opacity':o.opacity??1,'stroke-width':o.weight??2,'stroke-dasharray':o.dashArray||'none','stroke-linecap':'round','stroke-linejoin':'round'}))this.el.setAttribute(key,value);
-    if(o.weight>=10)this.el.style.filter='blur(4px)';
+    // The look changes with setStyle, not with the camera: set only then.
+    const look={'fill':this.polygon?(o.fillColor||o.color||'#ffffff'):'none','fill-opacity':o.fillOpacity??.1,'stroke':o.color||'#ffffff','stroke-opacity':o.opacity??1,'stroke-width':o.weight??2,'stroke-dasharray':o.dashArray||'none','stroke-linecap':'round','stroke-linejoin':'round'};
+    const key=JSON.stringify(look);
+    if(key!==this.look){this.look=key;for(const [name,value] of Object.entries(look))this.el.setAttribute(name,value);}
+    if(o.weight>=10&&!this.el.classList.contains('soft')){this.el.style.filter='blur(4px)';this.el.classList.add('soft');}
   }
 }
 class Circle extends Shape {
@@ -159,8 +179,23 @@ class DashboardMap extends Events {
     this.html=document.createElement('div');this.html.className='game-overlays';
     this.ground=svg('svg');this.ground.classList.add('game-ground');this.ground.innerHTML='<defs><filter id="veil-soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="10"/></filter></defs>';
     gl.getContainer().append(this.ground,this.html);
+    // People, pins and labels sit above the map, outside the element MapLibre
+    // listens to, so a wheel or a drag over them moved nothing, and on a
+    // desktop the cursor is usually over the people being looked at. Hand
+    // both on, as Leaflet's markers do (a trackpad pinch is a wheel with
+    // ctrlKey). A press that became a drag is not also a click (wire()).
+    const canvas=gl.getCanvas(),pass=(e)=>({bubbles:true,cancelable:true,clientX:e.clientX,clientY:e.clientY,screenX:e.screenX,screenY:e.screenY,ctrlKey:e.ctrlKey,shiftKey:e.shiftKey,altKey:e.altKey,metaKey:e.metaKey});
+    for(const layer of [this.ground,this.html]){
+      layer.addEventListener('wheel',(e)=>{e.preventDefault();canvas.dispatchEvent(new WheelEvent('wheel',{...pass(e),deltaX:e.deltaX,deltaY:e.deltaY,deltaZ:e.deltaZ,deltaMode:e.deltaMode}));},{passive:false});
+      layer.addEventListener('mousedown',(e)=>{this.pressed={x:e.clientX,y:e.clientY};if(e.button===0)canvas.dispatchEvent(new MouseEvent('mousedown',{...pass(e),button:0,buttons:e.buttons}));});
+    }
     for(const name of ['click','mousemove','mouseout','zoomend','moveend','resize'])gl.on(name,(event)=>{const p=event.point;this.fire(name,{originalEvent:event.originalEvent,containerPoint:p?BaseL.point(p.x,p.y):undefined,latlng:event.lngLat?ll([event.lngLat.lat,event.lngLat.lng]):undefined});});
-    gl.on('move',()=>{this.redraw();this.updateHud();});gl.on('resize',()=>this.redraw());
+    gl.on('move',()=>{this.redraw();this.updateHud();});gl.on('resize',()=>{this.size=null;this.redraw();});
+    // Blurs are recomputed whenever what they blur moves, which during a zoom
+    // is every frame: they rest while the camera does, and come back when it
+    // stops (game-map.css).
+    gl.on('movestart',()=>{this.ground.classList.add('moving');this.html.classList.add('moving');});
+    gl.on('moveend',()=>{this.ground.classList.remove('moving');this.html.classList.remove('moving');});
     gl.on('zoomend',()=>this.autoCamera());gl.on('idle',()=>{this.report();this.radar();});
     this.bindControls();this.redraw();this.updateHud();
   }
@@ -173,7 +208,9 @@ class DashboardMap extends Events {
   latLngToContainerPoint(point){return this.project(point);}
   getZoom(){return this.gl.getZoom();}
   getCenter(){const c=this.gl.getCenter();return ll([c.lat,c.lng]);}
-  getSize(){const c=this.gl.getContainer();return BaseL.point(c.clientWidth,c.clientHeight);}
+  // Read once and kept until a resize: reading it in every frame's redraw
+  // made the browser lay the page out again between overlay updates.
+  getSize(){if(!this.size){const c=this.gl.getContainer();this.size=BaseL.point(c.clientWidth,c.clientHeight);}return this.size;}
   getContainer(){return this.gl.getContainer();}
   invalidateSize(){this.gl.resize();return this;}
   setView(point,zoom){this.gl.jumpTo({center:coords(point),zoom});this.autoCamera();return this;}
@@ -182,7 +219,7 @@ class DashboardMap extends Events {
   removeLayer(layer){if(this.layers.delete(layer))layer.detach();return this;}
   hasLayer(layer){return this.layers.has(layer);}
   eachLayer(fn){this.layers.forEach(fn);}
-  redraw(){if(document.hidden)return;this.ground.setAttribute('viewBox',`0 0 ${this.getSize().x} ${this.getSize().y}`);this.layers.forEach((l)=>l.render?.());}
+  redraw(){if(document.hidden)return;const size=this.getSize(),box=`0 0 ${size.x} ${size.y}`;if(box!==this.box){this.box=box;this.ground.setAttribute('viewBox',box);}this.layers.forEach((l)=>l.render?.());}
   autoCamera(){
     if(this.camera!=='auto'||document.hidden)return;
     const z=this.gl.getZoom(),pitch=this.lite?0:z<14?0:Math.min(58,(z-14)*24);
@@ -309,6 +346,25 @@ function peopleDrawing(map){
     fadeOut(veil){if(reduced||document.hidden){map.removeLayer(veil);return;}veil.el?.classList.add('leaving');setTimeout(()=>map.removeLayer(veil),300);},
   };
 }
+// A city tile the server could not make just then (a 503 while its source is
+// slow) would stay blank: MapLibre keeps a failed tile for as long as it is in
+// view and never asks for it again. So ask again, after 3 s and then less
+// often, up to every 30 s. Tiles scrolled out of view are dropped by MapLibre
+// and asked for afresh when next in view; refreshTiles touches only those
+// still in it.
+function retryCity(gl){
+  const failed=new Map();let timer=null,delay=3000;
+  gl.on('error',event=>{
+    const c=event.sourceId==='city'&&event.tile?.tileID?.canonical;if(!c)return;
+    failed.set(`${c.z}/${c.x}/${c.y}`,{z:c.z,x:c.x,y:c.y});
+    if(!timer)timer=setTimeout(retry,delay);
+  });
+  gl.on('sourcedata',event=>{if(event.sourceId==='city'&&event.tile?.state==='loaded')delay=3000;});
+  function retry(){
+    timer=null;const tiles=[...failed.values()];failed.clear();delay=Math.min(delay*2,30000);
+    try{gl.refreshTiles('city',tiles);}catch{}
+  }
+}
 export async function createGameMap(){
   setWorkerCount(2);
   await setRTLTextPlugin('/lib/map-assets/rtl/mapbox-gl-rtl-text.js',false);
@@ -324,6 +380,7 @@ export async function createGameMap(){
   const toggle=document.querySelector('[data-feature=relief]');toggle.checked=relief;toggle.disabled=!relief;
   if(!relief)document.getElementById('reliefStatus').textContent='Relief is disabled on this server.';
   gl.on('error',event=>{if(event.sourceId==='relief'){map.reliefAvailable=false;map.features?.sync();document.getElementById('reliefStatus').textContent='Relief is temporarily unavailable.';}});
+  retryCity(gl);
   const facade={...BaseL,map:()=>map,tileLayer:()=>new Raster(),circleMarker:(p,o)=>new PointMark(p,o,true),marker:(p,o)=>new PointMark(p,o),divIcon:(o)=>o,
     polyline:(p,o)=>new Shape(p,o),polygon:(p,o)=>new Shape(p,o,true),circle:(p,o)=>new Circle(p,o),tooltip:(o)=>new Tip(o),layerGroup:()=>new Group(),
     control:{scale:()=>({addTo(){gl.addControl(new ScaleControl({maxWidth:140,unit:'metric'}),'bottom-left');return this;}})}};

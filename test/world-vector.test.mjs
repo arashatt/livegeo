@@ -5,7 +5,7 @@ import {gunzipSync} from 'node:zlib';
 import {VectorTile} from '@mapbox/vector-tile';
 import Pbf from 'pbf';
 import {encodeTile} from './mvt-encode.mjs';
-import {makeWorldVector,WORLD_BUDGET} from '../src/world-vector.js';
+import {makeWorldVector,WORLD_BUDGET,UNAVAILABLE} from '../src/world-vector.js';
 import {EMPTY_VECTOR} from '../src/postgis-vector.js';
 import {serve} from '../src/server.js';
 import {Positions} from '../src/positions.js';
@@ -54,11 +54,38 @@ test('world adapter applies zoom gates, requested layers, budgets, name limits a
 });
 
 test('world adapter backs off corrupt or oversized tiles, recovers, and honors upstream off',async()=>{
+ // A source that cannot be read is unavailable, not empty: an empty tile is
+ // kept by the browser and would show nothing where there is something.
  let tries=0,time=0;const world=makeWorldVector({now:()=>time,log:quiet,upstream:{tile:async()=>{tries++;return {bytes:tries===1?Buffer.alloc(8*1024*1024+1):bytes};}}});
- assert.equal(await world.tile(15,8000,12000),EMPTY_VECTOR);assert.equal(await world.tile(15,8001,12001),EMPTY_VECTOR);assert.equal(tries,1);
- time=30001;assert.equal((await world.tile(15,8000,12000)).empty,false);assert.equal(tries,2);
+ assert.equal(await world.tile(15,8000,12000),UNAVAILABLE);assert.equal(await world.tile(15,8001,12001),UNAVAILABLE);assert.equal(tries,1);
+ time=5001;assert.equal((await world.tile(15,8000,12000)).empty,false);assert.equal(tries,2);
  assert.equal(await makeWorldVector({upstream:{enabled:false,tile(){throw new Error('must not fetch');}}}).tile(14,4000,6000),EMPTY_VECTOR);
- const bad=makeWorldVector({log:quiet,upstream:{tile:async()=>({bytes:Buffer.from([255,255])})}});assert.equal(await bad.tile(14,4000,6000),EMPTY_VECTOR);
+ const bad=makeWorldVector({log:quiet,upstream:{tile:async()=>({bytes:Buffer.from([255,255])})}});assert.equal(await bad.tile(14,4000,6000),UNAVAILABLE);
+ const down=makeWorldVector({log:quiet,upstream:{tile:async()=>null}});assert.equal(await down.tile(14,4000,6000),UNAVAILABLE);
+ const blank=makeWorldVector({log:quiet,upstream:{tile:async()=>({bytes:Buffer.alloc(0)})}});assert.equal((await blank.tile(14,4000,6000)).empty,true,'a tile with nothing in it is still empty');
+});
+
+test('a fast zoom: builds nobody waits for are skipped, the newest go first, none come back empty',async()=>{
+ const world=makeWorldVector({log:quiet,upstream:{tile:async()=>{await new Promise(r=>setTimeout(r,20));return {bytes};}}});
+ // Children of one parent, as a zoom through z15–16 asks for them.
+ const tiles=[[15,8000,12000],[15,8001,12000],[16,16000,24000],[16,16001,24000],[16,16000,24001],[16,16001,24001]];
+ const gone=tiles.slice(0,2).map(()=>({aborted:false})),order=[];
+ const asked=tiles.map((t,i)=>world.tile(...t,undefined,{signal:gone[i]||{aborted:false}}).then(r=>{order.push(t.join('/'));return r;}));
+ gone.forEach(s=>{s.aborted=true;});
+ const got=await Promise.all(asked);
+ assert.equal(got[0],EMPTY_VECTOR);assert.equal(got[1],EMPTY_VECTOR,'given up: nothing built, nothing sent');
+ for(const r of got.slice(2)){assert.equal(r.empty,false);assert.ok(decoded(r).layers.buildings);}
+ assert.deepEqual(order.filter(k=>k.startsWith('16/')),['16/16001/24001','16/16000/24001','16/16001/24000','16/16000/24000'],'the newest request is built first');
+ // Given up once, asked for again: built this time, not kept as nothing.
+ assert.equal((await world.tile(15,8000,12000)).empty,false);
+ // Two asking for one tile share its build, which goes ahead while either waits.
+ const one={aborted:false},two={aborted:false};
+ const shared=[world.tile(15,8001,12001,undefined,{signal:one}),world.tile(15,8001,12001,undefined,{signal:two})];
+ one.aborted=true;const [, kept]=await Promise.all(shared);
+ assert.equal(kept.empty,true,'disjoint child: built, and truly empty');assert.notEqual(kept,UNAVAILABLE);
+ // A burst larger than any old limit: every tile still wanted is built.
+ const burst=Array.from({length:40},(_,i)=>world.tile(16,16000+(i%2),24000+Math.floor(i/2)%2+(i>=4?2:0),undefined,{signal:{aborted:false}}));
+ for(const r of await Promise.all(burst))assert.notEqual(r,UNAVAILABLE);
 });
 
 test('HTTP fallback is authenticated, marks its source, and lets local geometry win',async()=>{
@@ -72,5 +99,17 @@ test('HTTP fallback is authenticated, marks its source, and lets local geometry 
   let r=await get('/carto/15/8000/12000.mvt?token=fixture');assert.equal(r.headers.get('x-carto-source'),'upstream');assert.ok(decoded({raw:new Uint8Array(await r.arrayBuffer())}).layers.roads);assert.equal(calls,1);
   local={raw:bytes,gzip:Buffer.alloc(0),empty:false};r=await get('/carto/15/8002/12002.mvt?token=fixture');assert.equal(r.headers.get('x-carto-source'),'postgis');assert.equal(calls,1);
   r=await get('/lib/map-assets/maplibre/maplibre-gl.css');assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-cache');assert.ok(r.headers.get('etag'));
+ }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+});
+
+test('HTTP: a source that cannot be read is a 503 nobody keeps, never an empty tile',async()=>{
+ let up=false;
+ const {server}=serve(new Positions(),{...defaults(),dashboardToken:'fixture',port:0,host:'127.0.0.1'},{log:quiet,geo:{vectorTile:async()=>EMPTY_VECTOR},vectorTiles:{tile:async()=>up?{bytes}:null}});
+ await once(server,'listening');const origin='http://127.0.0.1:'+server.address().port;
+ try{
+  let r=await fetch(origin+'/carto/15/8000/12000.mvt?token=fixture');
+  assert.equal(r.status,503);assert.equal(r.headers.get('cache-control'),'no-store');assert.equal(r.headers.get('x-carto-source'),null);await r.arrayBuffer();
+  up=true;
+  r=await fetch(origin+'/carto/15/8000/12000.mvt?token=fixture');assert.equal(r.status,503,'the failure is remembered for a few seconds');await r.arrayBuffer();
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
