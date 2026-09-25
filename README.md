@@ -105,6 +105,7 @@ one way only — Ada letting Grace see her does not let Ada see Grace.
   «Following somebody live, without Telegram».
 - `/sos`, `/safe`, `/checkon`, `/checkoff`, `/ok` — see «When something is
   wrong».
+- `/report`, `/reports off` — see «Road reports».
 
 `DASHBOARD_USERS` are the **admins**: they see everyone, as before, and receive
 alerts for fences made before fences had owners. `DASHBOARD_TOKEN` still works
@@ -855,6 +856,53 @@ you set it. Both depend on Telegram reaching the people told, which on a
 filtered network is only as reliable as their connection. If you are in
 danger, call first.
 
+## Road reports
+
+A closed road, an accident, a hazard (something on the road, a pothole, a
+stopped vehicle, weather, roadworks) or a traffic jam, reported by whoever
+sees it and shown to **everyone who can sign in, never with who reported
+it** (`src/incidents.js`). The rules are Waze's, as the traffic research
+describes them:
+
+- **Report.** **Report** on the map puts a cross in the middle; move the map
+  so it is on the spot, pick what it is, and send. From the bot, `/report`
+  asks what it is and places it where your live location is, moved back along
+  your way by three seconds at your speed, for the time it takes to press the
+  button. Both say who will see it before it is sent. Ten an hour each.
+- **Believed, then faded.** A report starts at 60% (a new reporter's
+  reliability) and fades, faster for a jam than a closure. Somebody else
+  reporting the same thing — same kind, within 150 m (300 m for a closure or
+  a jam), going the same way — adds to it. Each pin shows how sure, and is
+  fainter the less sure; one report stays about 14 minutes for a jam, 40 for
+  an accident, 80 for a hazard and 8 hours for a closure, and longer as others
+  confirm it.
+- **Confirmed or dismissed.** Tap a pin: **Still there** or **Not there**. Two
+  "not there" with nobody but the reporter behind it take it down at once.
+  People who share their live location and pass within 200 m heading towards
+  one are asked through the bot, silently, whether it is still there — about
+  each report once, at most every five minutes, never about their own. The
+  first question says what it is; **Stop asking me** or `/reports off` ends
+  them. Your own report can be taken back until somebody else backs it.
+- **Reliability is learnt.** When a report is confirmed (80% with two people
+  behind it) or taken down by answers within 15 minutes, everyone who answered
+  becomes a little more or less reliable, and their next reports and answers
+  count for that much more or less.
+- **No police or speed cameras.** Warning of them is banned or restricted in
+  several countries, so there is nothing to report them with.
+
+Who reported or answered is kept only as a keyed hash of their id, so the
+tables do not say who said what. `/stop` or **forget** removes someone's
+answers, reliability and preferences; their reports stay, tied to nobody.
+Reports nobody has added to for `HISTORY_DAYS` are deleted with the rest of
+the history. **Road reports** in Layers hides the pins.
+
+`test/incidents.test.mjs` runs the research's check of the whole idea: a
+simulated day in which honest people are right 85% of the time and one person
+in five lies — fake reports, and the opposite answer to every question. After
+a two-hour warm-up, 76% of what the map shows is real and 82% of what is real
+is shown. The research aims for 90% and 80% with Waze's number of drivers;
+nearly all the difference is incidents that have cleared and not yet faded.
+
 ## Watches
 
 A watch with its own GPS and signal can report where it is directly — no
@@ -1068,7 +1116,8 @@ whoever is still sharing even with `TELEGRAM_CHATS` empty.
 where people went, and they agreed to share a live location in a chat, not to
 be logged. So it is kept for `HISTORY_DAYS` (default 90) and no longer: every
 six hours, and a minute after each start, older positions and fence crossings
-are deleted, a few thousand rows at a time, and only the count is logged.
+are deleted, a few thousand rows at a time, and only the count is logged —
+and road reports nobody has added to in that time, with their answers.
 `HISTORY_DAYS=0` keeps everything, as before there was a limit. The
 dashboard's *forget* button erases a person from the database as well as from
 the map, and `POST /api/forget/<id>` does the same from a script.
@@ -1263,6 +1312,8 @@ are, which is enough for a uptime check.
 | `src/live.js` | live links: one person, followed from now, for a while |
 | `src/sos.js` | an SOS: who is told, and what they are told |
 | `src/checks.js` | check on me: when to ask, and when to tell; the judgement is one pure function |
+| `src/incidents.js` | road reports: merging, belief, fading, reliability and whom to ask; the rules are pure functions |
+| `src/track.js` | a path without the fixes a phone got wrong; pure, fully tested |
 | `src/district.js` | the name of where the middle of the map is: place nodes from the import, else vector tiles from the upstream |
 | `src/cartography-vector.js` | the styled map layers from those vector tiles, where there is no import |
 | `src/vector-tiles.js` | the vector tile upstream (OpenFreeMap by default), proxied and cached on disk |

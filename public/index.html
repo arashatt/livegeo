@@ -366,7 +366,7 @@
   }
   #peoplebadge:empty{display:none}
 
-  .people-panel,.detail-panel,.layers-panel{
+  .people-panel,.detail-panel,.layers-panel,.report-panel{
     position:absolute;z-index:810;
     background:rgba(7,14,18,.86);
     border:1px solid rgba(255,255,255,.11);
@@ -502,6 +502,55 @@
     .gpx-map{height:40svh}
   }
 
+  /* Road reports (incidents.js): a pin each, everybody's, with nobody's name
+     on it. The kind reads from the shape as well as the colour, and a pin is
+     fainter the less sure anybody is. */
+  /* A pin whose tip is the spot, so its head stands clear of whoever is
+     there: a report is most often made where its reporter is. */
+  .incident-pin{position:relative;display:block;width:30px;height:40px;padding:0;border:0;background:none;cursor:pointer}
+  .incident-head{position:absolute;left:0;top:0;width:30px;height:30px;box-sizing:border-box;border-radius:50%;
+    display:grid;place-items:center;background:#0b1d26;border:2px solid var(--pin,#ffb35c);color:var(--pin,#ffb35c);
+    box-shadow:0 2px 10px rgba(0,0,0,.55)}
+  .incident-pin:after{content:"";position:absolute;left:10px;top:28px;border:5px solid transparent;border-bottom:0;border-top:12px solid var(--pin,#ffb35c)}
+  .incident-pin svg{width:17px;height:17px;pointer-events:none}
+  .incident-closed{--pin:#ff5d6c}.incident-accident{--pin:#ff8a3d}.incident-hazard{--pin:#ffd23f}.incident-jam{--pin:#c58bff}
+  .incident-pin:focus-visible{outline:2px solid #fff;outline-offset:2px;border-radius:50%}
+  /* The 3D map centres a marker on its point; this lifts the tip onto it. */
+  .game-marker.incident-pin{margin-top:-20px;z-index:45}
+  /* Its label above the head there too (the 3D map sets a smaller lift inline). */
+  .game-marker.game-tip.incident-tip{margin-top:-62px!important}
+  /* Where a report goes: the middle of the map, marked while reporting. */
+  .report-cross{position:absolute;left:50%;top:50%;width:36px;height:36px;margin:-18px 0 0 -18px;z-index:640;pointer-events:none;display:none}
+  body.reporting .report-cross{display:block}
+  .report-cross:before,.report-cross:after{content:"";position:absolute;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.65),0 0 8px rgba(0,0,0,.5)}
+  .report-cross:before{left:17px;top:0;width:2px;height:36px}
+  .report-cross:after{top:17px;left:0;height:2px;width:36px}
+  .report-panel{right:1rem;top:4.65rem;width:19rem;padding:.8rem;display:grid;gap:.6rem;max-height:calc(100% - 5.65rem);overflow:auto}
+  .report-panel[hidden]{display:none}
+  .report-panel .gpx-head h2{font-size:.98rem}
+  .report-kinds{display:grid;grid-template-columns:1fr 1fr;gap:.35rem;border:0;padding:0;margin:0}
+  .report-details{display:flex;flex-wrap:wrap;gap:.3rem;border:0;padding:0;margin:0}
+  .report-details[hidden]{display:none}
+  .report-kinds legend,.report-details legend{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .report-choice{position:relative;display:flex;align-items:center;gap:.4rem;min-height:40px;padding:.35rem .55rem;border-radius:6px;
+    border:1px solid rgba(255,255,255,.16);background:#081116;color:#e6ecee;font-size:.8rem;cursor:pointer}
+  .report-details .report-choice{min-height:34px;font-size:.74rem}
+  .report-choice input{position:absolute;opacity:0;pointer-events:none}
+  .report-choice:has(input:checked){border-color:var(--pin,#ffb35c);box-shadow:inset 0 0 0 1px var(--pin,#ffb35c)}
+  .report-choice:focus-within{outline:2px solid #9cbdcc;outline-offset:1px}
+  .report-choice i{width:.6rem;height:.6rem;border-radius:50%;background:var(--pin,#ffb35c);flex:none}
+  .report-where{font-size:.76rem;color:#c9d2d6}
+  @media (max-width:760px){
+    .report-panel{right:.55rem;left:.55rem;top:3.4rem;width:auto;max-height:44%}
+    .report-kinds{grid-template-columns:1fr 1fr}
+  }
+  /* A narrow phone has room for the toolbar's words or for all its buttons,
+     not both: Report keeps its icon, and its word as its name. */
+  @media (max-width:480px){
+    #reportbtn .tool-label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+    #reportbtn .hud-icon{margin:0}
+  }
+
   /* The district: the name of where the middle of the map is, the way a game
      names the district you drive into. Bottom right, over the map, never in
      the way of a click; the panels cover it. The name is somebody's own
@@ -551,6 +600,7 @@
     <div class="map-toolbar" aria-label="Map controls">
       <button class="ghost" id="peoplebtn" type="button" aria-expanded="false"><svg class="hud-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="7" r="3"/><path d="M2 19v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6m1 2a5 5 0 0 1 5 5"/></svg>People <span id="peoplebadge"></span></button>
       <button class="ghost" id="layersbtn" type="button" aria-expanded="false" aria-controls="layersPanel"><svg class="hud-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m2 8 10-5 10 5-10 5Zm0 5 10 5 10-5M2 18l10 5 10-5"/></svg>Layers</button>
+      <button class="ghost" id="reportbtn" type="button" aria-expanded="false" aria-controls="reportPanel"><svg class="hud-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20Z"/><path d="M12 10v4m0 3v.5"/></svg><span class="tool-label">Report</span></button>
       <button class="ghost" id="recentre" type="button" hidden><svg class="hud-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><path d="M12 1v5m0 12v5M1 12h5m12 0h5"/></svg>Recentre</button>
     </div>
 
@@ -584,6 +634,7 @@
       <div class="legend-row"><i class="legend-symbol private"></i>Private area · no point</div>
       <div class="legend-row"><i class="legend-path"></i>Trail · gaps stay hidden</div>
       <div class="legend-row"><i class="legend-symbol private"></i>Purple rim · your place</div>
+      <div class="legend-row"><i class="legend-symbol" style="--symbol:#ffd23f"></i>Road report · nobody’s name on it</div>
       <p>Halos show reported accuracy. A fan or arrow shows a recent heading. Purple outlines mark fences. ≈ means an estimated time; faded trail ends have no pins.</p>
       <p class="game-only">3D building heights are illustrative. Radar excludes private people.</p>
     </div></details>
@@ -628,6 +679,37 @@
       <label class="layer-option"><input type="checkbox" data-layer="trails" checked><span>Movement trails</span></label>
       <label class="layer-option"><input type="checkbox" data-layer="fences" checked><span>Geofences</span></label>
       <label class="layer-option"><input type="checkbox" data-layer="zones" checked><span>Private places</span></label>
+      <label class="layer-option"><input type="checkbox" data-layer="incidents" checked><span>Road reports</span><small>Everyone’s</small></label>
+    </section>
+
+    <div class="report-cross" aria-hidden="true"></div>
+    <section class="report-panel" id="reportPanel" aria-labelledby="reportTitle" hidden>
+      <div class="gpx-head">
+        <div><span class="gpx-kicker">Report on the road</span><h2 id="reportTitle">What is it?</h2></div>
+        <button class="panel-close" id="reportClose" type="button" aria-label="Close">×</button>
+      </div>
+      <fieldset class="report-kinds">
+        <legend>What is it?</legend>
+        <label class="report-choice incident-closed"><input type="radio" name="reportKind" value="closed"><i aria-hidden="true"></i>Road closed</label>
+        <label class="report-choice incident-accident"><input type="radio" name="reportKind" value="accident"><i aria-hidden="true"></i>Accident</label>
+        <label class="report-choice incident-hazard"><input type="radio" name="reportKind" value="hazard"><i aria-hidden="true"></i>Hazard</label>
+        <label class="report-choice incident-jam"><input type="radio" name="reportKind" value="jam"><i aria-hidden="true"></i>Traffic jam</label>
+      </fieldset>
+      <fieldset class="report-details incident-hazard" id="reportDetails" hidden>
+        <legend>What kind of hazard?</legend>
+        <label class="report-choice"><input type="radio" name="reportDetail" value="object">On the road</label>
+        <label class="report-choice"><input type="radio" name="reportDetail" value="pothole">Pothole</label>
+        <label class="report-choice"><input type="radio" name="reportDetail" value="stopped">Stopped vehicle</label>
+        <label class="report-choice"><input type="radio" name="reportDetail" value="weather">Weather</label>
+        <label class="report-choice"><input type="radio" name="reportDetail" value="works">Roadworks</label>
+      </fieldset>
+      <p class="report-where">Move the map so the cross is on the spot.</p>
+      <p class="gpx-warn">Everyone who can open this map sees it, never who sent it.</p>
+      <p class="gpx-status" id="reportStatus" role="status" hidden></p>
+      <div class="gpx-actions">
+        <button class="ghost" id="reportSend" type="button" disabled>Send</button>
+        <button class="ghost" id="reportCancel" type="button">Cancel</button>
+      </div>
     </section>
   </div>
 </main>
@@ -654,6 +736,23 @@
     </div>
     <p class="gpx-fine">GPX 1.1, for Strava, Garmin Connect, Komoot or OsmAnd. If your browser does not save it, send or copy it instead.</p>
     <details class="gpx-file" id="gpxFile" hidden><summary>Show the file</summary><pre id="gpxText"></pre></details>
+  </div>
+</dialog>
+
+<dialog class="gpx-dialog incident-dialog" id="incidentDialog" aria-labelledby="incidentTitle">
+  <div class="gpx-body">
+    <div class="gpx-head">
+      <div><span class="gpx-kicker">Road report</span><h2 id="incidentTitle">Report</h2></div>
+      <button class="panel-close" id="incidentClose" type="button" aria-label="Close">×</button>
+    </div>
+    <dl class="gpx-facts" id="incidentFacts"></dl>
+    <p class="gpx-fine" id="incidentNote"></p>
+    <p class="gpx-status" id="incidentStatus" role="status" hidden></p>
+    <div class="gpx-actions">
+      <button class="ghost" id="incidentThere" type="button">Still there</button>
+      <button class="ghost" id="incidentGone" type="button">Not there</button>
+      <button class="ghost" id="incidentWithdraw" type="button" hidden>Take back my report</button>
+    </div>
   </div>
 </dialog>
 
@@ -690,7 +789,7 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
     document.getElementById('cartographyStatus').textContent = message;
   });
 
-  var layerPrefs = { raster: !game, cartography: true, trails: true, fences: true, zones: true };
+  var layerPrefs = { raster: !game, cartography: true, trails: true, fences: true, zones: true, incidents: true };
 
   // A real geographic scale. Leaflet recomputes this from zoom and latitude,
   // so the number always corresponds to the map instead of being decorative.
@@ -785,6 +884,7 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
   layersButton.onclick = function () {
     layersPanel.hidden = !layersPanel.hidden;
     layersButton.setAttribute('aria-expanded', String(!layersPanel.hidden));
+    if (!layersPanel.hidden) closeReport();
   };
   setPeopleOpen(false);
 
@@ -2147,6 +2247,207 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
   var myZones = [];
   var zoneLayer = L.layerGroup().addTo(map);
 
+  // ------------------------------------------------------ road reports
+  //
+  // Closed roads, accidents, hazards and jams (incidents.js): everybody's,
+  // with nobody's name on them. Made where the cross in the middle of the
+  // map is, answered from a pin's dialog, and fetched again whenever the
+  // stream says they changed, and once a minute, because they fade.
+  var incidentLayer = L.layerGroup().addTo(map);
+  var incidents = [];
+  var shownIncident = null;
+  var INCIDENT_WORDS = { closed: 'Road closed', accident: 'Accident', hazard: 'Hazard', jam: 'Traffic jam' };
+  var HAZARD_WORDS = { object: 'Something on the road', pothole: 'Pothole', stopped: 'Stopped vehicle', weather: 'Weather', works: 'Roadworks' };
+  var INCIDENT_ICONS = {
+    closed: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor"/><rect x="6" y="10.5" width="12" height="3" rx="1" fill="#0b1d26"/></svg>',
+    accident: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.2 5.6 5.8-1.8-3 5.2 5 3.4-6 .6.6 6-4.6-4-4.6 4 .6-6-6-.6 5-3.4-3-5.2 5.8 1.8Z" fill="currentColor"/></svg>',
+    hazard: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20Z" fill="currentColor"/><path d="M12 9.5v4.5m0 2.6v.2" stroke="#0b1d26" stroke-width="2.2" stroke-linecap="round"/></svg>',
+    jam: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="4" rx="2" fill="currentColor"/><rect x="4" y="10" width="16" height="4" rx="2" fill="currentColor"/><rect x="4" y="16" width="16" height="4" rx="2" fill="currentColor"/></svg>'
+  };
+  function incidentName(v) {
+    return (v.kind === 'hazard' && HAZARD_WORDS[v.detail]) || INCIDENT_WORDS[v.kind] || 'Report';
+  }
+
+  function loadIncidents() {
+    if (document.hidden) return Promise.resolve();
+    return fetch('/api/incidents', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) { incidents = d.incidents || []; drawIncidents(); } })
+      .catch(function () {});
+  }
+
+  function drawIncidents() {
+    incidentLayer.clearLayers();
+    if (!layerPrefs.incidents) return;
+    incidents.forEach(function (v) {
+      var name = incidentName(v);
+      var marker = L.marker([v.lat, v.lon], {
+        icon: L.divIcon({
+          className: 'incident-pin incident-' + v.kind,
+          html: '<span class="incident-head">' + (INCIDENT_ICONS[v.kind] || '') + '</span>',
+          iconSize: [30, 40],
+          iconAnchor: [15, 40]
+        }),
+        keyboard: true,
+        riseOnHover: true,
+        // Fainter the less sure anybody is.
+        opacity: Math.max(0.45, Math.min(1, v.p * 1.25))
+      });
+      marker.bindTooltip(esc(name + ' · ' + ago(v.since)), { direction: 'top', offset: [0, -40], className: 'incident-tip' });
+      marker.on('click', function () { openIncident(v.id); });
+      incidentLayer.addLayer(marker);
+      var el = marker.getElement && marker.getElement();
+      if (el) el.setAttribute('aria-label', name + ', reported ' + ago(v.since) + ' — open to answer');
+    });
+  }
+
+  var incidentDialog = document.getElementById('incidentDialog');
+  function incidentStatus(message) {
+    var s = document.getElementById('incidentStatus');
+    s.textContent = message;
+    s.hidden = !message;
+  }
+  function openIncident(id) {
+    var v = incidents.filter(function (x) { return x.id === id; })[0];
+    if (!v) return;
+    shownIncident = v;
+    document.getElementById('incidentTitle').textContent = incidentName(v);
+    var facts = document.getElementById('incidentFacts');
+    facts.textContent = '';
+    [
+      ['Reported', ago(v.since) + ' · ' + clock(v.since)],
+      ['Confirmed by', v.confirmed ? v.confirmed + (v.confirmed === 1 ? ' person' : ' people') : 'nobody yet'],
+      ['How sure', Math.round(v.p * 100) + '%']
+    ].forEach(function (row) {
+      var dt = document.createElement('dt');
+      dt.textContent = row[0];
+      var dd = document.createElement('dd');
+      dd.textContent = row[1];
+      facts.appendChild(dt);
+      facts.appendChild(dd);
+    });
+    document.getElementById('incidentNote').textContent = !v.mine
+      ? 'Nobody is told who reported this, or who answers. It fades away unless people say it is still there.'
+      : v.backed ? 'You reported this, and somebody else has backed it, so it stays until it fades or people say it has gone.'
+      : 'You reported this. Nobody else is told who did.';
+    document.getElementById('incidentThere').hidden = v.mine;
+    document.getElementById('incidentGone').hidden = v.mine;
+    document.getElementById('incidentWithdraw').hidden = !v.mine || v.backed;
+    incidentStatus('');
+    showDialog(incidentDialog);
+  }
+  function closeIncident() {
+    if (typeof incidentDialog.close === 'function') { if (incidentDialog.open) incidentDialog.close(); }
+    else { incidentDialog.removeAttribute('open'); incidentDialog.classList.remove('no-modal'); }
+    shownIncident = null;
+  }
+  // Answers and withdrawals come back as JSON either way; an error says why.
+  function incidentRequest(path, method, failed) {
+    var v = shownIncident;
+    if (!v) return;
+    fetch(path, { method: method })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { incidentStatus(failed(res.d)); return; }
+        closeIncident();
+        loadIncidents();
+      })
+      .catch(function () { incidentStatus('Could not send that. Try again in a moment.'); });
+  }
+  function answerIncident(answer) {
+    if (!shownIncident) return;
+    incidentRequest('/api/incidents/' + shownIncident.id + '?answer=' + answer, 'POST', function (d) {
+      return 'Not sent: ' + ((d && d.error) || 'something went wrong') + '.';
+    });
+  }
+  document.getElementById('incidentThere').onclick = function () { answerIncident('there'); };
+  document.getElementById('incidentGone').onclick = function () { answerIncident('not_there'); };
+  document.getElementById('incidentWithdraw').onclick = function () {
+    if (!shownIncident) return;
+    incidentRequest('/api/incidents/' + shownIncident.id, 'DELETE', function () {
+      return 'Somebody else has backed it, so it stays until it fades or people say it has gone.';
+    });
+  };
+  document.getElementById('incidentClose').onclick = closeIncident;
+  incidentDialog.addEventListener('click', function (e) { if (e.target === incidentDialog) closeIncident(); });
+  incidentDialog.addEventListener('close', function () { shownIncident = null; });
+
+  // Reporting: a kind, the cross on the spot, send.
+  var reportPanel = document.getElementById('reportPanel');
+  var reportButton = document.getElementById('reportbtn');
+  function reportKind() {
+    var c = reportPanel.querySelector('input[name="reportKind"]:checked');
+    return c ? c.value : '';
+  }
+  function reportState(message) {
+    var s = document.getElementById('reportStatus');
+    s.textContent = message;
+    s.hidden = !message;
+  }
+  function syncReport() {
+    var kind = reportKind();
+    document.getElementById('reportDetails').hidden = kind !== 'hazard';
+    document.getElementById('reportSend').disabled = !kind;
+  }
+  function openReport() {
+    layersPanel.hidden = true;
+    layersButton.setAttribute('aria-expanded', 'false');
+    reportPanel.hidden = false;
+    reportButton.setAttribute('aria-expanded', 'true');
+    document.body.classList.add('reporting');
+    reportState('');
+    // Most reports are about where you are, so the cross starts there when
+    // the map knows it.
+    var mine = me && people.get(String(me.id));
+    var here = mine && mine.data;
+    if (here && here.latitude !== null && here.latitude !== undefined && !here.hidden) {
+      map.setView([here.latitude, here.longitude], Math.max(map.getZoom(), game ? 15 : 16));
+    }
+    syncReport();
+    var first = reportPanel.querySelector('input[name="reportKind"]');
+    if (first) first.focus();
+  }
+  function closeReport() {
+    if (reportPanel.hidden) return;
+    reportPanel.hidden = true;
+    reportButton.setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('reporting');
+    Array.prototype.forEach.call(reportPanel.querySelectorAll('input[type="radio"]'), function (r) { r.checked = false; });
+    syncReport();
+  }
+  reportButton.onclick = function () { if (reportPanel.hidden) openReport(); else closeReport(); };
+  document.getElementById('reportClose').onclick = function () { closeReport(); reportButton.focus(); };
+  document.getElementById('reportCancel').onclick = function () { closeReport(); reportButton.focus(); };
+  reportPanel.addEventListener('change', syncReport);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !reportPanel.hidden && !(incidentDialog.open)) { closeReport(); reportButton.focus(); }
+  });
+  document.getElementById('reportSend').onclick = function () {
+    var kind = reportKind();
+    if (!kind) return;
+    var detail = reportPanel.querySelector('input[name="reportDetail"]:checked');
+    var c = map.getCenter().wrap();
+    var send = document.getElementById('reportSend');
+    send.disabled = true;
+    reportState('Sending…');
+    fetch('/api/incidents?kind=' + encodeURIComponent(kind)
+      + (kind === 'hazard' && detail ? '&detail=' + encodeURIComponent(detail.value) : '')
+      + '&lat=' + c.lat.toFixed(6) + '&lon=' + c.lng.toFixed(6), { method: 'POST' })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          reportState('Not sent: ' + ((res.d && res.d.error) || 'something went wrong') + '.');
+          send.disabled = false;
+          return;
+        }
+        closeReport();
+        reportButton.focus();
+        loadIncidents();
+      })
+      .catch(function () { reportState('Could not send it. Try again in a moment.'); send.disabled = false; });
+  };
+  setInterval(loadIncidents, 60000);
+
   function syncTrails() {
     people.forEach(function (e) {
       ['path', 'glow', 'fades'].forEach(function (key) {
@@ -2171,12 +2472,14 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
     var layer = name === 'raster' ? rasterBase
       : name === 'fences' ? fenceLayer
       : name === 'zones' ? zoneLayer
+      : name === 'incidents' ? incidentLayer
       : null;
     if (layer) {
       if (on && !map.hasLayer(layer)) layer.addTo(map);
       if (!on && map.hasLayer(layer)) map.removeLayer(layer);
     }
     if (name === 'trails') syncTrails();
+    if (name === 'incidents') drawIncidents();
   }
 
   layersPanel.addEventListener('change', function (e) {
@@ -2317,6 +2620,7 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
       Array.from(people.keys()).forEach(function (id) { if (!seen[id]) drop(id); });
       if (!fitted && people.size) { fit(); fitted = true; }
       render();
+      loadIncidents();
     }
     else if (name === 'position') apply(d);
     else if (name === 'forget') { if (drop(d.id)) render(); }
@@ -2325,6 +2629,8 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
     // Either a fence was added or removed, or somebody crossed one. Both mean
     // the drawn set may be stale, and redrawing is one small request.
     else if (name === 'fence') loadFences();
+    // Somebody reported, answered or took back a road report, or one faded.
+    else if (name === 'incidents') loadIncidents();
   }
 
   // Read by hand over POST rather than with EventSource, for one reason:
@@ -2391,6 +2697,7 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
   recentre.onclick = function () { fit(); };
 
   loadFences();
+  loadIncidents();
   stream();
 
   // Keeps «live · 4m left» and «2m ago» from going stale between updates.

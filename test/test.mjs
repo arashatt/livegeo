@@ -15,7 +15,10 @@ import { parseTilePath, tileUrl, makeTiles } from '../src/tiles.js';
 import { peersFor } from '../src/mtproto.js';
 import worker from '../worker/src/index.js';
 import { fromUpdate } from '../src/positions.js';
-import { connect as connectBot, commandIn, liveMinutes, liveFor, sosReply, checkHours } from '../src/bot.js';
+import {
+  connect as connectBot, commandIn, liveMinutes, liveFor, sosReply, checkHours,
+  roadAction, askView, roadReply, REPORT_PROMPT, HAZARD_PROMPT,
+} from '../src/bot.js';
 import { makeLive } from '../src/live.js';
 import { makeSos, sosMessage } from '../src/sos.js';
 import { makeChecks, decide, checkAsk, checkTell } from '../src/checks.js';
@@ -875,6 +878,65 @@ head('what /login says, and why');
   t('somebody not allowed is told so', to(4) === 'Your account is not on the list of who may see the map.');
 }
 
+head('road reports, through the bot');
+{
+  t('a report button is read', JSON.stringify(roadAction('rp:jam')) === JSON.stringify({ type: 'report', kind: 'jam', detail: '', pick: false }));
+  t('a hazard asks what kind first', roadAction('rp:hazard').pick === true && roadAction('rp:hazard:').pick === false
+    && roadAction('rp:hazard:pothole').detail === 'pothole');
+  t('an answer is read', JSON.stringify(roadAction('ia:5:n')) === JSON.stringify({ type: 'answer', id: 5, answer: 'not_there' })
+    && roadAction('ia:off').type === 'off');
+  t('police is not a kind, and nothing else is ours',
+    [roadAction('rp:police'), roadAction('ia:x:y'), roadAction('rm:5'), roadAction('ia:5:maybe'), roadAction(null)].every((a) => a === null));
+  t('every report button is one the bot reads', REPORT_PROMPT.reply_markup.inline_keyboard.flat()
+    .concat(HAZARD_PROMPT.reply_markup.inline_keyboard.flat()).every((b) => roadAction(b.callback_data)));
+  const first = askView({ id: 5, kind: 'accident' }, { first: true, metres: 142 });
+  t('the question says what and how far', first.text.startsWith('Is an accident still there, about 140 m ahead?'), first.text);
+  t('the first time, what it is and that nobody is told who answered', /Nobody is told who answered/.test(first.text) && /not the one driving/.test(first.text));
+  t('later, just the question', !/New:/.test(askView({ id: 5, kind: 'hazard', detail: 'works' }).text) && /roadworks/.test(askView({ id: 5, kind: 'hazard', detail: 'works' }).text));
+  t('three buttons: still there, not there, stop asking',
+    first.reply_markup.inline_keyboard.flat().map((b) => b.callback_data).join() === 'ia:5:y,ia:5:n,ia:off');
+
+  const said = [];
+  const edits = [];
+  const did = [];
+  const press = (update, from, data) => ({ update_id: update, callback_query: { id: `cb${update}`, from: { id: from, is_bot: false, first_name: 'X' }, message: { message_id: 50, chat: { id: from } }, data } });
+  const text = (update, from, body) => ({ update_id: update, message: { message_id: update, date: 1, chat: { id: from }, from: { id: from, is_bot: false, first_name: 'X' }, text: body } });
+  let served = [[text(300, 7, '/report'), press(301, 7, 'rp:hazard'), press(302, 7, 'rp:hazard:pothole'), press(303, 8, 'rp:jam'),
+    press(304, 9, 'ia:5:n'), press(305, 9, 'ia:off'), text(306, 9, '/reports on'), text(307, 9, '/reports maybe')]];
+  const stub = async (url, init) => {
+    const method = String(url).split('/').pop();
+    const body = init?.body ? JSON.parse(init.body) : {};
+    if (method === 'getMe') return new Response(JSON.stringify({ ok: true, result: { id: 1, username: 'livegeobot' } }));
+    if (method === 'sendMessage') said.push(body);
+    if (method === 'editMessageText') edits.push(body);
+    if (method === 'getUpdates') return new Response(JSON.stringify({ ok: true, result: served.shift() || [] }));
+    return new Response(JSON.stringify({ ok: true, result: {} }));
+  };
+  const roads = {
+    report: async (id, kind, detail) => { did.push(['report', id, kind, detail]); return id === '8' ? { error: 'no live location' } : { incident: { id: 1 }, merged: false }; },
+    answer: async (id, incident, answer) => { did.push(['answer', id, incident, answer]); return { incident: { id: incident } }; },
+    setQuestions: async (id, on) => { did.push(['questions', id, on]); return { questions: on }; },
+  };
+  const bot = await connectBot({ botToken: 'T', chats: [] }, { fetch: stub, poll: 0, log: { info() {}, error() {} }, onPosition() {}, roads });
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && said.length < 3) await new Promise((r) => setTimeout(r, 5));
+  const sent = await bot.askRoad(9, { id: 5, kind: 'jam' }, { first: false, metres: 60 });
+  await bot.stop();
+  t('/report offers the four kinds', said[0]?.text === REPORT_PROMPT.text && said[0].reply_markup.inline_keyboard.flat().length === 4, said[0]);
+  t('a hazard turns the same message into its kinds', edits[0]?.text === HAZARD_PROMPT.text, edits[0]);
+  t('and a kind makes the report, as whoever pressed it', JSON.stringify(did[0]) === JSON.stringify(['report', '7', 'hazard', 'pothole']), did);
+  t('which the message then says', /^Reported a pothole where you are now\. Everyone on the map sees it, not who sent it/.test(edits[1]?.text), edits[1]);
+  t('without a live location, how to share one', /share your live location first/.test(edits[2]?.text), edits[2]);
+  t('an answer is passed on', JSON.stringify(did[2]) === JSON.stringify(['answer', '9', 5, 'not_there']) && edits[3]?.text === 'Thanks, noted: not there.', did);
+  t('stop asking, and /reports on, change the questions', JSON.stringify(did.slice(3)) === JSON.stringify([['questions', '9', false], ['questions', '9', true]])
+    && /will not ask again/.test(edits[4]?.text), did);
+  t('/reports with anything else says what it takes', /\/reports off stops me asking/.test(said.at(-2)?.text || said.at(-1)?.text || ''), said.map((m) => m.text));
+  const question = said.at(-1);
+  t('a question is silent, and asks about the report', sent === true && question.disable_notification === true
+    && /^Is a traffic jam still there, about 60 m ahead\?$/.test(question.text), question);
+  t('without roads, /report says it is not available', /not available/.test(roadReply({ type: 'report', kind: 'jam' }, null)));
+}
+
 head('where the links point');
 {
   let now = 1_000_000;
@@ -1293,6 +1355,9 @@ head('the leak matrix: every route, as every kind of viewer');
     ownDevices: ['/api/devices/code', '/api/devices', '/api/devices/'],
     deviceOnly: ['/api/ingest'],
     ownZones: ['/api/zones', '/api/zones/'],
+    // Road reports: every one to everybody signed in, none with a name, and
+    // what you do there you do as yourself.
+    roadReports: ['/api/incidents', '/api/incidents/'],
   };
   const known = new Set(Object.values(classified).flat());
   const unclassified = routes.filter((r) => !known.has(r));
@@ -1351,6 +1416,25 @@ head('the leak matrix: every route, as every kind of viewer');
   t('an admin can take anybody’s', (await hit('token', '/api/gpx/3')).status === 200);
   t('a window longer than a week is refused', (await hit('grace', '/api/gpx/3?from=1&to=900000')).status === 400);
   t('and nothing was erased', db.forgotten.length === 0, db.forgotten);
+
+  // --- road reports: everybody's, with nobody's name on them
+  t('road reports need signing in', (await hit('stranger', '/api/incidents')).status === 401);
+  const road = await (await hit('ada', '/api/incidents?kind=accident&lat=36.3&lon=59.6', 'POST')).json();
+  t('Ada can report one', road.incident?.kind === 'accident' && road.merged === false, road);
+  const onRoad = (await (await hit('grace', '/api/incidents')).json()).incidents;
+  t('Grace, who cannot see Ada, sees it', onRoad.length === 1 && onRoad[0].id === road.incident.id, onRoad);
+  t('but not who reported it', onRoad[0].mine === false && !('reporter' in onRoad[0]) && !JSON.stringify(onRoad).includes('Ada'));
+  t('Ada sees that it is hers', (await (await hit('ada', '/api/incidents')).json()).incidents[0].mine === true);
+  t('police is not a kind of report', (await hit('ada', '/api/incidents?kind=police&lat=36.3&lon=59.6', 'POST')).status === 400);
+  t('nor is nowhere', (await hit('ada', '/api/incidents?kind=jam&lat=&lon=59.6', 'POST')).status === 400);
+  t('Ada cannot answer her own', (await hit('ada', `/api/incidents/${road.incident.id}?answer=there`, 'POST')).status === 409);
+  t('Grace cannot take it down', (await hit('grace', `/api/incidents/${road.incident.id}`, 'DELETE')).status === 404);
+  t('Grace can say it is still there', (await hit('grace', `/api/incidents/${road.incident.id}?answer=there`, 'POST')).status === 200);
+  t('after which it is not Ada’s alone to take back', (await hit('ada', `/api/incidents/${road.incident.id}`, 'DELETE')).status === 404);
+  t('an answer has to be one of the two', (await hit('admin', `/api/incidents/${road.incident.id}?answer=maybe`, 'POST')).status === 400);
+  t('nothing is answered about a report that is not there', (await hit('admin', '/api/incidents/999?answer=there', 'POST')).status === 404
+    && (await hit('admin', '/api/incidents/abc?answer=there', 'POST')).status === 404);
+  t('the shared token reports as one more person', (await hit('token', '/api/incidents?kind=jam&lat=36.4&lon=59.7', 'POST')).status === 200);
 
   // --- fences are somebody's
   const made = await (await hit('ada', '/api/fences?name=home&lat=36.3&lon=59.6&radius=100', 'POST')).json();
@@ -1412,6 +1496,8 @@ head('the leak matrix: every route, as every kind of viewer');
     ['list its owner’s live links', '/api/live', 'GET'],
     ['raise an SOS', '/api/sos', 'POST'],
     ['start a check on its owner', '/api/check?hours=2', 'POST'],
+    ['read road reports', '/api/incidents', 'GET'],
+    ['report something on the road', '/api/incidents?kind=jam&lat=36.3&lon=59.6', 'POST'],
   ]) {
     t(`a watch cannot ${what}`, (await watch(path, method)).status === 404, path);
   }

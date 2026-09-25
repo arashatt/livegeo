@@ -151,3 +151,47 @@ CREATE TABLE IF NOT EXISTS checks (
   told_at    timestamptz,
   ok_at      timestamptz
 );
+
+-- Road reports (incidents.js): closed roads, accidents, hazards and jams,
+-- shown to everyone who can sign in and never with who reported them. A
+-- reporter is a keyed hash of their id, not the id, so these tables do not
+-- say who said what. `logit` is the belief at `last_at`, before it fades;
+-- `peak` the most it has been believed, which decides whether it is shown.
+CREATE TABLE IF NOT EXISTS incidents (
+  id         bigserial PRIMARY KEY,
+  kind       text NOT NULL,
+  detail     text NOT NULL DEFAULT '',
+  geom       geography(Point, 4326) NOT NULL,
+  heading    real,
+  reporter   text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL,
+  last_at    timestamptz NOT NULL,
+  logit      double precision NOT NULL,
+  peak       double precision NOT NULL DEFAULT 0,
+  status     text NOT NULL DEFAULT 'active',
+  resolved   boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS incidents_status_idx ON incidents (status);
+-- Every report, "still there" and "not there", as it came: append-only, so a
+-- belief can always be worked out again.
+CREATE TABLE IF NOT EXISTS incident_evidence (
+  incident bigint NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  reporter text NOT NULL,
+  kind     text NOT NULL,
+  weight   double precision NOT NULL,
+  at       timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS incident_evidence_incident_idx ON incident_evidence (incident);
+-- How reliable each reporter has been, as Beta(alpha, beta).
+CREATE TABLE IF NOT EXISTS reporters (
+  reporter text PRIMARY KEY,
+  alpha    double precision NOT NULL DEFAULT 3,
+  beta     double precision NOT NULL DEFAULT 2
+);
+-- Whether the bot may ask somebody "still there?", and whether it has told
+-- them it will.
+CREATE TABLE IF NOT EXISTS road_prefs (
+  person    text PRIMARY KEY,
+  questions boolean NOT NULL DEFAULT true,
+  told      boolean NOT NULL DEFAULT false
+);

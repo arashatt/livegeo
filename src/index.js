@@ -6,13 +6,14 @@
 // `client` for the directory to ask names of.
 
 import { load } from './config.js';
-import { Positions } from './positions.js';
+import { Positions, metresBetween } from './positions.js';
 import { serve } from './server.js';
 import { connect as connectAccount } from './mtproto.js';
 import { connect as connectBot } from './bot.js';
 import { makeDirectory } from './directory.js';
 import { makeGeo } from './geo.js';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import { makeIncidents, bearing } from './incidents.js';
 import { makeLinks } from './login.js';
 import { makeWatcher, announce } from './fences.js';
 import { makeCircles, canActFor } from './circles.js';
@@ -119,11 +120,69 @@ if (checking) console.log(`check: still checking on ${checking} ${checking === 1
 // the state survives for as long as the process does.
 const fences = makeWatcher({ floor: config.fenceFloor, dwell: config.fenceDwell });
 
-const { publish, publishFence, forget, setBot, grant, revoke, stopLink, resend } = serve(positions, config, {
-  directory, geo, links, circles, makeInvite, devices, codes, zones, live, sos, checks, address,
+// Road reports (incidents.js). Reporters are kept as a keyed hash of their
+// id; the key comes from a secret the service already has, so it stays the
+// same across restarts and nobody holding only the database can undo it.
+const secret = config.botToken || config.dashboardToken;
+const incidents = makeIncidents({
+  geo,
+  key: secret ? createHash('sha256').update(`livegeo road reporters\n${secret}`).digest() : null,
+});
+const reports = await incidents.load().catch((e) => { console.error('incidents:', e.message); return 0; });
+if (reports) console.log(`incidents: ${reports} road report${reports === 1 ? '' : 's'} still on the map`);
+
+const { publish, publishFence, forget, setBot, grant, revoke, stopLink, resend, incidentsChanged } = serve(positions, config, {
+  directory, geo, links, circles, makeInvite, devices, codes, zones, live, sos, checks, address, incidents,
   onFenceDeleted: (id) => fences.dropFence(id),
   onIngest: (fixes) => ingest(fixes),
 });
+
+// Which way somebody is going: what their phone says, or else the way they
+// came from their last fix; and how fast, from the same two fixes.
+const finite = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+function motionOf(p) {
+  const trail = p.trail || [];
+  const prev = trail.length > 1 ? trail[trail.length - 2] : null;
+  const heading = finite(p.heading) ? Number(p.heading) : (prev ? bearing(prev, p) : null);
+  const speed = prev && p.at > prev.at ? metresBetween(prev, p) / (p.at - prev.at) : null;
+  return { heading, speed };
+}
+
+// Somebody sharing who passes a road report is asked, through the bot,
+// whether it is still there. Silent, at most once a report and once in five
+// minutes (incidents.js), and never where there is no bot to ask with.
+let askRoad = null;
+function askAboutRoads(p) {
+  if (!askRoad || !p.liveUntil || p.liveUntil < Date.now() / 1000) return;
+  const { heading } = motionOf(p);
+  const inc = incidents.askFor({ ...p, heading });
+  if (!inc) return;
+  const first = !incidents.told(p.id);
+  const metres = metresBetween(p, { latitude: inc.lat, longitude: inc.lon });
+  askRoad(p.id, inc, { first, metres })
+    .then((sent) => { if (sent && first) incidents.setPrefs(p.id, { told: true }); })
+    .catch((e) => console.error('incidents:', e && e.message ? e.message : e));
+}
+
+// What the bot does with /report and the answers to "still there?".
+const roads = {
+  // Where they are now, which is what a report from the bot means: so only
+  // with a live location, and a recent one.
+  report: async (id, kind, detail) => {
+    const p = positions.get(id);
+    const now = Date.now() / 1000;
+    if (!p || p.latitude === null || !p.liveUntil || p.liveUntil < now || now - p.at > 120) return { error: 'no live location' };
+    const made = await incidents.report(id, { kind, detail, latitude: p.latitude, longitude: p.longitude, ...motionOf(p) });
+    if (!made.error) incidentsChanged();
+    return made;
+  },
+  answer: async (id, incident, answer) => {
+    const got = await incidents.answer(id, incident, answer);
+    if (!got.error && !got.again) incidentsChanged();
+    return got;
+  },
+  setQuestions: async (id, on) => incidents.setPrefs(id, { questions: on, told: true }),
+};
 
 // A restart used to blank the map until everyone happened to move again. What
 // was last recorded is what the store would have held, so put it back before
@@ -152,6 +211,7 @@ const onPosition = (position) => {
   const changed = positions.update(position);
   if (!changed) return;
   publish(changed);
+  askAboutRoads(changed);
   // Recorded beside the push rather than before it: the open maps should
   // not wait on a database, and a write that fails is not a reason to drop
   // the update on the floor.
@@ -295,9 +355,10 @@ const circle = circles.enabled ? {
 } : null;
 
 const telegram = config.ingest === 'bot'
-  ? await connectBot(config, { directory, onPosition, onForget, onLogin, circle })
+  ? await connectBot(config, { directory, onPosition, onForget, onLogin, circle, roads })
   : await connectAccount(config, { directory, onPosition });
 inviteLink = telegram.inviteLink || null;
+askRoad = telegram.askRoad || null;
 
 // Both connectors expose the thing the directory needs to resolve a name.
 directory.attach(telegram.client);
@@ -309,6 +370,13 @@ locate = telegram.locate || null;
 setInterval(() => { sos.sweep().catch((e) => console.error('sos:', e && e.message ? e.message : e)); }, 30_000);
 // And every check, once a minute: asked, told, moved on, or over.
 setInterval(() => { checks.sweep().catch((e) => console.error('check:', e && e.message ? e.message : e)); }, 60_000);
+// Road reports fade: once a minute, whatever faded away or settled is put
+// right, and open maps told if what they show changed.
+setInterval(() => {
+  incidents.sweep()
+    .then((changed) => { if (changed) incidentsChanged(); })
+    .catch((e) => console.error('incidents:', e && e.message ? e.message : e));
+}, 60_000);
 // History past HISTORY_DAYS, deleted soon after the start and every six
 // hours after. Only a count is logged, never whose.
 const prune = () => geo.prune(config.historyDays)

@@ -44,6 +44,8 @@ const HELP = [
   '/sos — tell everyone who can see you exactly where you are, for an hour; /safe ends it',
   '/checkon — for two hours (or /checkon 1h, 4h), ask me to check on you if you stop somewhere unusual; /checkoff ends it',
   '/circle — who can see you, and whom you can see',
+  '/report — a closed road, an accident, a hazard or a jam, where you are now; everyone on the map sees it, not who sent it',
+  '/reports off — stop me asking whether reports you pass are still there (/reports on to start again)',
   '/pair — a code to connect a watch',
   '/stop — stop being shown, and delete the path held about you',
   '/start — this message',
@@ -126,6 +128,76 @@ export function circleAction(data) {
 }
 
 const nameOf = (u) => (u && (u.name || (u.username ? '@' + u.username : ''))) || 'someone';
+
+// ------------------------------------------------------------- road reports
+//
+// /report, and "still there?" (incidents.js). A button's data: `rp:<kind>`
+// or `rp:hazard:<what>` makes a report; `ia:<id>:y` / `ia:<id>:n` answers
+// one; `ia:off` stops the questions. Anything else is not ours.
+export function roadAction(data) {
+  const s = String(data || '');
+  let m = /^rp:(closed|accident|hazard|jam)(?::(object|pothole|stopped|weather|works)?)?$/.exec(s);
+  if (m) return { type: 'report', kind: m[1], detail: m[2] || '', pick: m[1] === 'hazard' && !s.startsWith('rp:hazard:') };
+  m = /^ia:(\d{1,15}):([yn])$/.exec(s);
+  if (m) return { type: 'answer', id: Number(m[1]), answer: m[2] === 'y' ? 'there' : 'not_there' };
+  if (s === 'ia:off') return { type: 'off' };
+  return null;
+}
+
+const KIND_WORDS = { closed: 'a closed road', accident: 'an accident', hazard: 'a hazard', jam: 'a traffic jam' };
+const DETAIL_WORDS = {
+  object: 'something on the road', pothole: 'a pothole', stopped: 'a stopped vehicle',
+  weather: 'weather', works: 'roadworks',
+};
+export const roadWords = (kind, detail = '') => (kind === 'hazard' && DETAIL_WORDS[detail]) || KIND_WORDS[kind] || 'a report';
+
+export const REPORT_PROMPT = {
+  text: 'What is it? It goes on the map where you are now. Everyone who can open the map sees it, never who sent it.',
+  reply_markup: { inline_keyboard: [
+    [{ text: '⛔ Road closed', callback_data: 'rp:closed' }, { text: '💥 Accident', callback_data: 'rp:accident' }],
+    [{ text: '⚠️ Hazard', callback_data: 'rp:hazard' }, { text: '🚗 Traffic jam', callback_data: 'rp:jam' }],
+  ] },
+};
+export const HAZARD_PROMPT = {
+  text: 'What kind of hazard?',
+  reply_markup: { inline_keyboard: [
+    [{ text: 'Something on the road', callback_data: 'rp:hazard:object' }, { text: 'Pothole', callback_data: 'rp:hazard:pothole' }],
+    [{ text: 'Stopped vehicle', callback_data: 'rp:hazard:stopped' }, { text: 'Weather', callback_data: 'rp:hazard:weather' }],
+    [{ text: 'Roadworks', callback_data: 'rp:hazard:works' }, { text: 'Just a hazard', callback_data: 'rp:hazard:' }],
+  ] },
+};
+
+// The question, and the first time it is asked, what it is and how to stop it.
+export function askView(incident, { first = false, metres = null } = {}) {
+  const lines = [`Is ${roadWords(incident.kind, incident.detail)} still there${metres ? `, about ${Math.max(10, Math.round(metres / 10) * 10)} m ahead` : ''}?`];
+  if (first) {
+    lines.push('', 'New: when you pass something reported on the map, I may ask whether it is still there.'
+      + ' Nobody is told who answered. Only answer if you are not the one driving.');
+  }
+  return {
+    text: lines.join('\n'),
+    reply_markup: { inline_keyboard: [
+      [{ text: 'Still there', callback_data: `ia:${incident.id}:y` }, { text: 'Not there', callback_data: `ia:${incident.id}:n` }],
+      [{ text: 'Stop asking me', callback_data: 'ia:off' }],
+    ] },
+  };
+}
+
+// What a report or an answer comes back as, in words.
+export function roadReply(action, result) {
+  if (action.type === 'off') return 'I will not ask again. /reports on starts the questions again.';
+  if (result && result.error === 'no live location') {
+    return 'I need to know where you are: share your live location first (📎 → Location → Share Live Location), then /report. Or report it on the map.';
+  }
+  if (!result || result.error) return result?.error ? `Not sent: ${result.error}.` : 'Road reports are not available here.';
+  if (action.type === 'report') {
+    return result.merged
+      ? `Someone had already reported ${roadWords(action.kind, action.detail)} there; yours was added to it. Thank you.`
+      : `Reported ${roadWords(action.kind, action.detail)} where you are now. Everyone on the map sees it, not who sent it. Thank you.`;
+  }
+  if (!result.incident) return 'Thanks. That report has gone from the map.';
+  return action.answer === 'there' ? 'Thanks, noted: still there.' : 'Thanks, noted: not there.';
+}
 
 // The /circle message: text plus one button per person, both directions.
 export function circleView({ canSeeMe = [], iCanSee = [] } = {}) {
@@ -221,6 +293,9 @@ export async function connect(config, {
   // Circles, when there is a database to keep them in: { seen, invite,
   // redeem, circleOf, revoke }. Absent, the circle commands say so.
   circle = null,
+  // Road reports: { report(id, kind, detail), answer(id, incident, answer),
+  // setQuestions(id, on) }. Absent, /report says they are not available.
+  roads = null,
   directory = null,
   log = console,
   fetch: f = fetch,
@@ -268,8 +343,38 @@ export async function connect(config, {
   // `from` is Telegram's word for who that was, and a forwarded message's
   // buttons pressed by somebody else act for them, not for its author.
   async function pressed(query) {
-    const action = circleAction(query.data);
     const me = String(query.from.id);
+    const road = roadAction(query.data);
+    if (road) {
+      // The kind of hazard first, then the report.
+      if (road.pick) {
+        await api.call('answerCallbackQuery', { callback_query_id: query.id }).catch(() => {});
+        if (query.message) {
+          await api.call('editMessageText', { chat_id: query.message.chat.id, message_id: query.message.message_id, ...HAZARD_PROMPT })
+            .catch(() => {});
+        }
+        return;
+      }
+      let result = null;
+      if (roads) {
+        try {
+          if (road.type === 'report') result = await roads.report(me, road.kind, road.detail);
+          else if (road.type === 'answer') result = await roads.answer(me, road.id, road.answer);
+          else result = await roads.setQuestions(me, false);
+        } catch (e) {
+          log.error('bot: road report —', e.message);
+          result = { error: 'something went wrong' };
+        }
+      }
+      const text = roadReply(road, result);
+      await api.call('answerCallbackQuery', { callback_query_id: query.id }).catch(() => {});
+      if (query.message) {
+        await api.call('editMessageText', { chat_id: query.message.chat.id, message_id: query.message.message_id, text })
+          .catch(() => say(query.message.chat.id, text));
+      }
+      return;
+    }
+    const action = circleAction(query.data);
     if (circle && action) {
       if (action.kind === 'rm') await circle.revoke(me, action.id);
       else await circle.revoke(action.id, me);
@@ -399,6 +504,24 @@ export async function connect(config, {
         }[said] || 'Good.');
         return;
       }
+      if (command.name === '/report') {
+        if (!roads) { await say(command.chat, 'Road reports are not available here.'); return; }
+        await say(command.chat, REPORT_PROMPT.text, { reply_markup: REPORT_PROMPT.reply_markup });
+        return;
+      }
+      if (command.name === '/reports') {
+        const arg = command.args.trim().toLowerCase();
+        if (!roads || (arg !== 'on' && arg !== 'off')) {
+          await say(command.chat, roads ? '/reports off stops me asking whether reports you pass are still there; /reports on starts it again.'
+            : 'Road reports are not available here.');
+          return;
+        }
+        await roads.setQuestions(String(command.from.id), arg === 'on');
+        await say(command.chat, arg === 'on'
+          ? 'I will ask now and then whether a report you pass is still there. Nobody is told who answered.'
+          : 'I will not ask again. /reports on starts the questions again.');
+        return;
+      }
       if (command.name === '/pair') {
         const code = circle?.pair ? circle.pair(String(command.from.id)) : null;
         await say(command.chat, code
@@ -504,6 +627,18 @@ export async function connect(config, {
         return true;
       } catch (e) {
         log.error('bot: cannot send a location —', e.message);
+        return false;
+      }
+    },
+    // "Still there?" about a road report somebody is passing. Silent: it is
+    // for a passenger, or for later, not for whoever is driving.
+    askRoad: async (chatId, incident, options = {}) => {
+      try {
+        const view = askView(incident, options);
+        await api.call('sendMessage', { chat_id: chatId, text: view.text, reply_markup: view.reply_markup, disable_notification: true });
+        return true;
+      } catch (e) {
+        log.error('bot: cannot ask about a report —', e.message);
         return false;
       }
     },

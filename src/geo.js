@@ -47,10 +47,11 @@ export function placeName({ road, area } = {}) {
   return parts.join(', ');
 }
 
-// Up to $2 rows of `table` older than $1 seconds, for prune() below.
-export function pruneSql(table) {
+// Up to $2 rows of `table` whose `column` is older than $1 seconds, for
+// prune() below.
+export function pruneSql(table, column = 'at') {
   return `DELETE FROM ${table} WHERE ctid IN (
-    SELECT ctid FROM ${table} WHERE at < now() - make_interval(secs => $1) LIMIT $2)`;
+    SELECT ctid FROM ${table} WHERE ${column} < now() - make_interval(secs => $1) LIMIT $2)`;
 }
 
 export function makeGeo({ url, log = console } = {}) {
@@ -645,19 +646,125 @@ export function makeGeo({ url, log = console } = {}) {
 
     // Where everybody was, deleted once it is older than `days`: the raw
     // fixes and the fence crossings, which are the same history in other
-    // words. In batches, so the first run over years of it is not one huge
-    // transaction. Returns how many rows went.
+    // words, and road reports nobody has added to since (their answers go
+    // with them). In batches, so the first run over years of it is not one
+    // huge transaction. Returns how many rows went.
     async prune(days, { batch = 5000 } = {}) {
       if (!pool || !(days > 0)) return 0;
       let gone = 0;
-      for (const table of ['positions', 'fence_events']) {
+      for (const [table, column] of [['positions', 'at'], ['fence_events', 'at'], ['incidents', 'last_at']]) {
         for (;;) {
-          const res = await pool.query(pruneSql(table), [Math.round(days * 86400), batch]);
+          const res = await pool.query(pruneSql(table, column), [Math.round(days * 86400), batch]);
           gone += res.rowCount;
           if (res.rowCount < batch) break;
         }
       }
       return gone;
+    },
+
+    // Road reports (incidents.js): the active ones, with their evidence
+    // folded back into who backed each and who did not, and everybody's
+    // reliability and whether they may be asked.
+    async loadIncidents() {
+      if (!pool) return { incidents: [], reporters: [], prefs: [] };
+      const [inc, ev, rep, pref] = await Promise.all([
+        pool.query(
+          `SELECT id, kind, detail, ST_Y(geom::geometry) AS latitude, ST_X(geom::geometry) AS longitude,
+                  heading, reporter, extract(epoch FROM created_at) AS created, extract(epoch FROM last_at) AS last,
+                  logit, peak, status, resolved
+             FROM incidents WHERE status = 'active'`,
+        ),
+        pool.query(
+          `SELECT e.incident, e.reporter, e.kind FROM incident_evidence e
+             JOIN incidents i ON i.id = e.incident WHERE i.status = 'active'`,
+        ),
+        pool.query('SELECT reporter, alpha, beta FROM reporters'),
+        pool.query('SELECT person, questions, told FROM road_prefs'),
+      ]);
+      const byId = new Map(inc.rows.map((r) => [Number(r.id), {
+        id: Number(r.id), kind: r.kind, detail: r.detail,
+        latitude: Number(r.latitude), longitude: Number(r.longitude),
+        heading: r.heading === null ? null : Number(r.heading), reporter: r.reporter,
+        createdAt: Number(r.created), lastAt: Number(r.last), logit: Number(r.logit), peak: Number(r.peak),
+        status: r.status, resolved: Boolean(r.resolved),
+        supporters: new Set(), dismissers: new Set(), there: 0, notThere: 0,
+      }]));
+      for (const e of ev.rows) {
+        const i = byId.get(Number(e.incident));
+        if (!i) continue;
+        if (e.kind === 'not_there') { i.dismissers.add(e.reporter); i.notThere += 1; }
+        else { i.supporters.add(e.reporter); if (e.kind === 'there') i.there += 1; }
+      }
+      return { incidents: [...byId.values()], reporters: rep.rows, prefs: pref.rows };
+    },
+
+    // A new incident comes back with its id; one already saved is brought up
+    // to date.
+    async saveIncident(inc) {
+      if (!pool) return null;
+      if (inc.id === null || inc.id === undefined) {
+        const { rows } = await pool.query(
+          `INSERT INTO incidents (kind, detail, geom, heading, reporter, created_at, last_at, logit, peak, status, resolved)
+           VALUES ($1, $2, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography, $5, $6,
+                   to_timestamp($7::double precision), to_timestamp($8::double precision), $9, $10, $11, $12)
+           RETURNING id`,
+          [inc.kind, inc.detail || '', inc.longitude, inc.latitude, inc.heading ?? null, inc.reporter,
+           inc.createdAt, inc.lastAt, inc.logit, inc.peak ?? 0, inc.status, Boolean(inc.resolved)],
+        );
+        return Number(rows[0].id);
+      }
+      await pool.query(
+        `UPDATE incidents SET last_at = to_timestamp($2::double precision), logit = $3, peak = $4, status = $5,
+                resolved = $6, reporter = $7 WHERE id = $1`,
+        [inc.id, inc.lastAt, inc.logit, inc.peak ?? 0, inc.status, Boolean(inc.resolved), inc.reporter],
+      );
+      return inc.id;
+    },
+
+    async addIncidentEvidence({ incident, reporter, kind, weight, at }) {
+      if (!pool) return false;
+      await pool.query(
+        `INSERT INTO incident_evidence (incident, reporter, kind, weight, at)
+         VALUES ($1, $2, $3, $4, to_timestamp($5::double precision))`,
+        [incident, reporter, kind, weight, at],
+      );
+      return true;
+    },
+
+    async saveReporter({ reporter, alpha, beta }) {
+      if (!pool) return false;
+      await pool.query(
+        `INSERT INTO reporters (reporter, alpha, beta) VALUES ($1, $2, $3)
+         ON CONFLICT (reporter) DO UPDATE SET alpha = EXCLUDED.alpha, beta = EXCLUDED.beta`,
+        [reporter, alpha, beta],
+      );
+      return true;
+    },
+
+    async saveRoadPrefs({ person, questions, told }) {
+      if (!pool) return false;
+      await pool.query(
+        `INSERT INTO road_prefs (person, questions, told) VALUES ($1, $2, $3)
+         ON CONFLICT (person) DO UPDATE SET questions = EXCLUDED.questions, told = EXCLUDED.told`,
+        [String(person), Boolean(questions), Boolean(told)],
+      );
+      return true;
+    },
+
+    // /stop, for road reports: somebody's answers, reliability and
+    // preferences go; their reports stay, tied to nobody.
+    async forgetReporter({ person, reporter }) {
+      if (!pool) return 0;
+      const { rows } = await pool.query(
+        `WITH ev  AS (DELETE FROM incident_evidence WHERE reporter = $1 RETURNING 1),
+              rp  AS (DELETE FROM reporters WHERE reporter = $1 RETURNING 1),
+              pf  AS (DELETE FROM road_prefs WHERE person = $2 RETURNING 1),
+              inc AS (UPDATE incidents SET reporter = '' WHERE reporter = $1 RETURNING 1)
+         SELECT (SELECT count(*) FROM ev) + (SELECT count(*) FROM rp)
+              + (SELECT count(*) FROM pf) + (SELECT count(*) FROM inc) AS n`,
+        [reporter, String(person)],
+      );
+      return Number(rows[0]?.n ?? 0);
     },
 
     // One statement, both tables, so an erasure cannot be half done. Kept

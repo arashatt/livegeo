@@ -29,6 +29,7 @@ import {
 } from './zones.js';
 import { toGpx, splitAtPauses, dayOf, contentDisposition } from './gpx.js';
 import { cleanTrack } from './track.js';
+import { makeIncidents } from './incidents.js';
 import { makeLive, describeLink, LIVE_MINUTES, LIVE_EACH } from './live.js';
 import { CHECK_HOURS } from './checks.js';
 import { randomBytes, createHash } from 'node:crypto';
@@ -150,6 +151,9 @@ export function serve(positions, config, {
   // map layers both draw from it.
   vectorTiles = null,
   terrainTiles = null,
+  // Road reports (incidents.js). Without one given, reports live in memory
+  // until a restart, which is what tests use.
+  incidents = makeIncidents(),
 } = {}) {
   // Open streams, and who is at the other end of each. Every event is checked
   // against the viewer before it is written, so a stream only ever carries
@@ -281,6 +285,9 @@ export function serve(positions, config, {
     zones.forget(id);
     live.forget(id);
     checks?.forget(id);
+    // Their answers to road reports and their reliability go; reports they
+    // made stay on the map as anybody's.
+    await incidents.forget(id).catch((e) => log.error('incidents: erasure failed —', e && e.message ? e.message : e));
     for (const res of told) { try { send(res, 'forget', { id }); } catch { watchers.delete(res); } }
     // Whoever was following them by a link is not left holding an open
     // stream that would carry them again if they ever came back.
@@ -1069,6 +1076,45 @@ export function serve(positions, config, {
       return;
     }
 
+    // Road reports (incidents.js). Everybody who can sign in sees every one,
+    // and none says who made it: reporting one says so before it is sent.
+    // What a viewer does here, they do as themselves — the shared token as
+    // one more reporter.
+    const reporter = viewer.id ?? 'dashboard';
+    const toMaps = { to: (v) => v.via !== 'device' };
+    if (url.pathname === '/api/incidents') {
+      if (req.method === 'GET') return json(200, { incidents: incidents.list(reporter) });
+      if (req.method !== 'POST') return notFound();
+      const num = (k) => {
+        const v = url.searchParams.get(k);
+        return v === null || v.trim() === '' ? NaN : Number(v);
+      };
+      const made = await incidents.report(reporter, {
+        kind: url.searchParams.get('kind'), detail: url.searchParams.get('detail') || '',
+        latitude: num('lat'), longitude: num('lon'),
+      });
+      if (made.error) return json(made.status || 400, { error: made.error });
+      broadcast('incidents', {}, toMaps);
+      return json(200, made);
+    }
+    if (url.pathname.startsWith('/api/incidents/')) {
+      const id = Number(after('/api/incidents/'));
+      if (!Number.isInteger(id) || id <= 0) return notFound();
+      if (req.method === 'POST') {
+        const got = await incidents.answer(reporter, id, url.searchParams.get('answer'));
+        if (got.error) return json(got.status || 400, { error: got.error });
+        if (!got.again) broadcast('incidents', {}, toMaps);
+        return json(200, got);
+      }
+      // Your own, while nobody else has backed it.
+      if (req.method === 'DELETE') {
+        if (!(await incidents.withdraw(reporter, id))) return notFound();
+        broadcast('incidents', {}, toMaps);
+        return json(200, { ok: true });
+      }
+      return notFound();
+    }
+
     // Where someone has been. Empty rather than an error when nothing is
     // recorded, so the page does not need to know whether PostGIS is there.
     if (url.pathname.startsWith('/api/history/')) {
@@ -1427,5 +1473,8 @@ export function serve(positions, config, {
     server, publish, publishFence, forget, watchers, grant, revoke, stopLink, resend,
     // Told once the bot has connected, so the login page can name it.
     setBot: (username) => { botName = username || ''; },
+    // Road reports changed somewhere other than here (a sweep, the bot):
+    // every open map fetches them again.
+    incidentsChanged: () => broadcast('incidents', {}, { to: (v) => v.via !== 'device' }),
   };
 }
