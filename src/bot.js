@@ -299,17 +299,32 @@ export async function connect(config, {
   directory = null,
   log = console,
   fetch: f = fetch,
-  // Exposed so a test can run the loop without waiting on a real long poll.
+  // Exposed so a test can run the loop without waiting on a real long poll,
+  // or the pause after a failed call.
   poll = 50,
+  retry = 5000,
 } = {}) {
   const api = makeApi(config.botToken, { fetch: f, base: config.telegramApi });
 
-  const me = await api.call('getMe');
-  log.info(`bot: signed in as @${me.username}`);
-
-  // A webhook and getUpdates are mutually exclusive, and a webhook left over
-  // from an experiment makes every poll fail with 409 and no obvious cause.
-  await api.call('deleteWebhook', { drop_pending_updates: false }).catch(() => {});
+  // Who the bot is, filled in once Telegram says, rather than waited for. A
+  // Telegram that cannot be reached at start (no DNS in a container Docker
+  // has just restarted, a network outage) used to throw out of here and take
+  // the whole service down with it, map and all, again every time Docker
+  // restarted it. Now a failed first try is only logged, and the loop below
+  // keeps trying before it polls, as it does after a failed poll. `ready`
+  // settles with it once signed in.
+  const me = {};
+  let signedIn;
+  const ready = new Promise((resolve) => { signedIn = resolve; });
+  async function signIn() {
+    Object.assign(me, await api.call('getMe'));
+    log.info(`bot: signed in as @${me.username}`);
+    // A webhook and getUpdates are mutually exclusive, and a webhook left over
+    // from an experiment makes every poll fail with 409 and no obvious cause.
+    await api.call('deleteWebhook', { drop_pending_updates: false }).catch(() => {});
+    signedIn(me);
+  }
+  await signIn().catch((e) => log.error(`bot: cannot reach Telegram yet (${e.message}) — the map runs without the bot until it can`));
 
   const wanted = new Set((config.chats || []).map(String));
   const allowed = (chatId) => wanted.size === 0 || wanted.has(String(chatId ?? ''));
@@ -570,6 +585,7 @@ export async function connect(config, {
   async function loop() {
     while (running) {
       try {
+        if (!me.username) await signIn();
         // The long poll returns as soon as there is anything, and after
         // `poll` seconds otherwise — so this is not a busy wait even though
         // it reads like one.
@@ -593,7 +609,7 @@ export async function connect(config, {
         if (!running) return;
         // 429 carries how long to wait; anything else gets a flat pause so a
         // sustained outage does not turn into a request flood.
-        const wait = e.retryAfter ? e.retryAfter * 1000 : 5000;
+        const wait = e.retryAfter ? e.retryAfter * 1000 : retry;
         log.error(`bot: ${e.message} — retrying in ${Math.round(wait / 1000)}s`);
         await new Promise((r) => setTimeout(r, wait));
       }
@@ -606,6 +622,7 @@ export async function connect(config, {
     api,
     client: makeBotDirectoryClient(api),
     me,
+    ready,
     // The bot can speak as well as listen, which is what makes an arrival
     // alert possible at all. A private chat's id is the person's own id, and
     // Telegram refuses a message to somebody who has never started the bot —
@@ -642,7 +659,8 @@ export async function connect(config, {
         return false;
       }
     },
-    inviteLink: (token) => inviteLink(me.username, token),
+    // No link before the bot knows its own name: t.me/undefined leads nowhere.
+    inviteLink: (token) => (me.username ? inviteLink(me.username, token) : null),
     stop: async () => { running = false; await Promise.allSettled([done, inFlight]); },
   };
 }

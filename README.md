@@ -1265,12 +1265,20 @@ so nothing looks wrong until the next deploy has to create one.
 
 A deploy **repairs this itself**: on exactly this error it restarts Docker
 once, which recreates the chain (and restarts PostGIS with it, for a few
-seconds), tries again, and leaves a warning on the run saying so. By hand, the
-Server workflow's `restart-docker` does the same, or on the server:
+seconds), tries again, and leaves a warning on the run saying so. It then
+starts the app in a new container. The one the deploy had made before the
+restart comes back with no working DNS inside it, not even for `postgis`
+(`getaddrinfo EAI_AGAIN postgis` in its log), and stays that way until it is
+replaced. By hand, the Server workflow's `restart-docker` does the same, or on
+the server:
 
 ```sh
-systemctl restart docker && cd /opt/telegram-live-location && docker compose up -d
+systemctl restart docker && cd /opt/telegram-live-location && docker compose up -d \
+  && docker compose up -d --force-recreate --no-deps app
 ```
+
+Restarting Docker restarts the quick tunnel too, which gives the map a new
+address; send the bot `/login` for a link to it.
 
 To find out why it happened — or why a restart did not help — run
 `network-check`. It reports the iptables backend, whether the chain exists
@@ -1324,6 +1332,12 @@ So treat the first run as the real test of that file:
 
 `GET /healthz` needs no token and reports how many people and watchers there
 are, which is enough for a uptime check.
+
+If the bot cannot reach Telegram when the service starts (no DNS in a
+container Docker has just restarted, or a network outage), the map, the API
+and paired watches carry on without it. The log says `bot: cannot reach
+Telegram yet`, and the bot signs in as soon as it can. It used to exit
+instead, and Docker restarting it turned a short outage into a crash loop.
 
 ## Layout
 

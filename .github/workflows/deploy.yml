@@ -111,6 +111,11 @@ jobs:
           # until a deploy creates one, and then the service is down until
           # somebody logs in. Starting Docker again recreates the chain. Once,
           # with a warning on the run, and only for exactly that error.
+          #
+          # And then the app in a new container. The one this deploy made
+          # before the restart, whose start failed, comes back with no working
+          # DNS inside it — not even `postgis` resolves (EAI_AGAIN) — and stays
+          # that way; one made after the restart is fine.
           ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
             -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
             -p "${SSH_PORT:-22}" "${USER:-root}@${HOST}" \
@@ -124,9 +129,10 @@ jobs:
              else \
                cat up.log; \
                grep -q 'No chain/target/match by that name' up.log || { rm -f up.log; exit 1; }; \
-               echo '::warning::The firewall chain Docker publishes ports through had been deleted on the server, most likely by a firewall reload. Restarted Docker once to recreate it. To find the cause, run the Server workflow with network-check; see README, When a deploy says No chain/target/match.'; \
+               echo '::warning::The firewall chain Docker publishes ports through had been deleted on the server, most likely by a firewall reload. Restarted Docker once to recreate it, and the app in a new container. To find the cause, run the Server workflow with network-check; see README, When a deploy says No chain/target/match.'; \
                if [ \"\$(id -u)\" = 0 ]; then systemctl restart docker; else sudo -n systemctl restart docker; fi; \
                docker compose up -d --remove-orphans; \
+               docker compose up -d --force-recreate --no-deps app; \
              fi; \
              rm -f up.log; \
              docker image prune -f"

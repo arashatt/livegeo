@@ -113,12 +113,16 @@ jobs:
               # makes the chains it publishes ports through when it starts, so
               # whatever flushed them is undone by starting it again. Every
               # container restarts with it, PostGIS included, for a few seconds.
+              # The app then gets a new container, as in the deploy's own repair:
+              # one left from a deploy that failed on this error has no working
+              # DNS after the restart (deploy.yml).
               $SSH "$TARGET" "set -eu; cd '$WORKDIR'; \
                 if [ \"\$(id -u)\" = 0 ]; then systemctl restart docker; else sudo -n systemctl restart docker; fi; \
                 if iptables -w -t nat -S DOCKER >/dev/null 2>&1 || sudo -n iptables -w -t nat -S DOCKER >/dev/null 2>&1; \
                   then echo 'nat DOCKER chain: present'; \
                   else echo 'nat DOCKER chain: still missing — run network-check'; fi; \
                 docker compose up -d; \
+                docker compose up -d --force-recreate --no-deps app; \
                 for _ in \$(seq 1 20); do \
                   curl -fsS http://127.0.0.1:${PORT:-8080}/healthz && exit 0; \
                   sleep 3; \

@@ -72,8 +72,11 @@ let inviteLink = null;
 async function makeInvite(owner) {
   if (!inviteLink || !circles.enabled) return null;
   const token = randomBytes(24).toString('base64url');
+  // Null while the bot has not signed in yet: then no invite is kept either.
+  const link = inviteLink(token);
+  if (!link) return null;
   await geo.createInvite({ token, owner, ttlSeconds: 86400 });
-  return inviteLink(token);
+  return link;
 }
 // Set once Telegram is connected. Declared up here because the connector
 // starts listening before it returns, so a position can reach checkFences()
@@ -387,8 +390,9 @@ if (config.historyDays > 0) {
   setInterval(prune, 6 * 3600_000);
 }
 // So the sign-in page can say which bot to open. Only the bot knows its own
-// username, and it only knows it once connected.
-if (telegram.me?.username) setBot(telegram.me.username);
+// username, and it only knows it once connected — which, when Telegram could
+// not be reached at start, is later than this (bot.js).
+Promise.resolve(telegram.ready ?? telegram.me).then((me) => { if (me?.username) setBot(me.username); });
 
 // Where everybody was when this last ran. Without it the first position after
 // a deploy is a first sighting, which is silent — correct, but it also means

@@ -878,6 +878,45 @@ head('what /login says, and why');
   t('somebody not allowed is told so', to(4) === 'Your account is not on the list of who may see the map.');
 }
 
+head('Telegram out of reach at start');
+{
+  // Names not resolving, as in a container Docker has just restarted: fetch
+  // itself throws. Connecting must not, or the whole service goes down with
+  // it; the bot signs in when it can.
+  let reachable = false;
+  let polled = 0;
+  const errors = [];
+  const stub = async (url) => {
+    if (!reachable) throw new TypeError('fetch failed');
+    const method = String(url).split('/').pop();
+    if (method === 'getMe') return new Response(JSON.stringify({ ok: true, result: { id: 1, username: 'livegeobot' } }));
+    if (method === 'getUpdates') { polled++; return new Response(JSON.stringify({ ok: true, result: [] })); }
+    return new Response(JSON.stringify({ ok: true, result: {} }));
+  };
+  let bot = null;
+  let threw = null;
+  try {
+    bot = await connectBot({ botToken: 'T', chats: [] }, {
+      fetch: stub, poll: 0, retry: 10, onPosition() {},
+      log: { info() {}, error: (...parts) => errors.push(parts.join(' ')) },
+    });
+  } catch (e) { threw = e; }
+  t('connecting does not throw when Telegram cannot be reached', !threw && Boolean(bot), threw?.message);
+  t('it says why, and that the map carries on', /cannot reach Telegram yet \(fetch failed\) — the map runs without the bot/.test(errors[0] || ''), errors[0]);
+  t('no invite link before the bot knows its own name', bot?.inviteLink('abc') === null);
+  let named = null;
+  bot?.ready.then((me) => { named = me.username; });
+  await new Promise((r) => setTimeout(r, 50));
+  t('nothing is polled while it cannot sign in', polled === 0 && named === null);
+  reachable = true;
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline && (named === null || polled === 0)) await new Promise((r) => setTimeout(r, 5));
+  t('it signs in once Telegram answers', named === 'livegeobot', named);
+  t('and then polls', polled > 0);
+  t('invite links work from then on', /^https:\/\/t\.me\/livegeobot\?start=/.test(bot?.inviteLink('abc') || ''), bot?.inviteLink('abc'));
+  await bot?.stop();
+}
+
 head('road reports, through the bot');
 {
   t('a report button is read', JSON.stringify(roadAction('rp:jam')) === JSON.stringify({ type: 'report', kind: 'jam', detail: '', pick: false }));
