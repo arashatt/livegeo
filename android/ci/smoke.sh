@@ -50,7 +50,7 @@ await_text 'YOUR MAP MOVED|MAP NOT ANSWERING|NO CONNECTION' 45 || fail 'an unrea
 shot 2-unreachable
 
 echo '--- a page that answers: past the loading screen, onto the page'
-share 'https://example.com/auth/test'
+share 'https://example.com/'
 await_text 'Example Domain' 60 || fail 'a page that loads did not get past the loading screen'
 dump | grep -q 'LIVEGEO' && fail 'the loading screen stayed up over a loaded page'
 shot 3-page
