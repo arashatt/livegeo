@@ -8,6 +8,7 @@ import { readLayer, decodeTile, partsOf, LINE } from '../src/mvt.js';
 import {
   makeDistrict, makePlacesPostgis, placesInTile, placesFromRows, placeSql,
   pickDistrict, tilesAround, DISTRICT_MIN_ZOOM, PLACE_MAX_ZOOM,
+  streetsInTile, streetTiles, pickStreet, STREET_MIN_ZOOM,
 } from '../src/district.js';
 import { makeVectorUpstream } from '../src/vector-tiles.js';
 import { serve, staticFile } from '../src/server.js';
@@ -229,6 +230,120 @@ test('PostGIS: no import means null, remembered; importing needs no restart; a f
   assert.match(placeSql(), /ST_TileEnvelope\(\$1, \$2, \$3\)/);
 });
 
+// Streets: the z14 tile under Vaduz, where at zoom 18 one tile unit is one
+// pixel on the screen. The middle of the view is at 1600, 1500 in it.
+const STREET_TILE = { z: 14, x: 8625, y: 5753 };
+const inTile = (u, v) => ({ lat: toLat((STREET_TILE.y + v / 4096) / 2 ** 14), lon: toLon((STREET_TILE.x + u / 4096) / 2 ** 14) });
+const STREETS = encodeTile({
+  transportation_name: {
+    extent: 4096,
+    features: [
+      // East–west, 30 below the middle, in two parts, their ends far off.
+      { type: 2, properties: { class: 'minor', name: '  Äulestrasse ' }, lines: [[[600, 1530], [1500, 1530]], [[1500, 1530], [2600, 1530]]] },
+      // A pedestrian street, north–south, 20 east of the middle.
+      { type: 2, properties: { class: 'path', subclass: 'pedestrian', name: 'Städtle' }, lines: [[[1620, 1000], [1620, 2000]]] },
+      // Through the middle, but not what a street sign names, or no name.
+      { type: 2, properties: { class: 'path', subclass: 'footway', name: 'Rheinweg' }, lines: [[[1500, 1500], [1700, 1500]]] },
+      { type: 2, properties: { class: 'rail', name: 'Vaduz–Schaan' }, lines: [[[1600, 1400], [1600, 1600]]] },
+      { type: 2, properties: { class: 'minor', name: ' ' }, lines: [[[1590, 1490], [1610, 1510]]] },
+      { type: 2, properties: { class: 'minor' }, lines: [[[1590, 1510], [1610, 1490]]] },
+      { type: 1, properties: { class: 'minor', name: 'A point' }, points: [[1600, 1500]] },
+      { type: 2, properties: { class: 'minor', name: 'Too short' }, lines: [[[1600, 1500]]] },
+    ],
+  },
+});
+
+test('streets: named roads from a tile, flat and across the world; paths, rails and nameless ones left out', () => {
+  const streets = streetsInTile(STREETS, STREET_TILE);
+  assert.deepEqual(streets.map((s) => s.name), ['Äulestrasse', 'Äulestrasse', 'Städtle']);
+  assert.ok(streets[0].points instanceof Float64Array);
+  const n = 2 ** 14;
+  assert.deepEqual([...streets[0].points], [
+    (8625 + 600 / 4096) / n, (5753 + 1530 / 4096) / n, (8625 + 1500 / 4096) / n, (5753 + 1530 / 4096) / n,
+  ]);
+  assert.deepEqual(streetsInTile(REAL, LIECHTENSTEIN), [], 'a tile without streets');
+  assert.deepEqual(streetsInTile(Buffer.from('not a tile'), STREET_TILE), []);
+  assert.deepEqual(streetsInTile(Buffer.alloc(0), STREET_TILE), []);
+  assert.deepEqual(streetsInTile(null, STREET_TILE), []);
+});
+
+test('streets: the z14 tiles within reach of the middle, 2 × 2 at most', () => {
+  assert.equal(STREET_MIN_ZOOM, 15);
+  const middle = inTile(1600, 1500);
+  assert.deepEqual(streetTiles(middle.lat, middle.lon, 18), [STREET_TILE]);
+  assert.deepEqual(streetTiles(middle.lat, middle.lon, 15), [STREET_TILE]);
+  // Near a corner, zoomed out enough for the reach to cross it.
+  const corner = inTile(40, 40);
+  assert.deepEqual(streetTiles(corner.lat, corner.lon, 15).map((t) => `${t.x}/${t.y}`).sort(),
+    ['8624/5752', '8624/5753', '8625/5752', '8625/5753']);
+  assert.deepEqual(streetTiles(corner.lat, corner.lon, 18), [STREET_TILE], 'zoomed in, 40 px is out of reach');
+  for (let zoom = 15; zoom <= 22; zoom += 0.5) {
+    const tiles = streetTiles(35.8, 51.43, zoom);
+    assert.ok(tiles.length >= 1 && tiles.length <= 4, `${zoom}: ${tiles.length}`);
+    assert.ok(tiles.every((t) => t.z === 14));
+  }
+  assert.deepEqual(streetTiles(85.0511, 179.999, 15), [{ z: 14, x: 16383, y: 0 }]);
+});
+
+test('streets: the nearest within reach of the middle, a pedestrian street included', () => {
+  const streets = streetsInTile(STREETS, STREET_TILE);
+  const at = (u, v, zoom) => { const p = inTile(u, v); return pickStreet(streets, p.lat, p.lon, zoom); };
+  // At the middle: Städtle 20 px east, Äulestrasse 30 px south; the path,
+  // the railway and the nameless road through the middle do not count.
+  assert.equal(at(1600, 1500, 18), 'Städtle');
+  assert.equal(at(1600, 1500, 17), 'Städtle');
+  // Nearer the long street, away from its ends.
+  assert.equal(at(1560, 1520, 18), 'Äulestrasse');
+  // Out of reach at street zoom, in reach further out.
+  assert.equal(at(1540, 1440, 18), '');
+  assert.equal(at(1540, 1440, 17), '');
+  assert.equal(at(1540, 1440, 16), 'Städtle');
+  assert.equal(pickStreet([], 47.1, 9.5, 18), '');
+});
+
+test('streets: asked of the upstream once a tile, kept, and never a reason to fail', async () => {
+  let clock = 0;
+  let asks = 0;
+  const same = (t, u) => t.z === u.z && t.x === u.x && t.y === u.y;
+  const district = makeDistrict({ log: quiet, now: () => clock,
+    upstream: { tile: async (t) => { asks++; return { bytes: same(t, STREET_TILE) ? STREETS : Buffer.alloc(0), from: 'upstream' }; } } });
+  const middle = inTile(1600, 1500);
+  assert.equal(await district.street(middle.lat, middle.lon, 18), 'Städtle');
+  assert.equal(asks, 1);
+  const south = inTile(1560, 1520);
+  assert.equal(await district.street(south.lat, south.lon, 18), 'Äulestrasse');
+  assert.equal(asks, 1, 'the same tile is not asked twice');
+  // Further out than streets, or not a place: nobody is asked.
+  assert.equal(await district.street(middle.lat, middle.lon, 14.9), '');
+  assert.equal(await district.street(NaN, middle.lon, 18), '');
+  assert.equal(asks, 1);
+  // Kept ten minutes, then asked again.
+  clock = 600_001;
+  assert.equal(await district.street(middle.lat, middle.lon, 18), 'Städtle');
+  assert.equal(asks, 2);
+
+  // Nobody answering is asked again soon.
+  let up = null;
+  let tries = 0;
+  const flaky = makeDistrict({ upstream: { tile: async () => { tries++; return up; } }, log: quiet, now: () => clock });
+  assert.equal(await flaky.street(middle.lat, middle.lon, 18), '');
+  clock += 20_000;
+  assert.equal(await flaky.street(middle.lat, middle.lon, 18), '');
+  assert.equal(tries, 1);
+  clock += 10_001;
+  up = { bytes: STREETS, from: 'upstream' };
+  assert.equal(await flaky.street(middle.lat, middle.lon, 18), 'Städtle');
+  assert.equal(tries, 2);
+
+  // An upstream that throws, or none at all: no street, and nothing thrown.
+  const errors = [];
+  const broken = makeDistrict({ upstream: { tile: () => { throw new Error('boom'); } }, log: { info() {}, error: (...a) => errors.push(a.join(' ')) } });
+  assert.equal(await broken.street(middle.lat, middle.lon, 18), '');
+  assert.equal(errors.length, 1);
+  assert.doesNotMatch(errors[0], /47\.|9\.5|8625|5753/, 'where somebody looks is not logged');
+  assert.equal(await makeDistrict().street(middle.lat, middle.lon, 18), '');
+});
+
 function answer(status, body, type = 'application/octet-stream') {
   return { ok: status >= 200 && status < 300, status, json: async () => JSON.parse(body), arrayBuffer: async () => Buffer.from(body), headers: new Map([['content-type', type]]) };
 }
@@ -346,9 +461,13 @@ test('upstream: a TileJSON cannot send the server to another host', async () => 
   }
 });
 
-test('/api/district is signed-in only, checks what it is given, and answers in lines', async () => {
+test('/api/district is signed-in only, checks what it is given, and answers in lines and a street', async () => {
   const asked = [];
-  const district = { at: async (lat, lon, zoom) => { asked.push([lat, lon, zoom]); return zoom >= 12 ? ['وادوتس', 'Vaduz'] : []; } };
+  const streets = [];
+  const district = {
+    at: async (lat, lon, zoom) => { asked.push([lat, lon, zoom]); return zoom >= 12 ? ['وادوتس', 'Vaduz'] : []; },
+    street: async (lat, lon, zoom) => { streets.push([lat, lon, zoom]); return zoom >= 15 ? 'Städtle' : ''; },
+  };
   const lines = [];
   const log = { info: (...a) => lines.push(a.join(' ')), error: (...a) => lines.push(a.join(' ')) };
   const { server } = serve(new Positions(), { dashboardToken: 'test', port: 0, host: '127.0.0.1' }, { district, log });
@@ -360,14 +479,17 @@ test('/api/district is signed-in only, checks what it is given, and answers in l
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type'), /application\/json/);
     assert.match(res.headers.get('cache-control'), /private/);
-    assert.deepEqual(await res.json(), { lines: ['وادوتس', 'Vaduz'] });
+    assert.deepEqual(await res.json(), { lines: ['وادوتس', 'Vaduz'], street: 'Städtle' });
+    assert.deepEqual(await (await fetch(`${base}?lat=47.1393&lon=9.5228&z=13&token=test`)).json(), { lines: ['وادوتس', 'Vaduz'], street: '' });
     // Leaflet's longitude keeps counting past the dateline; the server wraps it.
     await fetch(`${base}?lat=47.1393&lon=369.5228&z=15&token=test`);
     assert.ok(Math.abs(asked.at(-1)[1] - 9.5228) < 1e-9);
+    assert.ok(Math.abs(streets.at(-1)[1] - 9.5228) < 1e-9);
     for (const bad of ['lat=91&lon=0&z=15', 'lat=&lon=0&z=15', 'lon=0&z=15', 'lat=0&lon=x&z=15', 'lat=0&lon=0&z=30', 'lat=0&lon=0']) {
       assert.equal((await fetch(`${base}?${bad}&token=test`)).status, 400, bad);
     }
-    assert.equal(asked.length, 2, 'nothing bad reaches the lookup');
+    assert.equal(asked.length, 3, 'nothing bad reaches the lookup');
+    assert.equal(streets.length, 3);
     assert.ok(lines.every((l) => !l.includes('47.1393') && !l.includes('9.5228')), 'where somebody looks is not logged');
   } finally {
     server.closeAllConnections();

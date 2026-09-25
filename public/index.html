@@ -514,6 +514,10 @@
     opacity:0;transform:translateY(6px);transition:opacity .5s ease,transform .5s ease
   }
   .district.show{opacity:1;transform:none}
+  /* The street under the middle of the view, above the district's name. */
+  .district i{font:600 .95rem/1.2 ui-sans-serif,system-ui,sans-serif;font-style:normal;color:#eef3f1;
+    max-width:min(26rem,70vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    text-shadow:0 1px 0 rgba(0,0,0,.7),0 0 10px rgba(0,0,0,.7)}
   .district b{font:700 1.5rem/1.05 ui-sans-serif,system-ui,sans-serif;color:#fff;
     text-shadow:0 2px 0 rgba(0,0,0,.6),0 0 16px rgba(0,0,0,.65)}
   .district span{font:600 .95rem/1 "Oswald",ui-sans-serif,system-ui,sans-serif;letter-spacing:.2em;text-transform:uppercase;
@@ -698,26 +702,33 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
   }).addTo(map);
 
   // The district: the name of where the middle of the map is, bottom right,
-  // the way a game names the district you drive into. The server reads it
-  // from the map's own place names (/api/district). Nothing is said zoomed out
-  // past a city, or where it does not know.
+  // the way a game names the district you drive into, with the street under
+  // the middle of the view above it once zoomed in to streets. The server
+  // reads both from the map's own names (/api/district). Nothing is said
+  // zoomed out past a city, or where it does not know.
   var districtBox = document.getElementById('district');
   var districtAsk = 0;
   var districtTimer = 0;
   var districtSaid = '';
-  function sayDistrict(lines) {
-    var said = lines.join('\n');
+  function sayDistrict(lines, street) {
+    var said = [street || ''].concat(lines).join('\n');
     if (said === districtSaid) return;
     districtSaid = said;
     districtBox.classList.remove('show');
-    if (!lines.length) return;
+    if (!lines.length && !street) return;
     districtBox.textContent = '';
     // A name is whatever OpenStreetMap calls the place, in its own script:
     // text, never markup.
+    if (street) {
+      var road = document.createElement('i');
+      road.textContent = street;
+      road.dir = 'auto';
+      districtBox.appendChild(road);
+    }
     var name = document.createElement('b');
-    name.textContent = lines[0];
+    name.textContent = lines[0] || '';
     name.dir = 'auto';
-    districtBox.appendChild(name);
+    if (lines[0]) districtBox.appendChild(name);
     if (lines[1]) {
       var latin = document.createElement('span');
       latin.textContent = lines[1];
@@ -729,19 +740,23 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
     districtBox.classList.add('show');
   }
   map.on('moveend', function () {
-    if (game || document.hidden) return;
+    if (document.hidden) return;
     clearTimeout(districtTimer);
     var ask = ++districtAsk;
     // Once the map has settled, not at every step of a drag.
     districtTimer = setTimeout(function () {
-      var z = map.getZoom();
+      // The 3D map counts zoom in 512-px tiles; the server, like Leaflet, in
+      // 256-px ones.
+      var z = map.getZoom() + (game ? 1 : 0);
       if (z < 12) { sayDistrict([]); return; }
       var c = map.getCenter().wrap(), privateView = false;
       if (people) people.forEach(function (e) { if (e.veil && e.veil.getBounds().contains(c)) privateView = true; });
       if (privateView) { sayDistrict(['Private area']); return; }
-      fetch('/api/district?lat=' + c.lat.toFixed(3) + '&lon=' + c.lng.toFixed(3) + '&z=' + z)
+      // A street needs the middle to within a few metres; a district does not.
+      var digits = z >= 15 ? 4 : 3;
+      fetch('/api/district?lat=' + c.lat.toFixed(digits) + '&lon=' + c.lng.toFixed(digits) + '&z=' + z)
         .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) { if (ask === districtAsk) sayDistrict((d && d.lines) || []); })
+        .then(function (d) { if (ask === districtAsk) sayDistrict((d && d.lines) || [], d && d.street); })
         .catch(function () { if (ask === districtAsk) sayDistrict([]); });
     }, 350);
   });

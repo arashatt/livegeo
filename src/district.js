@@ -12,7 +12,7 @@
 // The browser asks this service, never the upstream, and gets one or two
 // lines of text back. Where somebody is looking is never logged.
 
-import { readLayer, POINT } from './mvt.js';
+import { readLayer, partsOf, POINT, LINE } from './mvt.js';
 import { VECTOR_MAX_ZOOM } from './vector-tiles.js';
 
 // From this zoom of the map in. Further out the view is a whole city or more,
@@ -20,6 +20,18 @@ import { VECTOR_MAX_ZOOM } from './vector-tiles.js';
 export const DISTRICT_MIN_ZOOM = 12;
 // Deepest tile either source is asked for; closer zooms use these.
 export const PLACE_MAX_ZOOM = VECTOR_MAX_ZOOM;
+
+// From this zoom of the map in, the street at the middle is named as well:
+// close enough that the middle of the view is on a street, not a quarter.
+export const STREET_MIN_ZOOM = 15;
+// How far from the middle a street may pass, in screen pixels, and still be
+// the one you are on.
+const STREET_REACH = 36;
+// What a street sign names: not footpaths, tracks, railways, lifts or
+// ferries. A pedestrian street is a street, though OpenMapTiles files it
+// under paths.
+const NOT_STREETS = ['path', 'track', 'rail', 'transit', 'ferry', 'aerialway'];
+const isStreet = (p) => !NOT_STREETS.includes(p.class) || (p.class === 'path' && p.subclass === 'pedestrian');
 
 // How far from the middle of the view a place's point may be, in screen
 // pixels, and still name where you are looking.
@@ -133,6 +145,80 @@ export function placesInTile(bytes, tile) {
   return out;
 }
 
+// The named streets in one vector tile's transportation_name layer: { name,
+// points }, the points across the world as above, x and y in turn (a city
+// tile holds thousands; kept flat, they take a quarter of the memory).
+export function streetsInTile(bytes, tile) {
+  let layer = null;
+  try {
+    layer = bytes && bytes.length ? readLayer(bytes, 'transportation_name') : null;
+  } catch {
+    layer = null;
+  }
+  if (!layer) return [];
+  const n = 2 ** tile.z;
+  const out = [];
+  for (const f of layer.features) {
+    const name = typeof f.properties.name === 'string' ? f.properties.name.trim().slice(0, 80) : '';
+    if (f.type !== LINE || !name || !isStreet(f.properties)) continue;
+    for (const part of partsOf(LINE, f.geometry)) {
+      if (part.length < 2) continue;
+      const points = new Float64Array(part.length * 2);
+      part.forEach(([x, y], i) => {
+        points[2 * i] = (tile.x + x / layer.extent) / n;
+        points[2 * i + 1] = (tile.y + y / layer.extent) / n;
+      });
+      out.push({ name, points });
+    }
+  }
+  return out;
+}
+
+// The z14 tiles a street within reach of the middle of the view can be in.
+export function streetTiles(lat, lon, zoom) {
+  const z = PLACE_MAX_ZOOM;
+  const n = 2 ** z;
+  const world = 256 * 2 ** zoom;
+  const size = world / n;
+  const cx = worldX(lon) * world;
+  const cy = worldY(lat) * world;
+  const clamp = (v) => Math.max(0, Math.min(n - 1, v));
+  const tiles = [];
+  for (let x = clamp(Math.floor((cx - STREET_REACH) / size)); x <= clamp(Math.floor((cx + STREET_REACH) / size)); x++) {
+    for (let y = clamp(Math.floor((cy - STREET_REACH) / size)); y <= clamp(Math.floor((cy + STREET_REACH) / size)); y++) {
+      tiles.push({ z, x, y });
+    }
+  }
+  return tiles;
+}
+
+// The street passing nearest the middle of the view, within reach, or ''.
+export function pickStreet(streets, lat, lon, zoom) {
+  const world = 256 * 2 ** zoom;
+  const cx = worldX(lon) * world;
+  const cy = worldY(lat) * world;
+  let best = '';
+  let nearest = STREET_REACH;
+  for (const { name, points: p } of streets) {
+    // Each piece of the line, from where the middle is: the nearest point on
+    // it, not only its ends, so a long straight street counts all along.
+    for (let i = 2; i + 1 < p.length; i += 2) {
+      const ax = p[i - 2] * world - cx;
+      const ay = p[i - 1] * world - cy;
+      const dx = p[i] * world - cx - ax;
+      const dy = p[i + 1] * world - cy - ay;
+      const length = dx * dx + dy * dy;
+      const t = length ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / length)) : 0;
+      const d = Math.hypot(ax + t * dx, ay + t * dy);
+      if (d <= nearest) {
+        nearest = d;
+        best = name;
+      }
+    }
+  }
+  return best;
+}
+
 // The same places from planet_osm_point, within one tile. Deeper tiles bring
 // smaller places, as OpenMapTiles does. $1..$3 are z, x, y.
 export function placeSql({ tags = true } = {}) {
@@ -243,12 +329,44 @@ export function makeDistrict({ postgis = null, upstream = null, log = console, n
     return pending.get(key);
   }
 
+  // Streets come from the upstream's vector tiles, kept the same way; fewer
+  // of them, as a city tile's streets weigh far more than its places.
+  const streetCache = new Map();
+  const streetPending = new Map();
+  function streetsIn(tile) {
+    const key = `${tile.z}/${tile.x}/${tile.y}`;
+    const hit = streetCache.get(key);
+    if (hit && hit.until > now()) return hit.streets;
+    if (!streetPending.has(key)) {
+      streetPending.set(key, Promise.resolve().then(() => upstream.tile(tile))
+        .then((got) => {
+          const streets = got ? streetsInTile(got.bytes, tile) : [];
+          streetCache.delete(key);
+          if (streetCache.size >= 64) streetCache.delete(streetCache.keys().next().value);
+          streetCache.set(key, { streets, until: now() + (got ? 600_000 : 30_000) });
+          return streets;
+        })
+        .catch((e) => {
+          log.error('district: cannot read streets —', e && e.message ? e.message : e);
+          return [];
+        })
+        .finally(() => streetPending.delete(key)));
+    }
+    return streetPending.get(key);
+  }
+
   return {
     // [] when there is nothing to say; never throws.
     async at(lat, lon, zoom) {
       if (![lat, lon, zoom].every(Number.isFinite) || zoom < DISTRICT_MIN_ZOOM) return [];
       const lists = await Promise.all(tilesAround(lat, lon, zoom).map(placesIn));
       return pickDistrict(lists.flat(), lat, lon, zoom);
+    },
+    // The street at the middle of the view, or ''; never throws.
+    async street(lat, lon, zoom) {
+      if (![lat, lon, zoom].every(Number.isFinite) || zoom < STREET_MIN_ZOOM || !upstream) return '';
+      const lists = await Promise.all(streetTiles(lat, lon, zoom).map(streetsIn));
+      return pickStreet(lists.flat(), lat, lon, zoom);
     },
   };
 }

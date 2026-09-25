@@ -1058,9 +1058,13 @@ export function serve(positions, config, {
         return json(400, { error: 'lat, lon and z are needed' });
       }
       // Leaflet's longitude keeps counting past the dateline.
-      const lines = await districts.at(lat, ((lon + 180) % 360 + 360) % 360 - 180, zoom).catch(() => []);
+      const wrapped = ((lon + 180) % 360 + 360) % 360 - 180;
+      const [lines, street] = await Promise.all([
+        districts.at(lat, wrapped, zoom).catch(() => []),
+        districts.street ? districts.street(lat, wrapped, zoom).catch(() => '') : '',
+      ]);
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300' });
-      res.end(JSON.stringify({ lines }));
+      res.end(JSON.stringify({ lines, street }));
       return;
     }
 
