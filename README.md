@@ -928,6 +928,108 @@ a two-hour warm-up, 76% of what the map shows is real and 82% of what is real
 is shown. The research aims for 90% and 80% with Waze's number of drivers;
 nearly all the difference is incidents that have cleared and not yet faded.
 
+## The Android app
+
+`android/`: the live map full-screen on a phone, a tablet or a car's head
+unit, and a way for that device to share where it is. Android 7 or later. It
+needs no Google Play services, so it also runs on head units and phones sold
+without Google.
+
+**What it is.** The map page, the same one a browser gets, in a web view, so
+everything on the map works the same in both. Around it, the app's own
+screens, made to feel like a game's:
+- a radar loading screen with tips, which stays up until the 3D map has drawn
+  rather than until the page has arrived;
+- full screen with the system bars hidden, and the screen kept on;
+- Back closes the map's dialogs and panels first;
+- a buzz for a key pressed, and a pattern and a tone for going live and
+  stopping.
+
+In the app, the map starts in the tilted 3D camera. A choice made in the
+*Camera* menu is kept.
+
+**Connecting.** No address is built in: behind a quick tunnel, the map's
+address changes every time cloudflared restarts. Send `/login` to the bot,
+then do one of these:
+- share the link it sends to LiveGeo (long-press it in Telegram, then
+  *Share*);
+- copy it and tap *Paste link*;
+- tap it, and Android offers the app.
+
+The app keeps the address. When the map cannot be reached, it tells you which
+of three things happened:
+- the map **moved**: the name no longer resolves, or Cloudflare answers 530.
+  Send `/login` again and share the new link.
+- the map is **not answering**: the tunnel is there, the server behind it is
+  not.
+- the device is **offline**.
+
+**Going live.** Inside the app, the map's toolbar has *Go live*.
+- **Pairing.** The first time, the app pairs the device as one of your
+  devices using the page's own session, so there is no code to type. It
+  shows up in the Circle panel, for example as "Samsung SM-A515F", and
+  removing it there cuts it off. If somebody else signs in on the device,
+  *Go live* pairs it to them first.
+- **Sharing.** It asks for location, then shares for an hour, four hours or
+  until you stop. Sharing runs as a foreground service with a Stop button in
+  its notification, so it carries on with the screen off. Signing out of the
+  map in the app stops it.
+- **What it sends.** It reads GPS every 5 seconds, using the network's guess
+  only while GPS is silent. A fix is sent when it has moved further than its
+  own accuracy (never less than 25 m), or after two minutes without one.
+  Fixes queue on the device without signal and are sent when it returns.
+- **In the toolbar.** The button says *Live · 58 min* while it lasts. A day's
+  GPX from the card saves through Android's save dialog, and *Send…* opens
+  the share sheet.
+
+**Getting it.** Download the APK from the repository's Releases page
+(*LiveGeo for Android x.y.z*) and open it on the device. Android asks once to
+allow installing from whichever app opened it.
+
+The *Android app* workflow builds it. Every push that touches `android/` or
+the shared core runs the tests, builds the APK, and starts it on an Android 10
+emulator with no Google services. There it walks the first run, a dead link,
+a page that loads, rotation, and a trip to the home screen, and fails on any
+crash. To publish a release, run the workflow by hand (*Actions → Android app
+→ Run workflow*) with a version such as `1.0.0`.
+
+**Signing.** Android installs an update only over an app signed with the same
+key. Make one once, keep it safe offline, and give it to the workflow:
+
+```sh
+keytool -genkeypair -keystore livegeo.jks -storetype PKCS12 -alias livegeo \
+  -keyalg RSA -keysize 3072 -validity 10000 -dname "CN=LiveGeo"
+base64 -w0 livegeo.jks > livegeo.jks.b64
+```
+
+Then add these repository secrets:
+
+| Secret | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | the contents of `livegeo.jks.b64` |
+| `ANDROID_KEYSTORE_PASSWORD` | the store password |
+| `ANDROID_KEY_ALIAS` | `livegeo` |
+| `ANDROID_KEY_PASSWORD` | the same password, for a PKCS12 store |
+
+Lose the key and no later release installs over the earlier ones. Without
+these secrets, each build is signed with a key made for that run only. It
+installs, but the next release needs the old one removed first, and with it
+the device's pairing and the map's address. The release notes say which
+kind of key signed each release.
+
+**Building it yourself** needs the Android SDK and JDK 17:
+`cd android && ./gradlew :app:assembleDebug`. The logic it shares with the
+Galaxy Watch lives in `watch/wearos/core`:
+- the API client, the outbox and the send cadence;
+- reading a sign-in link, telling why the map did not load, and pairing
+  with a session.
+
+It is plain Kotlin with its own tests (`./gradlew :core:test`).
+
+**Not yet run on a real device.** It compiles and its logic is tested, and CI
+starts it on an emulator and walks its screens. GPS in a moving car, battery
+over a shift, and each head unit's quirks are the part only hardware can show.
+
 ## Watches
 
 A watch with its own GPS and signal can report where it is directly — no
@@ -1361,6 +1463,8 @@ instead, and Docker restarting it turned a short outage into a crash loop.
 | `public/index.html` | the dashboard: MapLibre/Classic adapter, local MVT, authenticated stream |
 | `public/live.html` | the page a live link opens |
 | `public/lib/people-map.js` | how a person is drawn — the glide, the beam, the blur — for both |
+| `public/lib/app-bridge.js` | the page's side of the Android app: Go live, files and sharing through the app; inert in a browser |
+| `android/` | the Android app: the map full-screen, its loading and connect screens, Go live |
 | `bin/login.mjs` | the one interactive step |
 | `docs/DESIGN-HANDOFF.md` | the state of every screen, the rules a redesign must keep, and what is known to be wrong — for a UI/UX designer taking it over |
 

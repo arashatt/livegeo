@@ -105,6 +105,9 @@ class MainActivity : ComponentActivity() {
     /** The origin of the page on screen. Read by the bridge, on another thread. */
     @Volatile private var pageOrigin: String? = null
 
+    /** Pairing is under way: a second tap on Go live waits for it rather than pairing twice. */
+    private var goingLive = false
+
     private var pendingFile: ByteArray? = null
     private var afterPermission: (() -> Unit)? = null
 
@@ -538,12 +541,15 @@ class MainActivity : ComponentActivity() {
      * for how long.
      */
     private fun goLive() {
+        if (goingLive) return
         val server = store.server ?: return
         val cookie = CookieManager.getInstance().getCookie(server)
         if (cookie.isNullOrBlank()) return showError(getString(R.string.pair_failed, "sign in to the map first"))
-        toast(R.string.pairing)
+        if (store.token == null) toast(R.string.pairing)
+        goingLive = true
         lifecycleScope.launch {
             val paired = Livegeo.ensurePaired(this@MainActivity, cookie)
+            goingLive = false
             paired.exceptionOrNull()?.let { e ->
                 Sfx.error(this@MainActivity)
                 return@launch showError(getString(R.string.pair_failed, e.message ?: e.javaClass.simpleName))
@@ -707,10 +713,12 @@ class MainActivity : ComponentActivity() {
 
         /**
          * What is on screen, and the bot's name when the page carries it:
-         * "page" for anything that is not the map, "game" once the 3D map has
-         * its style, "classic" for the 2D one, "loading" until then.
+         * "signing" while a sign-in link's page sends itself on (so the
+         * loading screen stays up through it to the map), "page" for anything
+         * else that is not the map, "game" once the 3D map has its style,
+         * "classic" for the 2D one, "loading" until then.
          */
-        private const val PROBE = """(function(){var b=document.body;if(!b)return 'loading|';var bot=(b.dataset&&b.dataset.bot)||'';if(!document.getElementById('map'))return 'page|'+bot;var r=b.dataset.renderer||'';if(r==='game'){var m=window.livegeoMap;return((m&&m.gl&&m.gl.isStyleLoaded&&m.gl.isStyleLoaded())?'game':'loading')+'|'+bot;}return(r==='classic'?'classic':'loading')+'|'+bot;})()"""
+        private const val PROBE = """(function(){var b=document.body;if(!b)return 'loading|';var bot=(b.dataset&&b.dataset.bot)||'';if(document.querySelector('form[method=post][action^="/auth/"]'))return 'signing|'+bot;if(!document.getElementById('map'))return 'page|'+bot;var r=b.dataset.renderer||'';if(r==='game'){var m=window.livegeoMap;return((m&&m.gl&&m.gl.isStyleLoaded&&m.gl.isStyleLoaded())?'game':'loading')+'|'+bot;}return(r==='classic'?'classic':'loading')+'|'+bot;})()"""
 
         /** The topmost dialog, or an open panel on the map toolbar, closed; "true" if there was one. */
         private const val CLOSE_SOMETHING = """(function(){var d=document.querySelectorAll('dialog[open]');if(d.length){d[d.length-1].close();return true;}var b=document.querySelector('.map-toolbar [aria-expanded="true"]');if(b){b.click();return true;}return false;})()"""

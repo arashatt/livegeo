@@ -108,13 +108,18 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.name }}
         run: |
-          apk=app/build/outputs/apk/release/app-release.apk
-          test -f "$apk"
+          set -o pipefail
+          ls -l app/build/outputs/apk/release/
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          case "$apk" in
+            *unsigned*) echo "::error::the release APK came out unsigned: $apk"; exit 1 ;;
+          esac
           out="livegeo-$VERSION.apk"
           cp "$apk" "$out"
-          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-          "$tools/apksigner" verify --print-certs "$out" | grep -E 'Signer #1 certificate (DN|SHA-256)'
-          "$tools/aapt2" dump badging "$out" | grep -E "^(package|sdkVersion|targetSdkVersion|application-label):"
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)
+          echo "build tools: $tools"
+          "${tools}apksigner" verify --print-certs "$out"
+          "${tools}aapt2" dump badging "$out" | head -n 4
           sha256sum "$out" | tee "$out.sha256"
           ls -l "$out"
 
