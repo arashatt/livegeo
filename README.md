@@ -948,6 +948,13 @@ screens, made to feel like a game's:
 In the app, the map starts in the tilted 3D camera. A choice made in the
 *Camera* menu is kept.
 
+A web view too old for the 3D map gets the classic map instead of an empty
+screen. Head units in particular ship a web view that is never updated. The
+3D map needs Chrome 94's JavaScript (ES2022), and `map-bootstrap.js` checks
+for it before loading anything. Everything the classic map runs is kept to
+ES2019, which is about what Chrome 74 on Android 10 reads.
+`test/old-webview.test.mjs` parses it that way on every push.
+
 **Connecting.** No address is built in: behind a quick tunnel, the map's
 address changes every time cloudflared restarts. Send `/login` to the bot,
 then do one of these:
@@ -956,13 +963,29 @@ then do one of these:
 - copy it and tap *Paste link*;
 - tap it, and Android offers the app.
 
-The app keeps the address. When the map cannot be reached, it tells you which
-of three things happened:
+A link carries the map's address, so any https link is a candidate. Before
+keeping one, the app asks that address for `/healthz`, which only a LiveGeo
+server answers the way it does (`ok`, `watching` and `people`):
+- **A map.** The app keeps the address and opens the link.
+- **Anything else** (a download page, GitHub, a news site). The app says
+  **not your map** and keeps nothing. Version 0.1.0 kept whatever it was
+  given, so a device that kept such an address forgets it the next time it
+  starts.
+- **No answer.** The address is kept, because a map that is down or has
+  moved cannot say what it is.
+
+When a link offers several addresses, a sign-in link (`/auth/…`) wins. A
+clipboard holding the release's download link and the bot's link opens the
+map.
+
+When the map cannot be reached, the app tells you which of three things
+happened:
 - the map **moved**: the name no longer resolves, or Cloudflare answers 530.
   Send `/login` again and share the new link.
 - the map is **not answering**: the tunnel is there, the server behind it is
   not.
-- the device is **offline**.
+- the device is **offline**. This includes a network that is not really
+  online yet, such as a hotel's sign-in page.
 
 **Going live.** Inside the app, the map's toolbar has *Go live*.
 - **Pairing.** The first time, the app pairs the device as one of your
@@ -988,10 +1011,18 @@ allow installing from whichever app opened it.
 
 The *Android app* workflow builds it. Every push that touches `android/` or
 the shared core runs the tests, builds the APK, and starts it on an Android 10
-emulator with no Google services. There it walks the first run, a dead link,
-a page that loads, rotation, and a trip to the home screen, and fails on any
-crash. To publish a release, run the workflow by hand (*Actions → Android app
-→ Run workflow*) with a version such as `1.0.0`.
+emulator with no Google services, whose web view is old enough to get the
+classic map. On the emulator it walks through:
+- the first run;
+- a link to a website that is not a map, which must be refused and not kept;
+- a dead link;
+- a real LiveGeo map. `bin/selfcheck.mjs` runs behind a quick tunnel made for
+  the run, and the map must load past the loading screen, with *Go live* on
+  it and no error thrown by the page;
+- rotation, and a trip to the home screen.
+
+It fails on any crash. To publish a release, run the workflow by hand
+(*Actions → Android app → Run workflow*) with a version such as `1.0.0`.
 
 **Signing.** Android installs an update only over an app signed with the same
 key. Make one once, keep it safe offline, and give it to the workflow:
@@ -1021,8 +1052,8 @@ kind of key signed each release.
 `cd android && ./gradlew :app:assembleDebug`. The logic it shares with the
 Galaxy Watch lives in `watch/wearos/core`:
 - the API client, the outbox and the send cadence;
-- reading a sign-in link, telling why the map did not load, and pairing
-  with a session.
+- reading a sign-in link, asking an address whether it is a map, telling
+  why the map did not load, and pairing with a session.
 
 It is plain Kotlin with its own tests (`./gradlew :core:test`).
 

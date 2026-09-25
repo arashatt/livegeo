@@ -55,10 +55,15 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.livegeo.core.Api
 import org.livegeo.core.Duration
+import org.livegeo.core.HttpTransport
 import org.livegeo.core.Links
+import org.livegeo.core.Probe
 import org.livegeo.core.Reach
 import org.livegeo.core.Trouble
 import java.io.File
@@ -107,6 +112,9 @@ class MainActivity : ComponentActivity() {
 
     /** Pairing is under way: a second tap on Go live waits for it rather than pairing twice. */
     private var goingLive = false
+
+    /** Counts the map being opened, so a late answer about an earlier link is not acted on. */
+    private var opening = 0
 
     private var pendingFile: ByteArray? = null
     private var afterPermission: (() -> Unit)? = null
@@ -325,16 +333,69 @@ class MainActivity : ComponentActivity() {
 
     private fun start() {
         val server = store.server ?: return showConnect(null)
+        val attempt = ++opening
         showLoading()
         web.loadUrl("$server/")
+        // Asked beside the load, so a map opens no slower for it: an address
+        // remembered before the app checked what it was given (a download
+        // page, say) is forgotten the moment it says it is not a map.
+        lifecycleScope.launch {
+            val answer = probe(server)
+            if (attempt != opening || store.server != server) return@launch
+            if (answer == Probe.NOT_MAP && networkValidated()) {
+                store.server = null
+                web.stopLoading()
+                web.loadUrl("about:blank")
+                notAMap()
+            }
+        }
     }
 
-    /** A sign-in link: the map is wherever it says, from now on. */
+    /**
+     * A link to the map, from the bot's /login: the map is wherever it says,
+     * from now on. But only once the address has said it is a LiveGeo map
+     * (Api.probe): any https link can be shared or pasted here, and one that
+     * leads somewhere else must not become what the app opens every time.
+     */
     private fun open(link: String) {
         val origin = Links.origin(link) ?: return toast(R.string.no_link)
-        store.server = origin
+        val attempt = ++opening
         showLoading()
-        web.loadUrl(link)
+        status.setText(R.string.status_checking)
+        // Asked even of the address already kept: an earlier version kept
+        // whatever it was given.
+        lifecycleScope.launch {
+            val answer = probe(origin)
+            // Another link was shared, or the map reopened, while this one
+            // was being asked about: that one is what the screen is for now.
+            if (attempt != opening) return@launch
+            when {
+                // On a network that is not really online (a hotel's sign-in
+                // page), every address answers with that page.
+                answer == Probe.NOT_MAP && !networkValidated() -> failed(Trouble.NO_NETWORK)
+                answer == Probe.NOT_MAP -> {
+                    if (store.server == origin) store.server = null
+                    notAMap()
+                }
+                else -> {
+                    // A map, or one that cannot be asked right now: loading it
+                    // says which of moved, down or offline it is.
+                    store.server = origin
+                    web.loadUrl(link)
+                }
+            }
+        }
+    }
+
+    private suspend fun probe(origin: String): Probe =
+        withContext(Dispatchers.IO) { Api(origin, HttpTransport(PROBE_TIMEOUT_MS)).probe() }
+
+    private fun notAMap() {
+        ui.removeCallbacks(pollReady)
+        ui.removeCallbacks(nextTip)
+        radar.running = false
+        Sfx.error(this)
+        showConnect(Trouble.NOT_A_MAP)
     }
 
     private fun handleIntent(intent: Intent?): Boolean {
@@ -475,6 +536,7 @@ class MainActivity : ComponentActivity() {
             Trouble.MOVED -> R.string.moved_title to R.string.moved_body
             Trouble.DOWN -> R.string.down_title to R.string.down_body
             Trouble.NO_NETWORK -> R.string.offline_title to R.string.offline_body
+            Trouble.NOT_A_MAP -> R.string.not_map_title to R.string.not_map_body
         }
         connectTitle.setText(title)
         connectBody.setText(body)
@@ -688,6 +750,13 @@ class MainActivity : ComponentActivity() {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
+    /** Online for real, as Android judged it: not behind a network's sign-in page. */
+    private fun networkValidated(): Boolean {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return false
+        val caps = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
     private fun toast(message: Int) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
     private fun showError(message: String) {
@@ -708,6 +777,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TIP_MS = 3600L
+        private const val PROBE_TIMEOUT_MS = 8_000
         private const val READY_LIMIT_MS = 25_000L
         private val BOT = Regex("[A-Za-z][A-Za-z0-9_]{3,31}")
 

@@ -23,7 +23,11 @@ import java.io.File
 class Store(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("livegeo", Context.MODE_PRIVATE)
 
-    /** The map's origin, from the last sign-in link that led somewhere. */
+    /**
+     * The map's origin, from the last link whose address answered as a
+     * LiveGeo map, or could not be asked (MainActivity.open). Never a website
+     * that answered as something else.
+     */
     var server: String?
         get() = prefs.getString("server", null)
         set(v) = prefs.edit().putString("server", v).apply()

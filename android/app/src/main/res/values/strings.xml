@@ -9,6 +9,7 @@
     <string name="status_city">LOADING THE CITY</string>
     <string name="status_people">PLACING PEOPLE</string>
     <string name="status_ready">READY</string>
+    <string name="status_checking">CHECKING THE LINK</string>
     <string-array name="tips">
         <item>TIP · Two fingers tilt and turn the 3D camera.</item>
         <item>TIP · Go live to put yourself on your circle\'s map.</item>
@@ -26,6 +27,8 @@
     <string name="moved_body">Its address changes when the server restarts. Send /login to the bot again and share the new link here.</string>
     <string name="down_title">MAP NOT ANSWERING</string>
     <string name="down_body">The address is right, but the server behind it is not answering. Try again in a minute. If it keeps failing, send /login to the bot for a fresh link.</string>
+    <string name="not_map_title">NOT YOUR MAP</string>
+    <string name="not_map_body">That link does not lead to a LiveGeo map, so the app did not keep it. In Telegram, send /login to your LiveGeo bot, then share or paste the link it sends: that one has /auth/ in it.</string>
     <string name="offline_title">NO CONNECTION</string>
     <string name="offline_body">This device is offline. Try again when it is back.</string>
     <string name="paste">PASTE LINK</string>

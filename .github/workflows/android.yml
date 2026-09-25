@@ -148,6 +148,62 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # A real LiveGeo server for the app to open: the map on its own
+      # (bin/selfcheck.mjs: no Telegram, no database, nobody on it, no tiles
+      # from anywhere), behind a Cloudflare quick tunnel so the emulator
+      # reaches it over https the way a phone reaches the real one. If the
+      # tunnel does not come up, ci/smoke.sh says so and tests the rest.
+      - uses: actions/checkout@v4
+        with:
+          path: server
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: A map to open, behind a quick tunnel
+        continue-on-error: true
+        working-directory: server
+        run: |
+          npm ci --omit=dev --no-audit --no-fund
+          token=$(openssl rand -hex 16)
+          echo "::add-mask::$token"
+          DASHBOARD_TOKEN="$token" HOST=127.0.0.1 PORT=8080 \
+            VECTOR_UPSTREAM=off TERRAIN_UPSTREAM=off \
+            TILE_UPSTREAM='http://127.0.0.1:9/{z}/{x}/{y}.png' \
+            nohup node bin/selfcheck.mjs > "$RUNNER_TEMP/map.log" 2>&1 &
+          curl -fsS --retry 20 --retry-delay 1 --retry-all-errors -o /dev/null http://127.0.0.1:8080/healthz
+          curl -fsSL -o "$RUNNER_TEMP/cloudflared" \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x "$RUNNER_TEMP/cloudflared"
+          nohup "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:8080 \
+            > "$RUNNER_TEMP/tunnel.log" 2>&1 &
+          # The address once the tunnel has a connection to Cloudflare, not
+          # before: asked too early, a name can be remembered as not existing.
+          url=
+          for _ in $(seq 1 60); do
+            if grep -q 'Registered tunnel connection' "$RUNNER_TEMP/tunnel.log"; then
+              url=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$RUNNER_TEMP/tunnel.log" | head -n 1 || true)
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$url" ]; then
+            echo "::warning::the quick tunnel did not start, so the app is not tried against a live map this time"
+            exit 0
+          fi
+          echo "::add-mask::$url"
+          for _ in $(seq 1 60); do
+            if curl -fsS --max-time 5 "$url/healthz" 2>/dev/null | grep -q '"ok":true'; then
+              printf '%s/?token=%s\n' "$url" "$token" > "$GITHUB_WORKSPACE/app/map-link.txt"
+              echo "A map is up behind a quick tunnel."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::warning::the quick tunnel never answered, so the app is not tried against a live map this time"
+
       # Android 10, without Google Play services: like the car head units and
       # the phones sold without Google this is also meant for.
       - uses: reactivecircus/android-emulator-runner@v2
@@ -166,6 +222,13 @@ jobs:
           name: livegeo-android-screens
           path: app/shots/
           if-no-files-found: ignore
+
+      # What the map server said while the app used it: its requests and any
+      # error, with no address or token in it (they are masked, and the
+      # server writes neither).
+      - name: The map server's log
+        if: always()
+        run: tail -n 60 "$RUNNER_TEMP/map.log" 2>/dev/null || true
 
   release:
     name: Publish the release

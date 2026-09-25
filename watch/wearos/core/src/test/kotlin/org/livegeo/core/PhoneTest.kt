@@ -28,6 +28,14 @@ class LinksTest {
             "the first usable one, not just the first")
     }
 
+    @Test fun `a sign-in link wins over other links in the same text`() {
+        val clipboard = "https://github.com/arashatt/livegeo/releases/download/android-v0.1.0/livegeo-0.1.0.apk " +
+            "https://calm-river-12.trycloudflare.com/auth/Zx9"
+        assertEquals("https://calm-river-12.trycloudflare.com/auth/Zx9", Links.find(clipboard))
+        assertEquals("https://github.com/arashatt/livegeo/releases", Links.find("https://github.com/arashatt/livegeo/releases"),
+            "on its own, any https address is found; whether it is a map is asked of it (Api.probe)")
+    }
+
     @Test fun `an origin is scheme, host and port, and nothing unsafe`() {
         assertEquals("https://calm-river-12.trycloudflare.com", Links.origin("https://Calm-River-12.TryCloudflare.com/auth/x?y=1"))
         assertEquals("https://map.example", Links.origin("https://map.example:443/"), "the default port is left out")
@@ -64,6 +72,28 @@ class ReachTest {
         assertFalse(Reach.isFailure(401), "signed out: the server's own page says how to get in")
         assertFalse(Reach.isFailure(404))
         assertFalse(Reach.isFailure(200))
+    }
+}
+
+class ProbeTest {
+    private fun answering(status: Int, body: String) =
+        Api("https://somewhere.example", { _, _, _, _ -> HttpResponse(status, body) })
+
+    @Test fun `only a LiveGeo server's health answer makes an address the map`() {
+        val livegeo = """{"ok":true,"watching":0,"people":2,"database":"connected","address":"quick tunnel"}"""
+        assertTrue(Wire.isHealth(livegeo))
+        assertEquals(Probe.MAP, answering(200, livegeo).probe())
+        assertEquals(Probe.NOT_MAP, answering(404, "<html>Not Found</html>").probe(), "GitHub, for one, has no /healthz")
+        assertEquals(Probe.NOT_MAP, answering(200, "<!DOCTYPE html><title>GitHub</title>").probe(), "a page is not a health answer")
+        assertEquals(Probe.NOT_MAP, answering(200, """{"ok":true}""").probe(), "somebody else's health check")
+        assertFalse(Wire.isHealth("""{"ok":"yes","watching":0,"people":1}"""))
+    }
+
+    @Test fun `an address that cannot be asked is not judged`() {
+        assertEquals(Probe.UNREACHABLE, answering(530, "error code: 1033").probe(), "a quick tunnel that is gone")
+        assertEquals(Probe.UNREACHABLE, answering(502, "Bad Gateway").probe(), "the tunnel is there, the server is not")
+        val offline = Api("https://gone.example", { _, _, _, _ -> throw java.net.UnknownHostException("gone.example") })
+        assertEquals(Probe.UNREACHABLE, offline.probe())
     }
 }
 

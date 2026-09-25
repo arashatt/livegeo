@@ -89,6 +89,24 @@ class Api(
     }
 
     /**
+     * Whether this address is a LiveGeo map, asked before it is remembered as
+     * one: a link to anything else (the download page the app came from, say)
+     * must not become the map the app opens every time.
+     */
+    fun probe(): Probe {
+        val r = try {
+            transport.send("GET", "$root/healthz", mapOf("accept" to "application/json"), null)
+        } catch (e: IOException) {
+            return Probe.UNREACHABLE
+        }
+        return when {
+            r.status == 200 && Wire.isHealth(r.body) -> Probe.MAP
+            r.status >= 500 -> Probe.UNREACHABLE
+            else -> Probe.NOT_MAP
+        }
+    }
+
+    /**
      * A pairing code for whoever [cookie] signs in as. The phone app is
      * already signed in to the map in its web view, so it pairs itself with
      * that session instead of having six digits read off one screen and

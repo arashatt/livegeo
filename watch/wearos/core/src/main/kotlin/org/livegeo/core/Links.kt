@@ -14,17 +14,15 @@ object Links {
     private val TRAILING = charArrayOf('.', ',', ';', ':', '!', '?', ')', ']', '}', '»', '"', '\'')
 
     /**
-     * The first map address in [text]. What Telegram shares is often the
-     * whole message ("https://…/auth/… Opens once, for 10 minutes"), not just
-     * the link in it.
+     * The map address in [text]: a sign-in link if there is one, else the
+     * first https address. What Telegram shares is often the whole message
+     * ("https://…/auth/… Opens once, for 10 minutes"), not just the link, and
+     * a clipboard can hold other links as well as the one the bot sent.
      */
     fun find(text: String?): String? {
         if (text == null) return null
-        for (match in WEB.findAll(text)) {
-            val url = match.value.trimEnd(*TRAILING)
-            if (origin(url) != null) return url
-        }
-        return null
+        val usable = WEB.findAll(text).map { it.value.trimEnd(*TRAILING) }.filter { origin(it) != null }.toList()
+        return usable.firstOrNull { isSignIn(it) } ?: usable.firstOrNull()
     }
 
     /**
@@ -60,6 +58,21 @@ enum class Trouble {
 
     /** The address is right but nothing answers behind it, or the answer is an error. */
     DOWN,
+
+    /** The link leads somewhere that answers, but is not a LiveGeo map (Probe.NOT_MAP). */
+    NOT_A_MAP,
+}
+
+/** What an address says when asked whether it is a LiveGeo map (Api.probe). */
+enum class Probe {
+    /** It answers /healthz the way only a LiveGeo server does. */
+    MAP,
+
+    /** It answers, with something else: another website. Never remembered as the map. */
+    NOT_MAP,
+
+    /** Nothing could be asked: no network, a tunnel that is gone, a server that is down. */
+    UNREACHABLE,
 }
 
 object Reach {

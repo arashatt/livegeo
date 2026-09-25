@@ -25,6 +25,16 @@ object Wire {
     /** The six digits from POST /api/devices/code. */
     fun code(json: String): String = JSONObject(json).getString("code")
 
+    /**
+     * Whether a GET /healthz answer is a LiveGeo server's:
+     * {"ok":true,"watching":…,"people":…, …}. Anybody may ask it, and no
+     * other website answers it in that shape.
+     */
+    fun isHealth(json: String): Boolean = runCatching {
+        val o = JSONObject(json)
+        o.optBoolean("ok", false) && o.opt("watching") is Number && o.opt("people") is Number
+    }.getOrDefault(false)
+
     /** The person GET /api/me describes, or null for none. */
     fun id(json: String): String? {
         val o = JSONObject(json)

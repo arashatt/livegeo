@@ -96,7 +96,38 @@ try{
   assert.equal(shared.files.length,1);assert.match(shared.files[0].name,/\.gpx$/);
   assert.equal(decode(shared.files[0].base64),decode(saved),'sent is exactly what is saved');
   assert.equal(demo.mutations.filter(r=>r.path.startsWith('/api/devices')).length,0,'the page never pairs by itself');
+  await page.close();
+
+  // An old web view, as in many car head units: it cannot parse the ES2022
+  // the 3D map and MapLibre are written in, so it gets the classic map (and
+  // Go live on it), not an empty 3D one that never starts.
+  page=await browser.newPage({viewport:{width:1280,height:800},reducedMotion:'reduce'});
+  page.on('pageerror',e=>errors.push(e.message));
+  const asked=[];page.on('request',r=>asked.push(new URL(r.url()).pathname));
+  await page.addInitScript(standIn);
+  await page.addInitScript(()=>{
+    const real=window.Function;
+    window.Function=function(...parts){
+      if(String(parts[parts.length-1]).includes('static{'))throw new SyntaxError('Unexpected token \'{\'');
+      return real.apply(this,parts);
+    };
+  });
+  await page.goto(demo.origin);
+  await page.waitForFunction(()=>document.body.dataset.renderer==='classic'&&document.querySelectorAll('#list .person').length===5,{},{timeout:30000});
+  assert.match(await page.locator('#rendererNote').innerText(),/unavailable/);
+  assert.equal(await page.locator('#golivebtn').isVisible(),true,'Go live is there on the classic map too');
+  assert.equal(asked.some(p=>p.endsWith('/game-start.mjs')||p.endsWith('/maplibre-gl.mjs')),false,'the 3D map was never tried');
+  await page.close();
+
+  // And if that check is ever wrong: a 3D module that does not parse falls
+  // back too, instead of leaving the map empty.
+  page=await browser.newPage({viewport:{width:1280,height:800},reducedMotion:'reduce'});
+  await page.route('**/lib/game-start.mjs',route=>route.fulfill({contentType:'text/javascript',body:'class { broken'}));
+  await page.goto(demo.origin);
+  await page.waitForFunction(()=>document.body.dataset.renderer==='classic'&&document.querySelectorAll('#list .person').length===5,{},{timeout:30000});
+  assert.match(await page.locator('#rendererNote').innerText(),/could not start/);
+  await page.close();
 
   assert.deepEqual(errors,[],'no console/application errors');
-  console.log('App bridge: nothing in a browser; in the app Go live follows sharing, game camera first, GPX saved and sent through the app');
+  console.log('App bridge: nothing in a browser; in the app Go live follows sharing, game camera first, GPX saved and sent through the app; old web views and unparseable 3D get the classic map');
 }finally{if(browser)await browser.close();await demo.close();}

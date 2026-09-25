@@ -226,7 +226,14 @@ head('the dashboard');
   const body = await withCookie.json();
   t('and carries the people', body.people.length === 1 && body.people[0].name === 'آرش', body);
 
-  t('health needs no token', (await fetch(`${base}/healthz`)).status === 200);
+  const health = await fetch(`${base}/healthz`);
+  t('health needs no token', health.status === 200);
+  // The phone app tells a LiveGeo map from any other website by this
+  // answer's shape (Wire.isHealth, watch/wearos/core) before it keeps an
+  // address: change the shape and every app refuses every map.
+  const said = await health.json();
+  t('and answers in the shape the phone app knows a map by',
+    said.ok === true && typeof said.watching === 'number' && typeof said.people === 'number', said);
 
   // The stream: connect, read the greeting, then a pushed update.
   const res = await fetch(`${base}/api/stream`, { headers: { cookie: 'tll_token=sekret' } });

@@ -574,7 +574,9 @@ export function serve(positions, config, {
 
     // /healthz is deliberately before this: the rollout's health check runs on
     // the server itself, over loopback, and has no key to present. It reports
-    // counts and nothing else.
+    // counts and nothing else. The phone app asks it too, before it keeps an
+    // address as the map, and knows a LiveGeo server by ok, watching and
+    // people (Wire.isHealth): keep those three as they are.
     if (url.pathname === '/healthz') {
       // Whether the database is there too: a service that came up without it
       // answers, but with circles, private places and history all off, and
