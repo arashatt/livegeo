@@ -18,6 +18,10 @@ on:
         description: Publish as a release with this version, e.g. 1.0.0. Empty builds without publishing.
         required: false
         default: ''
+      notes:
+        description: What changed since the last release, for the release notes (Markdown). Optional.
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -247,6 +251,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
           SIGNING: ${{ needs.build.outputs.signing }}
+          NEWS: ${{ inputs.notes }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
@@ -257,8 +262,12 @@ jobs:
           else
             updates="Signed with a key made for this build only: if an earlier release is installed, remove it first. Once the project's signing key is in the repository's secrets, releases install over each other."
           fi
+          news=
+          if [ -n "$NEWS" ]; then news=$(printf '**New in %s**\n\n%s\n\n' "$VERSION" "$NEWS"); fi
           cat > notes.md <<NOTES
           LiveGeo for Android $VERSION: the live 3D map, full-screen, and a Go live button that shares this device's location.
+
+          $news
 
           **Install:** download \`$apk\` on the phone or head unit and open it. Android asks once to allow installing apps from wherever it was opened (the browser, Telegram, a file manager).
 
