@@ -7,8 +7,9 @@ import { join } from 'node:path';
 import { readLayer, decodeTile, partsOf, LINE } from '../src/mvt.js';
 import {
   makeDistrict, makePlacesPostgis, placesInTile, placesFromRows, placeSql,
-  pickDistrict, tilesAround, DISTRICT_MIN_ZOOM, PLACE_MAX_ZOOM,
-  streetsInTile, streetTiles, pickStreet, STREET_MIN_ZOOM,
+  pickDistrict, tilesAround, DISTRICT_MIN_ZOOM, PLACE_MAX_ZOOM, DISTRICT_ZOOM_CAP,
+  settlementTiles, pickSettlement, SETTLEMENT_ZOOM,
+  streetsInTile, streetTiles, pickStreet, streetReach, STREET_MIN_ZOOM,
 } from '../src/district.js';
 import { makeVectorUpstream } from '../src/vector-tiles.js';
 import { serve, staticFile } from '../src/server.js';
@@ -149,23 +150,25 @@ test('the import is asked first, the upstream where it has nothing, and a tile i
   const same = (t, u) => t.z === u.z && t.x === u.x && t.y === u.y;
   const upstream = { tile: async (t) => { asked.up++; return { bytes: same(t, LIECHTENSTEIN) ? REAL : Buffer.alloc(0), from: 'upstream' }; } };
   const district = makeDistrict({ postgis, upstream, log: quiet, now: () => clock });
+  // Zoomed in to 17, the tiles street level (15) would ask for.
+  const street = tilesAround(VADUZ.lat, VADUZ.lon, DISTRICT_ZOOM_CAP).length;
   assert.deepEqual(await district.at(VADUZ.lat, VADUZ.lon, 17), ['Vaduz']);
-  assert.deepEqual(asked, { pg: 1, up: 0 });
+  assert.deepEqual(asked, { pg: street, up: 0 });
   await district.at(VADUZ.lat + 0.0001, VADUZ.lon, 17);
-  assert.deepEqual(asked, { pg: 1, up: 0 }, 'the same tile is not asked twice');
+  assert.deepEqual(asked, { pg: street, up: 0 }, 'the same tiles are not asked twice');
   // An import with nothing there hands over to the upstream: four z11 tiles
   // around Vaduz, one of which has it.
   local = [];
   assert.deepEqual(await district.at(VADUZ.lat, VADUZ.lon, 12.4), ['وادوتس', 'Vaduz']);
-  assert.deepEqual(asked, { pg: 5, up: 4 });
+  assert.deepEqual(asked, { pg: street + 4, up: 4 });
   // Too far out to name anything, or not a place: nobody is asked.
   assert.deepEqual(await district.at(VADUZ.lat, VADUZ.lon, 11.9), []);
   assert.deepEqual(await district.at(NaN, VADUZ.lon, 15), []);
-  assert.deepEqual(asked, { pg: 5, up: 4 });
+  assert.deepEqual(asked, { pg: street + 4, up: 4 });
   // Kept ten minutes, then asked again.
   clock = 600_001;
   await district.at(VADUZ.lat, VADUZ.lon, 17);
-  assert.equal(asked.pg, 6);
+  assert.ok(asked.pg > street + 4);
 });
 
 test('nobody answering is asked again soon; a source that throws is an empty answer', async () => {
@@ -174,17 +177,67 @@ test('nobody answering is asked again soon; a source that throws is an empty ans
   let asks = 0;
   const district = makeDistrict({ upstream: { tile: async () => { asks++; return up; } }, log: quiet, now: () => clock });
   assert.deepEqual(await district.at(VADUZ.lat, VADUZ.lon, 18), []);
-  assert.equal(asks, 1);
+  // Street level's tiles, then, with nothing in them, the wider ones.
+  const first = tilesAround(VADUZ.lat, VADUZ.lon, DISTRICT_ZOOM_CAP).length + settlementTiles(VADUZ.lat, VADUZ.lon).length;
+  assert.equal(asks, first);
   clock = 20_000;
   await district.at(VADUZ.lat, VADUZ.lon, 18);
-  assert.equal(asks, 1);
+  assert.equal(asks, first);
   clock = 30_001;
   up = { bytes: REAL, from: 'upstream' };
   await district.at(VADUZ.lat, VADUZ.lon, 18);
-  assert.equal(asks, 2);
+  assert.ok(asks > first);
   const broken = makeDistrict({ postgis: { places: async () => { throw new Error('boom'); } }, log: quiet });
   assert.deepEqual(await broken.at(VADUZ.lat, VADUZ.lon, 15), []);
   assert.deepEqual(await makeDistrict().at(VADUZ.lat, VADUZ.lon, 15), []);
+});
+
+test('zoomed in past street level, the district stays the one street level names', async () => {
+  // A quarter 400 m north of the middle of Vaduz: in reach at 15; at 18, by
+  // pixels alone, a thousand pixels off the screen.
+  const quarter = placesFromRows([{ place: 'quarter', name: 'Ebenholz', lat: VADUZ.lat + 400 / 111195, lon: VADUZ.lon }]);
+  const town = placesFromRows([{ place: 'town', name: 'Vaduz', lat: VADUZ.lat, lon: VADUZ.lon }]);
+  const places = [...quarter, ...town];
+  assert.deepEqual(pickDistrict(places, VADUZ.lat, VADUZ.lon, 15), ['Ebenholz']);
+  assert.deepEqual(pickDistrict(places, VADUZ.lat, VADUZ.lon, 18), ['Vaduz'], 'by pixels alone, only the town is under zoom 18');
+  const district = makeDistrict({ postgis: { places: async () => places }, log: quiet });
+  for (const zoom of [15, 16, 18, 20, 22]) {
+    assert.deepEqual(await district.at(VADUZ.lat, VADUZ.lon, zoom), ['Ebenholz'], `zoom ${zoom}`);
+  }
+  assert.equal(DISTRICT_ZOOM_CAP, 15);
+});
+
+test('with no part of town in reach, the suburb, village, town or city the middle is in', async () => {
+  const at = (kind, name, north, eastward = 0) => placesFromRows([{
+    place: kind, name, lat: VADUZ.lat + north / 111195,
+    lon: VADUZ.lon + eastward / (111195 * Math.cos((VADUZ.lat * Math.PI) / 180)),
+  }])[0];
+  // A town whose point is 3 km off: out of the view's reach, in the town's.
+  const schaan = at('town', 'Schaan', 3000);
+  assert.deepEqual(pickDistrict([schaan], VADUZ.lat, VADUZ.lon, 15), []);
+  assert.deepEqual(pickSettlement([schaan], VADUZ.lat, VADUZ.lon), ['Schaan']);
+  // A village's name carries 2.5 km, a town's 5, a city's 10.
+  assert.deepEqual(pickSettlement([at('village', 'Planken', 3000)], VADUZ.lat, VADUZ.lon), []);
+  assert.deepEqual(pickSettlement([at('town', 'Far', 0, 6000)], VADUZ.lat, VADUZ.lon), []);
+  assert.deepEqual(pickSettlement([at('city', 'Big', -9000)], VADUZ.lat, VADUZ.lon), ['Big']);
+  // The nearest for its size: at a town's middle, the town, not a suburb
+  // whose point is 2 km off; away from any town's middle, the suburb.
+  const edge = at('suburb', 'Edge', 2000);
+  assert.deepEqual(pickSettlement([edge, at('town', 'Middle', 0)], VADUZ.lat, VADUZ.lon), ['Middle']);
+  assert.deepEqual(pickSettlement([edge, at('city', 'Big', -9000)], VADUZ.lat, VADUZ.lon), ['Edge']);
+  // What the service does: the wider tiles only when nothing is near.
+  const asked = [];
+  const district = makeDistrict({ log: quiet, postgis: { places: async (t) => { asked.push(t.z); return t.z === SETTLEMENT_ZOOM ? [schaan] : []; } } });
+  assert.deepEqual(await district.at(VADUZ.lat, VADUZ.lon, 17), ['Schaan']);
+  assert.ok(asked.includes(14) && asked.includes(SETTLEMENT_ZOOM), asked);
+  const near = makeDistrict({ log: quiet, postgis: { places: async (t) => { asked.push(`near${t.z}`); return [at('quarter', 'Q', 100)]; } } });
+  assert.deepEqual(await near.at(VADUZ.lat, VADUZ.lon, 17), ['Q']);
+  assert.ok(!asked.includes(`near${SETTLEMENT_ZOOM}`), 'not when something is near');
+  // 3 × 3 tiles at most, anywhere, and all of them z11.
+  for (const [lat, lon] of [[VADUZ.lat, VADUZ.lon], [35.7, 51.4], [0, 0], [60, 10], [69.65, 18.96], [-33.9, 18.4], [85, 179.99]]) {
+    const tiles = settlementTiles(lat, lon);
+    assert.ok(tiles.length >= 1 && tiles.length <= 9 && tiles.every((t) => t.z === 11), `${lat},${lon}: ${tiles.length}`);
+  }
 });
 
 test('PostGIS: no import means null, remembered; importing needs no restart; a failure backs off', async () => {
@@ -273,10 +326,14 @@ test('streets: the z14 tiles within reach of the middle, 2 × 2 at most', () => 
   assert.deepEqual(streetTiles(middle.lat, middle.lon, 18), [STREET_TILE]);
   assert.deepEqual(streetTiles(middle.lat, middle.lon, 15), [STREET_TILE]);
   // Near a corner, zoomed out enough for the reach to cross it.
-  const corner = inTile(40, 40);
+  const corner = inTile(150, 150);
   assert.deepEqual(streetTiles(corner.lat, corner.lon, 15).map((t) => `${t.x}/${t.y}`).sort(),
     ['8624/5752', '8624/5753', '8625/5752', '8625/5753']);
-  assert.deepEqual(streetTiles(corner.lat, corner.lon, 18), [STREET_TILE], 'zoomed in, 40 px is out of reach');
+  assert.deepEqual(streetTiles(corner.lat, corner.lon, 18), [STREET_TILE], 'zoomed in, 60 m is out of reach');
+  // The reach: 36 px, or 40 m where that is more (from about zoom 17 in).
+  assert.equal(streetReach(47.14, 15), 36);
+  assert.ok(Math.abs(streetReach(47.14, 18) * 0.4065 - 40) < 0.1, streetReach(47.14, 18));
+  assert.ok(Math.abs(streetReach(47.14, 21) * (0.4065 / 8) - 40) < 0.1);
   for (let zoom = 15; zoom <= 22; zoom += 0.5) {
     const tiles = streetTiles(35.8, 51.43, zoom);
     assert.ok(tiles.length >= 1 && tiles.length <= 4, `${zoom}: ${tiles.length}`);
@@ -294,10 +351,14 @@ test('streets: the nearest within reach of the middle, a pedestrian street inclu
   assert.equal(at(1600, 1500, 17), 'Städtle');
   // Nearer the long street, away from its ends.
   assert.equal(at(1560, 1520, 18), 'Äulestrasse');
-  // Out of reach at street zoom, in reach further out.
-  assert.equal(at(1540, 1440, 18), '');
-  assert.equal(at(1540, 1440, 17), '');
-  assert.equal(at(1540, 1440, 16), 'Städtle');
+  // Over 40 m from either: nothing at street zoom, the nearer further out.
+  assert.equal(at(1480, 1400, 18), '');
+  assert.equal(at(1480, 1400, 17), '');
+  assert.equal(at(1480, 1400, 16), 'Äulestrasse');
+  // Zoomed right in, a street 33 m off is still the one you are on: 320
+  // pixels at zoom 20, where 36 would be under four metres.
+  assert.equal(at(1540, 1440, 20), 'Städtle');
+  assert.equal(at(1540, 1440, 22), 'Städtle');
   assert.equal(pickStreet([], 47.1, 9.5, 18), '');
 });
 

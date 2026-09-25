@@ -10,7 +10,10 @@
 //      from the upstream in vector-tiles.js: OpenFreeMap by default.
 //
 // The browser asks this service, never the upstream, and gets one or two
-// lines of text back. Where somebody is looking is never logged.
+// lines of text back — and, zoomed in to streets, the street at the middle,
+// from the same tiles. Both work wherever the upstream has the world, and
+// both stay as far in as the map zooms. Where somebody is looking is never
+// logged.
 
 import { readLayer, partsOf, POINT, LINE } from './mvt.js';
 import { VECTOR_MAX_ZOOM } from './vector-tiles.js';
@@ -21,12 +24,20 @@ export const DISTRICT_MIN_ZOOM = 12;
 // Deepest tile either source is asked for; closer zooms use these.
 export const PLACE_MAX_ZOOM = VECTOR_MAX_ZOOM;
 
+// Closer in than this the district is looked for as it is at this zoom. The
+// reach is in screen pixels, and at street level and beyond a few hundred
+// pixels are a few dozen metres: zooming in used to lose the name of where
+// you were, although you had not moved.
+export const DISTRICT_ZOOM_CAP = 15;
+
 // From this zoom of the map in, the street at the middle is named as well:
 // close enough that the middle of the view is on a street, not a quarter.
 export const STREET_MIN_ZOOM = 15;
 // How far from the middle a street may pass, in screen pixels, and still be
-// the one you are on.
+// the one you are on — and never less than this many metres, however far in
+// the map is zoomed: at zoom 20 the pixels alone come to four metres.
 const STREET_REACH = 36;
+const STREET_FLOOR = 40;
 // What a street sign names: not footpaths, tracks, railways, lifts or
 // ferries. A pedestrian street is a street, though OpenMapTiles files it
 // under paths.
@@ -52,6 +63,15 @@ const KINDS = {
   town: { tier: 1, reach: 2 },
   city: { tier: 1, reach: 4 },
 };
+
+// Most of the world has no neighbourhood points at all, and a town's point is
+// often further from where you are in it than the view reaches. When nothing
+// is in reach, the suburb, village, town or city the middle is in, by how far
+// each kind's name carries on the ground (metres), from tiles of this zoom,
+// which hold every one of them (OpenMapTiles puts villages and suburbs in from
+// z10–11, towns and cities long before).
+const SETTLEMENT_REACH = { suburb: 2500, village: 2500, town: 5000, city: 10000 };
+export const SETTLEMENT_ZOOM = 11;
 
 // Letters outside Latin script. A name made of them gets a Latin line under
 // it from name:en, when OSM has one; this is how OpenMapTiles splits names.
@@ -120,6 +140,62 @@ export function pickDistrict(places, lat, lon, zoom) {
   return best ? best.lines : [];
 }
 
+// Metres between two points given across the world as above, near enough:
+// the east–west scale where they are, on a flat projection. Good to well
+// under a percent at the distances a place's name carries.
+function metresApart(x1, y1, x2, y2) {
+  const lat = (Math.atan(Math.sinh(Math.PI * (1 - (y1 + y2)))) * 180) / Math.PI;
+  const perWorld = 40075016.686 * Math.cos((lat * Math.PI) / 180);
+  return Math.hypot(x1 - x2, y1 - y2) * perWorld;
+}
+
+// The SETTLEMENT_ZOOM tiles within the widest settlement reach of the middle:
+// 3 × 3 at most, around the one it is in, which far north is a little less
+// than the whole reach, as the tiles get narrower there.
+export function settlementTiles(lat, lon) {
+  const z = SETTLEMENT_ZOOM;
+  const n = 2 ** z;
+  const x = worldX(lon);
+  const y = worldY(lat);
+  // The reach as a share of the world's width where the middle is.
+  const r = Math.max(...Object.values(SETTLEMENT_REACH))
+    / (40075016.686 * Math.cos((Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 180));
+  const clamp = (v) => Math.max(0, Math.min(n - 1, v));
+  const range = (v) => {
+    const at = Math.floor(v * n);
+    return [clamp(Math.max(at - 1, Math.floor((v - r) * n))), clamp(Math.min(at + 1, Math.floor((v + r) * n)))];
+  };
+  const [x0, x1] = range(x);
+  const [y0, y1] = range(y);
+  const tiles = [];
+  for (let tx = x0; tx <= x1; tx++) {
+    for (let ty = y0; ty <= y1; ty++) tiles.push({ z, x: tx, y: ty });
+  }
+  return tiles;
+}
+
+// The settlement the middle is in, from places as above: the nearest for its
+// size, so the middle of a town is that town even with a suburb's point a
+// couple of kilometres off. [] when none carries this far.
+export function pickSettlement(places, lat, lon) {
+  const x = worldX(lon);
+  const y = worldY(lat);
+  let best = null;
+  let bestScore = Infinity;
+  for (const place of places) {
+    const reach = SETTLEMENT_REACH[place.kind];
+    if (!reach) continue;
+    const d = metresApart(place.x, place.y, x, y);
+    if (d > reach) continue;
+    const score = d / reach;
+    if (score < bestScore) {
+      best = place;
+      bestScore = score;
+    }
+  }
+  return best ? best.lines : [];
+}
+
 // The places in one vector tile's `place` layer. A tile that cannot be read
 // has none, rather than failing the request.
 export function placesInTile(bytes, tile) {
@@ -140,7 +216,7 @@ export function placesInTile(bytes, tile) {
     const lines = linesOf(local, p['name:latin'] || p.name_en || (local ? '' : p.name));
     if (!lines.length) continue;
     const [px, py] = f.points[0];
-    out.push({ ...kind, x: (tile.x + px / layer.extent) / n, y: (tile.y + py / layer.extent) / n, lines });
+    out.push({ ...kind, kind: p.class, x: (tile.x + px / layer.extent) / n, y: (tile.y + py / layer.extent) / n, lines });
   }
   return out;
 }
@@ -174,6 +250,13 @@ export function streetsInTile(bytes, tile) {
   return out;
 }
 
+// How far a street may pass from the middle, in pixels at this zoom:
+// STREET_REACH, or STREET_FLOOR metres when that is more.
+export function streetReach(lat, zoom) {
+  const metresPerPixel = (40075016.686 * Math.cos((Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 180)) / (256 * 2 ** zoom);
+  return Math.max(STREET_REACH, STREET_FLOOR / metresPerPixel);
+}
+
 // The z14 tiles a street within reach of the middle of the view can be in.
 export function streetTiles(lat, lon, zoom) {
   const z = PLACE_MAX_ZOOM;
@@ -182,10 +265,11 @@ export function streetTiles(lat, lon, zoom) {
   const size = world / n;
   const cx = worldX(lon) * world;
   const cy = worldY(lat) * world;
+  const reach = streetReach(lat, zoom);
   const clamp = (v) => Math.max(0, Math.min(n - 1, v));
   const tiles = [];
-  for (let x = clamp(Math.floor((cx - STREET_REACH) / size)); x <= clamp(Math.floor((cx + STREET_REACH) / size)); x++) {
-    for (let y = clamp(Math.floor((cy - STREET_REACH) / size)); y <= clamp(Math.floor((cy + STREET_REACH) / size)); y++) {
+  for (let x = clamp(Math.floor((cx - reach) / size)); x <= clamp(Math.floor((cx + reach) / size)); x++) {
+    for (let y = clamp(Math.floor((cy - reach) / size)); y <= clamp(Math.floor((cy + reach) / size)); y++) {
       tiles.push({ z, x, y });
     }
   }
@@ -198,7 +282,7 @@ export function pickStreet(streets, lat, lon, zoom) {
   const cx = worldX(lon) * world;
   const cy = worldY(lat) * world;
   let best = '';
-  let nearest = STREET_REACH;
+  let nearest = streetReach(lat, zoom);
   for (const { name, points: p } of streets) {
     // Each piece of the line, from where the middle is: the nearest point on
     // it, not only its ends, so a long straight street counts all along.
@@ -243,7 +327,7 @@ export function placesFromRows(rows) {
     if (!kind || !Number.isFinite(lat) || !Number.isFinite(lon) || typeof row.name !== 'string') continue;
     const local = NONLATIN.test(row.name) ? row.name : '';
     const lines = linesOf(local, local ? row.en : row.name);
-    if (lines.length) out.push({ ...kind, x: worldX(lon), y: worldY(lat), lines });
+    if (lines.length) out.push({ ...kind, kind: row.place, x: worldX(lon), y: worldY(lat), lines });
   }
   return out;
 }
@@ -356,11 +440,17 @@ export function makeDistrict({ postgis = null, upstream = null, log = console, n
   }
 
   return {
-    // [] when there is nothing to say; never throws.
+    // [] when there is nothing to say; never throws. Zoomed in past street
+    // level, the answer is street level's; with nothing in reach, the
+    // settlement the middle is in.
     async at(lat, lon, zoom) {
       if (![lat, lon, zoom].every(Number.isFinite) || zoom < DISTRICT_MIN_ZOOM) return [];
-      const lists = await Promise.all(tilesAround(lat, lon, zoom).map(placesIn));
-      return pickDistrict(lists.flat(), lat, lon, zoom);
+      const z = Math.min(zoom, DISTRICT_ZOOM_CAP);
+      const lists = await Promise.all(tilesAround(lat, lon, z).map(placesIn));
+      const near = pickDistrict(lists.flat(), lat, lon, z);
+      if (near.length) return near;
+      const wider = await Promise.all(settlementTiles(lat, lon).map(placesIn));
+      return pickSettlement(wider.flat(), lat, lon);
     },
     // The street at the middle of the view, or ''; never throws.
     async street(lat, lon, zoom) {

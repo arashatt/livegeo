@@ -663,6 +663,17 @@ corner, the way a game names the district you drive into: the neighbourhood,
 quarter or suburb, else the village, town or city. A name in another script
 comes with a Latin line under it (OSM's `name:en`), in spaced capitals. It
 fades out from zoom 11 outwards, where one name would cover a whole city.
+From zoom 15 in, the street at the middle is named above it: the nearest
+named road within 36 pixels, or 40 m, whichever is more.
+
+Both work anywhere the tiles cover, which is the whole planet, and both stay
+however far in you zoom: closer than zoom 15 the district is the one zoom 15
+names, rather than whatever happens to fall within a few hundred pixels,
+which by then is a few dozen metres. Most of the world has no neighbourhood
+points, and a town's point can be further from where you are in it than the
+view reaches, so when nothing is in reach the name is the suburb, village,
+town or city whose point is within 2.5, 2.5, 5 or 10 km, the nearest for its
+size.
 
 The page asks `/api/district?lat=…&lon=…&z=…` once the map has settled, and
 gets one or two lines of text back. The names are OpenStreetMap's place nodes,
