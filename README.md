@@ -25,7 +25,7 @@ a web page, so tell them, keep the dashboard private, and keep the retention
 short (`STALE_AFTER`).
 
 That last part stops being true the moment you set `DATABASE_URL`: positions
-are then written to PostGIS and kept until something deletes them. See
+are then written to PostGIS and kept for `HISTORY_DAYS` (90 by default). See
 «Places and history» before turning it on.
 
 ## A bot, or your own account
@@ -224,6 +224,7 @@ STALE_AFTER=3600              # drop a position nobody updated for this long
 TRAIL_MAX=120                 # points kept in the path behind each person
 MIN_MOVE=25                   # metres before a fix counts as travel, not noise
 DATABASE_URL=                 # optional PostGIS — see «Places and history»
+HISTORY_DAYS=90               # days of history kept in PostGIS; 0 keeps it for ever
 TILE_UPSTREAM=                # where basemap tiles come from; default is OSM
 TILE_CACHE=                   # where they are kept; default /tmp/livegeo-tiles
 TILE_MAX_AGE=2592000          # seconds before a cached tile is refetched
@@ -337,6 +338,17 @@ standing still does not make somebody expire off the map.
 Raise `MIN_MOVE` if paths still look restless, lower it if short walks are
 being missed. It is only the floor: a poor fix always raises the bar for
 itself.
+
+The other kind of bad fix is one that lands far away: a cell tower's guess,
+or a bad satellite lock, hundreds of metres or kilometres off and then back.
+A fix is left out of the path, the history and GPX files when reaching it from
+the last good one would have taken more than about 250 km/h, well off the way
+travelled, and a later fix carries on from before it (`src/track.js`). Up to
+three bad fixes in a row go this way. A real jump (a flight, a phone off for a
+day) stays, because nothing after it goes back. So do fixes Telegram delivers
+in a bunch, which lie along the way, and the newest fix, which is where the
+map says somebody is until the next one arrives. Nothing is deleted: the table
+keeps what came in, and the filter runs whenever a path is read.
 
 ### What time it was, anywhere on a path
 
@@ -1052,11 +1064,14 @@ account's own chats what is currently being shared, so a restart recovers
 whoever is still sharing even with `TELEGRAM_CHATS` empty.
 
 **It remembers.** Every position that actually moved is written to the
-`positions` table and kept until deleted. This is the part to be deliberate
-about — it is a record of where people went, and they agreed to share a live
-location in a chat, not to be logged. The dashboard's *forget* button erases
-a person from the database as well as from the map, and `POST /api/forget/<id>`
-does the same from a script.
+`positions` table. This is the part to be deliberate about — it is a record of
+where people went, and they agreed to share a live location in a chat, not to
+be logged. So it is kept for `HISTORY_DAYS` (default 90) and no longer: every
+six hours, and a minute after each start, older positions and fence crossings
+are deleted, a few thousand rows at a time, and only the count is logged.
+`HISTORY_DAYS=0` keeps everything, as before there was a limit. The
+dashboard's *forget* button erases a person from the database as well as from
+the map, and `POST /api/forget/<id>` does the same from a script.
 
 Import an extract for your region — a country, not the planet:
 

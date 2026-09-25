@@ -47,6 +47,12 @@ export function placeName({ road, area } = {}) {
   return parts.join(', ');
 }
 
+// Up to $2 rows of `table` older than $1 seconds, for prune() below.
+export function pruneSql(table) {
+  return `DELETE FROM ${table} WHERE ctid IN (
+    SELECT ctid FROM ${table} WHERE at < now() - make_interval(secs => $1) LIMIT $2)`;
+}
+
 export function makeGeo({ url, log = console } = {}) {
   let pool = null;
   // 'off' without DATABASE_URL, 'connected', or 'unreachable': configured,
@@ -637,9 +643,26 @@ export function makeGeo({ url, log = console } = {}) {
       }));
     },
 
-    // One statement, both tables, so an erasure cannot be half done. This is
-    // kept indefinitely otherwise, which is exactly why it has to be possible
-    // to remove a person completely and on request.
+    // Where everybody was, deleted once it is older than `days`: the raw
+    // fixes and the fence crossings, which are the same history in other
+    // words. In batches, so the first run over years of it is not one huge
+    // transaction. Returns how many rows went.
+    async prune(days, { batch = 5000 } = {}) {
+      if (!pool || !(days > 0)) return 0;
+      let gone = 0;
+      for (const table of ['positions', 'fence_events']) {
+        for (;;) {
+          const res = await pool.query(pruneSql(table), [Math.round(days * 86400), batch]);
+          gone += res.rowCount;
+          if (res.rowCount < batch) break;
+        }
+      }
+      return gone;
+    },
+
+    // One statement, both tables, so an erasure cannot be half done. Kept
+    // for HISTORY_DAYS otherwise (prune), which is exactly why it has to be
+    // possible to remove a person completely and on request.
     async forget(person) {
       if (!pool) return 0;
       const { rows } = await pool.query(

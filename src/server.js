@@ -28,6 +28,7 @@ import {
   makeZones, ZONE_MIN, ZONE_MAX, ZONES_EACH, trimEnds, trimLengths, breaksOf, withBreaks,
 } from './zones.js';
 import { toGpx, splitAtPauses, dayOf, contentDisposition } from './gpx.js';
+import { cleanTrack } from './track.js';
 import { makeLive, describeLink, LIVE_MINUTES, LIVE_EACH } from './live.js';
 import { CHECK_HOURS } from './checks.js';
 import { randomBytes, createHash } from 'node:crypto';
@@ -1075,9 +1076,12 @@ export function serve(positions, config, {
       if (!circles.canSee(viewer, id)) return notFound();
       // A window, because a path drawn across a week is a tangle nobody reads.
       const since = Number(url.searchParams.get('since'));
-      const recorded = geo
+      const stored = geo
         ? await geo.historyOf(id, { limit: 1000, since: Number.isFinite(since) && since > 0 ? since : null })
         : [];
+      // Without the fixes the phone got wrong (track.js), which the table
+      // keeps as they came.
+      const recorded = cleanTrack([...stored].reverse()).reverse();
       // Newest first either way; the veiled one has its hidden stretches
       // taken out and the fix after each marked as a gap.
       const points = canActFor(viewer, id) ? recorded : zones.veilPoints(id, recorded).reverse();
@@ -1108,7 +1112,7 @@ export function serve(positions, config, {
         'content-disposition': contentDisposition(name, day),
         'cache-control': 'no-store',
       });
-      res.end(toGpx({ name: `${name || 'Path'} — ${day}`, points: splitAtPauses([...recorded].reverse()), time: from }));
+      res.end(toGpx({ name: `${name || 'Path'} — ${day}`, points: splitAtPauses(cleanTrack([...recorded].reverse())), time: from }));
       return;
     }
 

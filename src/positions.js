@@ -9,6 +9,8 @@
 // that its sender keeps editing. So a position update is an *edit*, not a new
 // message, and the same sender keeps the same entry rather than adding one.
 
+import { cleanTrack } from './track.js';
+
 // MTProto constructors we care about, matched by name rather than by class so
 // that a synthetic object in a test is as good as a real one off the wire.
 const GEO_LIVE = 'MessageMediaGeoLive';
@@ -206,9 +208,13 @@ export class Positions {
       return null;
     }
 
-    const trail = prev ? prev.trail.slice() : [];
+    let trail = prev ? prev.trail.slice() : [];
     if (moved && position.latitude !== null) {
       trail.push({ latitude: position.latitude, longitude: position.longitude, at: position.at });
+      // A fix the phone got wrong is only known to be wrong once the next one
+      // carries on without it, so the trail is looked over again each time
+      // (track.js). The newest fix always stays: it is where they are now.
+      trail = cleanTrack(trail);
     }
 
     const next = {

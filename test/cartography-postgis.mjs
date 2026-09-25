@@ -10,6 +10,7 @@ import { gzipSync } from 'node:zlib';
 import { CARTOGRAPHY_SQL, makeCartography } from '../src/cartography.js';
 import { makeDistrict, makePlacesPostgis, placeSql } from '../src/district.js';
 import { makeVectorCartography } from '../src/cartography-vector.js';
+import { pruneSql } from '../src/geo.js';
 
 if (!process.env.CARTOGRAPHY_TEST_DATABASE_URL) throw new Error('CARTOGRAPHY_TEST_DATABASE_URL is required');
 const db = new pg.Client({ connectionString: process.env.CARTOGRAPHY_TEST_DATABASE_URL });
@@ -152,6 +153,29 @@ try {
   assert.deepEqual(await district.at(47.1069940, 9.5274876, 16), ['Triesen']);
   assert.deepEqual(await district.at(-33.9, 18.4, 16), [], 'outside the import: nothing, with no upstream');
   console.log('PostGIS district: place kinds by zoom, Latin names from tags, and the lookup passed');
+
+  // History past HISTORY_DAYS: the statement prune() repeats until a batch
+  // comes back short, on TEMP stand-ins for the two tables it clears.
+  await db.query(`
+    CREATE TEMP TABLE positions (id bigserial, person text, at timestamptz NOT NULL);
+    CREATE TEMP TABLE fence_events (id bigserial, person text, at timestamptz NOT NULL);
+    -- Half a day inside each day, so no row sits on the line as the clock moves.
+    INSERT INTO positions (person, at)
+      SELECT 'p', now() - make_interval(days => d) + interval '12 hours' FROM generate_series(0, 120) AS d;
+    INSERT INTO fence_events (person, at) VALUES ('p', now() - interval '91 days'), ('p', now() - interval '89 days');
+  `);
+  const batches = [];
+  for (;;) {
+    const res = await db.query(pruneSql('positions'), [90 * 86400, 7]);
+    batches.push(res.rowCount);
+    if (res.rowCount < 7) break;
+  }
+  // Days 91 to 120 go, 30 rows, 7 at a time; days 0 to 90 stay.
+  assert.deepEqual(batches, [7, 7, 7, 7, 2]);
+  const kept = await db.query('SELECT min(at) > now() - interval \'90 days 1 minute\' AS recent, count(*)::int AS n FROM positions');
+  assert.deepEqual(kept.rows[0], { recent: true, n: 91 });
+  assert.equal((await db.query(pruneSql('fence_events'), [90 * 86400, 5000])).rowCount, 1);
+  console.log('PostGIS history retention: only rows past the limit go, in batches');
   await benchmarkVectorTiles(db);
 } finally {
   await db.end();

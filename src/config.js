@@ -63,6 +63,10 @@ export function defaults() {
     // Metres a fix must move before it counts as travel rather than GPS noise.
     // Only the floor — a reported accuracy worse than this raises it.
     minMove: Number(process.env.MIN_MOVE || 25),
+    // Days of history kept: where everybody has been, and when they came and
+    // went from fences. Older is deleted every few hours. 0 (or 'off') keeps
+    // it for ever, as it was before there was a limit.
+    historyDays: Math.max(0, Number(process.env.HISTORY_DAYS || 90) || 0),
 
     // How far inside or outside a fence a fix has to be before it is taken as
     // proof of which side it is on, and how long a crossing must hold before

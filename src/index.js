@@ -309,6 +309,15 @@ locate = telegram.locate || null;
 setInterval(() => { sos.sweep().catch((e) => console.error('sos:', e && e.message ? e.message : e)); }, 30_000);
 // And every check, once a minute: asked, told, moved on, or over.
 setInterval(() => { checks.sweep().catch((e) => console.error('check:', e && e.message ? e.message : e)); }, 60_000);
+// History past HISTORY_DAYS, deleted soon after the start and every six
+// hours after. Only a count is logged, never whose.
+const prune = () => geo.prune(config.historyDays)
+  .then((n) => { if (n) console.log(`history: deleted ${n} rows older than ${config.historyDays} days`); })
+  .catch((e) => console.error('history:', e && e.message ? e.message : e));
+if (config.historyDays > 0) {
+  setTimeout(prune, 60_000);
+  setInterval(prune, 6 * 3600_000);
+}
 // So the sign-in page can say which bot to open. Only the bot knows its own
 // username, and it only knows it once connected.
 if (telegram.me?.username) setBot(telegram.me.username);

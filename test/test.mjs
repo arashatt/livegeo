@@ -1679,6 +1679,27 @@ head('GPX: a path as a file other software reads');
   t('quotes and brackets are encoded, not trusted', quoted === 'O%27Neil%20%28x%29%202026-01-01.gpx', quoted);
 }
 
+head('a fix the phone got wrong, on the wire');
+{
+  const t0 = 1_790_000_000;
+  // Northwards, a fix every 10 s and 100 m, the fourth 3 km off to the east.
+  const drive = Array.from({ length: 6 }, (_, i) => ({ at: t0 + i * 10, latitude: 36.3 + i * 0.0009, longitude: 59.6 + (i === 3 ? 0.033 : 0) }));
+  const geo = { enabled: () => true, historyOf: async () => [...drive].reverse(), placeOf: async () => '' };
+  const { server } = serve(new Positions(), { dashboardToken: 'tok', port: 0, host: '127.0.0.1' }, { geo, log: { info() {}, error() {} } });
+  await new Promise((r) => server.once('listening', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const history = await (await fetch(`${base}/api/history/5?token=tok`)).json();
+    t('the history leaves it out, newest first as ever',
+      history.points.length === 5 && history.points[0].at === t0 + 50 && history.points.every((q) => q.longitude === 59.6), history.points);
+    const gpx = await (await fetch(`${base}/api/gpx/5?token=tok&from=${t0 - 1}&to=${t0 + 100}`)).text();
+    t('so does the GPX file', (gpx.match(/<trkpt/g) || []).length === 5 && !gpx.includes('lon="59.633'), gpx);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+  }
+}
+
 head('private places, on the wire');
 {
   const db = {
