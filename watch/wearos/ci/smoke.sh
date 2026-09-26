@@ -32,7 +32,9 @@ dump() {
 }
 shot() { adb exec-out screencap -p > "$shots/$1.png" || true; }
 alive() { adb shell pidof "$pkg" >/dev/null; }
-crashed() { adb logcat -d | grep -E "FATAL EXCEPTION|Process: $pkg, PID" && return 0 || return 1; }
+# The app's own crash, not another's: Google Play services on a watch emulator
+# crashes on its own at boot (it has no NFC), and that is not this app's.
+crashed() { adb logcat -d -b crash | grep -F "Process: $pkg, PID" && return 0 || return 1; }
 fail() {
   trap - ERR
   failing=1
