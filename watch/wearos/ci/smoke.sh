@@ -39,6 +39,7 @@ fail() {
   {
     echo "::error::$1"
     shot fail
+    echo "--- in front: $(front | sed 's/^ *//')"
     echo '--- on screen'
     dump | grep -o 'text="[^"]*"' | head -40 || true
     echo '--- crashes'
@@ -60,6 +61,23 @@ await_text() {
   done
   return 1
 }
+# Which activity is in front.
+front() { adb shell dumpsys activity activities 2>/dev/null | grep -m 1 'ResumedActivity' || true; }
+# The same, for the app's own screens: the watch is woken, and the app brought
+# back if the system put something of its own over it (the charging screen,
+# the watch face), which is the emulator being a watch, not the app failing.
+await_app() {
+  for _ in $(seq 1 "$2"); do
+    adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+    case "$(front)" in
+      *"$pkg"*) ;;
+      *) adb shell am start -n "$pkg/.MainActivity" >/dev/null 2>&1 || true ;;
+    esac
+    if dump | grep -Eq "$1"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
 # Taps the middle of the first thing on screen whose text is exactly $1.
 tap_text() {
   local bounds
@@ -76,15 +94,16 @@ launch() {
 
 adb install -r "$apk"
 adb logcat -c
-# A watch goes back to its face when the screen goes off, which on an emulator
-# nobody touches is a few seconds in: kept on and awake for the test.
-adb shell svc power stayon true || true
+# An emulator is always on its charger, and a watch on its charger puts a
+# charging screen over everything; and a watch goes back to its face when the
+# screen goes off. So: off the charger, the screen kept on, and awake.
+adb shell dumpsys battery unplug || true
 adb shell settings put system screen_off_timeout 1800000 || true
 adb shell input keyevent KEYCODE_WAKEUP || true
 
 echo '--- first run: it asks which map before anything else'
 launch
-await_text 'Which map\?' 60 || fail 'first run did not ask which map'
+await_app 'Which map\?' 60 || fail 'first run did not ask which map'
 dump | grep -q 'Send /pair to the bot' || fail 'it did not say where the map name comes from'
 shot 1-which-map
 
@@ -97,13 +116,13 @@ dump | grep -q 'no keyboard for apps' && fail 'this Wear OS has no text input th
 adb shell input keyevent KEYCODE_BACK
 if ! await_text 'Which map\?' 10; then
   adb shell input keyevent KEYCODE_BACK
-  await_text 'Which map\?' 20 || fail 'back from the text input did not return to the app'
+  await_app 'Which map\?' 20 || fail 'back from the text input did not return to the app'
 fi
 
 echo '--- nothing was kept: started again, it asks again'
 adb shell am force-stop "$pkg"
 launch
-await_text 'Which map\?' 60 || fail 'after a restart it did not ask which map'
+await_app 'Which map\?' 60 || fail 'after a restart it did not ask which map'
 shot 3-again
 
 alive || fail 'the app is not running'
