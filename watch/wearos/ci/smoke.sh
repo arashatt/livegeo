@@ -38,8 +38,15 @@ fail() {
   failing=1
   {
     echo "::error::$1"
+    shot fail
+    echo '--- on screen'
     dump | grep -o 'text="[^"]*"' | head -40 || true
-    adb logcat -d | grep -E "$pkg|AndroidRuntime" | tail -80 || true
+    echo '--- crashes'
+    adb logcat -d -b crash | tail -n 60 || true
+    # The app's own lines and what the system did with it; not the
+    # AndroidRuntime lines every uiautomator dump writes.
+    echo '--- the app'
+    adb logcat -d | grep -E "org\.livegeo|ActivityTaskManager|ActivityManager|E AndroidRuntime" | grep -v uiautomator | tail -n 60 || true
   } >&3 2>&4
   if [ "$BASHPID" != "$$" ]; then kill -TERM "$$"; fi
   exit 1
@@ -61,10 +68,19 @@ tap_text() {
   set -- $(printf '%s' "$bounds" | grep -o '[0-9]*')
   adb shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 ))
 }
-launch() { adb shell am start -W -n "$pkg/.MainActivity" >/dev/null || fail 'the app could not be started'; }
+launch() {
+  local said
+  said=$(adb shell am start -W -n "$pkg/.MainActivity" 2>&1) || fail "the app could not be started: $said"
+  case "$said" in *Error*|*Exception*) fail "the app could not be started: $said" ;; esac
+}
 
 adb install -r "$apk"
 adb logcat -c
+# A watch goes back to its face when the screen goes off, which on an emulator
+# nobody touches is a few seconds in: kept on and awake for the test.
+adb shell svc power stayon true || true
+adb shell settings put system screen_off_timeout 1800000 || true
+adb shell input keyevent KEYCODE_WAKEUP || true
 
 echo '--- first run: it asks which map before anything else'
 launch

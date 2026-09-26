@@ -45,8 +45,14 @@ fail() {
   failing=1
   {
     echo "::error::$1"
+    shot fail
     dump | grep -o 'text="[^"]*"' | head -40 || true
-    adb logcat -d | grep -E "$pkg|AndroidRuntime|chromium" | tail -80 || true
+    echo '--- crashes'
+    adb logcat -d -b crash | tail -n 60 || true
+    # The app's own lines and the page's, not the AndroidRuntime lines every
+    # uiautomator dump writes.
+    echo '--- the app'
+    adb logcat -d | grep -E "$pkg|E AndroidRuntime|chromium" | grep -v uiautomator | tail -n 80 || true
   } >&3 2>&4
   # From inside a pipeline or a $(…), exit would end only that part.
   if [ "$BASHPID" != "$$" ]; then kill -TERM "$$"; fi
