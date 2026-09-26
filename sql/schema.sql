@@ -109,6 +109,11 @@ CREATE TABLE IF NOT EXISTS devices (
   last_seen_at timestamptz
 );
 
+-- Which installation of the watch app paired, as the watch says (a random id
+-- of its own). The same one pairing again, when the map's address changed,
+-- replaces its old entry instead of leaving its old token working.
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS install text NOT NULL DEFAULT '';
+
 -- Places somebody hides from their circle. The centre is not the spot they
 -- picked: it was moved at random by up to half the radius when the place was
 -- made, and the spot itself was never stored (see zones.js for why).

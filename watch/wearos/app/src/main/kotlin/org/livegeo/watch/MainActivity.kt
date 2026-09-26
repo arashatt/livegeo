@@ -1,7 +1,13 @@
 package org.livegeo.watch
 
 import android.Manifest
+import android.app.RemoteInput
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -41,14 +47,20 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Scaffold
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
+import androidx.wear.input.RemoteInputIntentHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.livegeo.core.Api
 import org.livegeo.core.Duration
 import org.livegeo.core.Failure
 import org.livegeo.core.Geo
+import org.livegeo.core.HttpTransport
+import org.livegeo.core.Links
 import org.livegeo.core.Person
+import org.livegeo.core.Probe
+import org.livegeo.core.Reach
 import org.livegeo.core.Tiles
 import org.livegeo.core.Words
 
@@ -64,43 +76,131 @@ fun WatchApp() {
     val context = LocalContext.current
     val store = remember { Store(context) }
     var paired by remember { mutableStateOf(store.token != null) }
+    // Finding the map again after its address changed: still paired, and
+    // still sharing if it was, while it pairs again.
+    var moving by remember { mutableStateOf(false) }
     var looking by remember { mutableStateOf<Person?>(null) }
 
     Scaffold(timeText = { TimeText() }) {
         val person = looking
         when {
-            !paired -> PairScreen(onPaired = { paired = true })
+            !paired || moving -> PairScreen(
+                moving = moving,
+                onPaired = { paired = true; moving = false },
+                onCancel = if (moving) ({ moving = false }) else null,
+            )
             person != null -> {
                 BackHandler { looking = null }
                 PersonScreen(person)
             }
-            else -> HomeScreen(onOpen = { looking = it }, onUnpaired = { paired = false })
+            else -> HomeScreen(onOpen = { looking = it }, onUnpaired = { paired = false }, onMove = { moving = true })
         }
     }
 }
 
 // ------------------------------------------------------------------ pairing
 
+/**
+ * Pairing, in two steps: which map, then the code. Behind a quick tunnel the
+ * map's address changes every time the tunnel restarts, so it cannot be built
+ * into the app: /pair, and the map's Pair a watch, give the map's name with
+ * the code. A build with a map built in, and pairing again with the map it
+ * had, start at the code. After the map moved ([moving]) it is asked for
+ * again, and pairing again replaces this watch's old entry on the map, so its
+ * old token stops working (Api.pair's install).
+ */
 @Composable
-fun PairScreen(onPaired: () -> Unit) {
+fun PairScreen(moving: Boolean, onPaired: () -> Unit, onCancel: (() -> Unit)?) {
     val context = LocalContext.current
+    val store = remember { Store(context) }
+    var server by remember { mutableStateOf(if (moving) null else store.server) }
+    val found = server
+    // Back from the code goes to the map's name, to put a wrong one right;
+    // back from there, after a move, is back to the watch's own screen.
+    if (found != null) {
+        BackHandler { server = null }
+        CodeStep(found, store, onPaired)
+    } else {
+        if (onCancel != null) BackHandler(onBack = onCancel)
+        MapStep(moving, onFound = { server = it })
+    }
+}
+
+@Composable
+private fun MapStep(moving: Boolean, onFound: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var message by remember {
+        mutableStateOf(
+            if (moving) "Your map moved. Send /pair to the bot for its new name."
+            else "Send /pair to the bot. It gives your map's name and a code.",
+        )
+    }
+    var busy by remember { mutableStateOf(false) }
+
+    // Asked before anything is kept: a name typed wrong, or somebody else's
+    // website, is not a map (Api.probe).
+    fun look(typed: String) {
+        val origin = Links.mapAddress(typed)
+        if (origin == null) {
+            message = "That is not a map's name. Type it as /pair gave it."
+            return
+        }
+        val name = Links.mapName(origin)
+        busy = true
+        message = "Looking for $name…"
+        scope.launch {
+            val answer = withContext(Dispatchers.IO) { Api(origin, HttpTransport(PROBE_MS)).probe() }
+            busy = false
+            when (answer) {
+                Probe.MAP -> onFound(origin)
+                Probe.NOT_MAP -> message = "$name is not a livegeo map."
+                Probe.UNREACHABLE -> message = "Cannot reach $name. Check the name, and that the watch is online."
+            }
+        }
+    }
+
+    val keyboard = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val typed = result.data?.let { RemoteInput.getResultsFromIntent(it) }?.getCharSequence(MAP_INPUT)?.toString()
+        if (!typed.isNullOrBlank()) look(typed)
+    }
+
+    ScalingLazyColumn(modifier = Modifier.fillMaxSize()) {
+        item { ListHeader { Text(if (moving) "Find your map" else "Which map?") } }
+        item { Text(message, textAlign = TextAlign.Center, style = MaterialTheme.typography.body2) }
+        item {
+            Chip(
+                onClick = {
+                    try {
+                        keyboard.launch(mapInput())
+                    } catch (e: ActivityNotFoundException) {
+                        message = "This watch has no keyboard for apps to use."
+                    }
+                },
+                label = { Text("Enter its name") },
+                enabled = !busy,
+                colors = ChipDefaults.primaryChipColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CodeStep(server: String, store: Store, onPaired: () -> Unit) {
     val scope = rememberCoroutineScope()
     var digits by remember { mutableStateOf("") }
-    // A build made without LIVEGEO_SERVER points at the placeholder, and
-    // pairing could only ever fail. Better to say so than to let it.
-    val unbuilt = BuildConfig.SERVER.contains("example.")
-    var message by remember { mutableStateOf(if (unbuilt) "No server in this build" else "Send /pair to the bot") }
+    var message by remember { mutableStateOf("Code from /pair") }
     var busy by remember { mutableStateOf(false) }
 
     fun submit() {
         busy = true
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                Livegeo.api(context).pair(digits, "${Build.MANUFACTURER} ${Build.MODEL}", "wearos")
+                Api(server, HttpTransport()).pair(digits, "${Build.MANUFACTURER} ${Build.MODEL}", "wearos", store.install)
             }
             busy = false
             result.onSuccess {
-                Store(context).apply { token = it.token; ownerId = it.ownerId; ownerName = it.ownerName }
+                store.paired(server, it.token, it.ownerId, it.ownerName)
                 onPaired()
             }.onFailure {
                 digits = ""
@@ -138,7 +238,7 @@ fun PairScreen(onPaired: () -> Unit) {
                                 else -> if (digits.length < 6) digits += key
                             }
                         },
-                        enabled = !unbuilt && !busy && (key != "✓" || digits.length == 6),
+                        enabled = !busy && (key != "✓" || digits.length == 6),
                         modifier = Modifier.size(ButtonDefaults.ExtraSmallButtonSize),
                         colors = if (key == "✓") ButtonDefaults.primaryButtonColors() else ButtonDefaults.secondaryButtonColors(),
                     ) { Text(key) }
@@ -148,10 +248,25 @@ fun PairScreen(onPaired: () -> Unit) {
     }
 }
 
+private const val MAP_INPUT = "map"
+private const val PROBE_MS = 10_000
+
+/** The watch's own text input, whichever it has: keyboard, voice or handwriting. */
+private fun mapInput(): Intent = RemoteInputIntentHelper.createActionRemoteInputIntent().also {
+    RemoteInputIntentHelper.putRemoteInputsExtra(it, listOf(RemoteInput.Builder(MAP_INPUT).setLabel("Map name").build()))
+}
+
+/** Whether the watch has a connection at all. Offline, a failure says nothing about the map. */
+private fun online(context: Context): Boolean {
+    val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
+    val caps = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
+    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+}
+
 // --------------------------------------------------------------------- home
 
 @Composable
-fun HomeScreen(onOpen: (Person) -> Unit, onUnpaired: () -> Unit) {
+fun HomeScreen(onOpen: (Person) -> Unit, onUnpaired: () -> Unit, onMove: () -> Unit) {
     val context = LocalContext.current
     val store = remember { Store(context) }
     var people by remember { mutableStateOf<List<Person>>(emptyList()) }
@@ -159,6 +274,9 @@ fun HomeScreen(onOpen: (Person) -> Unit, onUnpaired: () -> Unit) {
     var session by remember { mutableStateOf(store.session()) }
     var now by remember { mutableStateOf(Livegeo.now()) }
     var pending by remember { mutableStateOf<Duration?>(null) }
+    // The map's address changed (a quick tunnel restarted): the watch cannot
+    // follow on its own, so it says so and offers to find the map again.
+    var moved by remember { mutableStateOf(false) }
 
     // Asked for when sharing starts: "while in use" location is enough,
     // because sharing always starts here, in the foreground.
@@ -200,10 +318,15 @@ fun HomeScreen(onOpen: (Person) -> Unit, onUnpaired: () -> Unit) {
                 Livegeo.send(context)          // anything the service could not send
                 Livegeo.api(context).people()
             }
-            result.onSuccess { people = it; status = "" }
+            result.onSuccess { people = it; status = ""; moved = false }
                 .onFailure {
                     if (it is Failure.Unpaired) { Livegeo.forget(context); onUnpaired(); return@LaunchedEffect }
-                    status = if (it is Failure.Offline) "Offline — will retry" else (it.message ?: "")
+                    moved = Reach.moved(it, online(context))
+                    status = when {
+                        moved -> ""
+                        it is Failure.Offline -> "Offline — will retry"
+                        else -> it.message ?: ""
+                    }
                 }
             delay(30_000)
         }
@@ -214,6 +337,18 @@ fun HomeScreen(onOpen: (Person) -> Unit, onUnpaired: () -> Unit) {
 
     ScalingLazyColumn(modifier = Modifier.fillMaxSize()) {
         item { ListHeader { Text(store.ownerName?.takeIf { it.isNotBlank() } ?: "livegeo") } }
+
+        if (moved) {
+            item {
+                Chip(
+                    onClick = onMove,
+                    label = { Text("Your map moved") },
+                    secondaryLabel = { Text("Send /pair, then tap here") },
+                    colors = ChipDefaults.primaryChipColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
 
         val s = session
         if (s != null && s.active(now)) {
@@ -249,6 +384,17 @@ fun HomeScreen(onOpen: (Person) -> Unit, onUnpaired: () -> Unit) {
                 onClick = { onOpen(p) },
                 label = { Text(p.name.ifBlank { p.id }) },
                 secondaryLabel = { Text(away + Words.ago(now - p.at) + if (p.live) "" else " · not live") },
+                colors = ChipDefaults.secondaryChipColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        // Which map this is, and a way to another: the words /pair gave.
+        item {
+            Chip(
+                onClick = onMove,
+                label = { Text("Change map") },
+                secondaryLabel = { Text(store.server?.let { Links.mapName(it) } ?: "") },
                 colors = ChipDefaults.secondaryChipColors(),
                 modifier = Modifier.fillMaxWidth(),
             )

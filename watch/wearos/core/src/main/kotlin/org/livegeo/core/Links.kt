@@ -46,6 +46,40 @@ object Links {
 
     /** Whether [url] is on the map at [origin]; anything else opens outside the app. */
     fun sameOrigin(url: String, origin: String): Boolean = origin(url) == origin
+
+    /**
+     * The map's address from what somebody typed on a watch, or null for
+     * anything that cannot be one. Typing a URL on a watch is not something to
+     * ask of anybody, so /pair and the map's Pair a watch give the map's name
+     * (mapName in src/address.js), and any of these is taken:
+     * - a quick tunnel's words, which are all that changes when it moves:
+     *   "calm river 12 bird", or with hyphens, for
+     *   https://calm-river-12-bird.trycloudflare.com;
+     * - any other address as its host: "livegeo.me.workers.dev";
+     * - a whole https link.
+     * Whether it is a LiveGeo map is asked of it afterwards (Api.probe).
+     */
+    fun mapAddress(typed: String?): String? {
+        val text = typed?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: return null
+        if ("://" in text) return origin(text)
+        // A keyboard's spaces where the hyphens were, in a whole host.
+        if ('.' in text) return origin("https://" + text.replace(Regex("\\s+"), "-"))
+        val words = text.split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
+        if (words.isEmpty()) return null
+        val label = words.joinToString("-")
+        if (label.length > 63) return null
+        return "https://$label.$QUICK_TUNNEL"
+    }
+
+    /** A map's address as a watch shows it and asks for it: the reverse of [mapAddress]. */
+    fun mapName(origin: String): String {
+        val u = runCatching { URI(origin.trim()) }.getOrNull() ?: return origin
+        val host = u.host?.lowercase() ?: return origin
+        if (host.endsWith(".$QUICK_TUNNEL")) return host.removeSuffix(".$QUICK_TUNNEL").replace('-', ' ')
+        return if (u.port == -1 || u.port == 443) host else "$host:${u.port}"
+    }
+
+    private const val QUICK_TUNNEL = "trycloudflare.com"
 }
 
 /** Why the map did not load, which decides what the screen says and offers. */
@@ -99,4 +133,16 @@ object Reach {
      * shown as it is.
      */
     fun isFailure(status: Int): Boolean = status in 500..599
+
+    /**
+     * Whether a request the watch made failed because the map's address
+     * changed, not because the watch is offline: the same two signs as
+     * [trouble]'s MOVED, a name that no longer resolves or Cloudflare's 530.
+     * Only with the network up, since offline nothing resolves at all.
+     */
+    fun moved(failure: Throwable?, networkUp: Boolean): Boolean = networkUp && when (failure) {
+        is Failure.Server -> failure.status == 530
+        is Failure.Offline -> failure.cause is java.net.UnknownHostException
+        else -> false
+    }
 }

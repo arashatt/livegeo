@@ -75,3 +75,21 @@ function hostOf(url) {
     return '';
   }
 }
+
+// The map's address as a watch is told it (/pair, Pair a watch). Typing a URL
+// on a watch is not something to ask of anybody, so a quick tunnel's address
+// is given as its words, which is all that changes when it moves: "calm river
+// twelve bird" for https://calm-river-twelve-bird.trycloudflare.com. Any other
+// address is its host, which a watch takes as it is. The watch reads either
+// back (Links.mapAddress in watch/wearos/core).
+export function mapName(base) {
+  let url;
+  try {
+    url = new URL(base);
+  } catch {
+    return '';
+  }
+  const host = url.hostname.toLowerCase();
+  if (QUICK.test(host)) return host.slice(0, -'.trycloudflare.com'.length).split('-').join(' ');
+  return url.host.toLowerCase();
+}

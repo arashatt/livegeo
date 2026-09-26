@@ -493,14 +493,14 @@ export function makeGeo({ url, log = console } = {}) {
 
     async listDevices() {
       if (!pool) return [];
-      const { rows } = await pool.query('SELECT id, owner, name, platform, token_hash FROM devices');
+      const { rows } = await pool.query('SELECT id, owner, name, platform, install, token_hash FROM devices');
       return rows.map((r) => ({ ...r, id: Number(r.id), owner: String(r.owner) }));
     },
 
-    async createDevice({ owner, name, platform, tokenHash }) {
+    async createDevice({ owner, name, platform, tokenHash, install = '' }) {
       const { rows } = await pool.query(
-        `INSERT INTO devices (owner, name, platform, token_hash) VALUES ($1, $2, $3, $4) RETURNING id`,
-        [String(owner), name, platform, tokenHash],
+        `INSERT INTO devices (owner, name, platform, token_hash, install) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [String(owner), name, platform, tokenHash, install],
       );
       return Number(rows[0].id);
     },

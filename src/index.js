@@ -22,7 +22,7 @@ import { makeZones } from './zones.js';
 import { makeLive, LIVE_EACH } from './live.js';
 import { makeSos } from './sos.js';
 import { makeChecks } from './checks.js';
-import { makeAddress } from './address.js';
+import { makeAddress, mapName } from './address.js';
 
 const config = load();
 const positions = new Positions({
@@ -322,8 +322,14 @@ const circle = circles.enabled ? {
     return { id: owner, ...(circles.user(owner) || {}) };
   },
   circleOf: (id) => circles.circleOf(id),
-  // A code to type into a watch, for somebody who can sign in.
-  pair: (id) => (devices.enabled && circles.viewerFor(id) ? codes.issue(id) : null),
+  // A code to type into a watch, for somebody who can sign in, and the map's
+  // name, which the watch asks for first: behind a quick tunnel the address
+  // changes, so it cannot be built into the watch.
+  pair: async (id) => {
+    if (!devices.enabled || !circles.viewerFor(id)) return null;
+    const base = await address.get();
+    return { code: codes.issue(id), map: base ? mapName(base) : '' };
+  },
   // Through the server, so open maps are told as well as the database.
   revoke: (owner, viewer) => revoke(owner, viewer),
   // /live: the same link the map's Follow me makes, and /live stop, which

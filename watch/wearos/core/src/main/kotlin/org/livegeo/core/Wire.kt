@@ -41,8 +41,11 @@ object Wire {
         return if (o.isNull("id")) null else o.get("id").toString().ifBlank { null }
     }
 
-    fun pairRequest(code: String, name: String, platform: String): String =
-        JSONObject().put("code", code).put("name", name).put("platform", platform).toString()
+    fun pairRequest(code: String, name: String, platform: String, install: String? = null): String {
+        val o = JSONObject().put("code", code).put("name", name).put("platform", platform)
+        if (install != null) o.put("install", install)
+        return o.toString()
+    }
 
     fun paired(json: String): Paired {
         val o = JSONObject(json)

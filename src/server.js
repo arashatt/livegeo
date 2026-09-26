@@ -23,6 +23,7 @@ import {
 } from './oidc.js';
 import { makeCircles, canActFor } from './circles.js';
 import { makeDevices, makeCodes } from './devices.js';
+import { mapName } from './address.js';
 import { readFixes, fromDevice, MAX_BATCH } from './ingest.js';
 import {
   makeZones, ZONE_MIN, ZONE_MAX, ZONES_EACH, trimEnds, trimLengths, breaksOf, withBreaks,
@@ -618,8 +619,8 @@ export function serve(positions, config, {
       if (!got) return json(404, { error: 'that code is wrong or has expired' });
       const person = circles.viewerFor(got.owner);
       if (!person) return json(404, { error: 'that code is wrong or has expired' });
-      const made = await devices.pair({ owner: got.owner, name: body.name, platform: body.platform });
-      log.info('devices: a watch was paired');
+      const made = await devices.pair({ owner: got.owner, name: body.name, platform: body.platform, install: body.install });
+      log.info(made.replaced ? 'devices: a watch paired again, replacing its old entry' : 'devices: a watch was paired');
       return json(200, { token: made.token, id: made.id, owner: { id: got.owner, name: circles.user(got.owner)?.name || '' } });
     }
 
@@ -941,7 +942,12 @@ export function serve(positions, config, {
     // ------------------------------------------------------------ devices
     if (url.pathname === '/api/devices/code' && req.method === 'POST') {
       if (!devices.enabled || !viewer.id || viewer.via === 'device') return notFound();
-      return json(200, { code: codes.issue(viewer.id), expiresIn: 300 });
+      // And where the watch finds the map, which it asks for first: the same
+      // address the bot's links use, told the way a watch takes it (mapName).
+      // To somebody signed in only, who can see the map there already.
+      const base = address ? await address.get() : config.publicUrl;
+      const map = base ? mapName(base) : '';
+      return json(200, { code: codes.issue(viewer.id), expiresIn: 300, ...(map ? { map } : {}) });
     }
     if (url.pathname === '/api/devices' && req.method === 'GET') {
       if (!devices.enabled || !viewer.id) return notFound();

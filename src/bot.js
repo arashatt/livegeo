@@ -538,10 +538,19 @@ export async function connect(config, {
         return;
       }
       if (command.name === '/pair') {
-        const code = circle?.pair ? circle.pair(String(command.from.id)) : null;
-        await say(command.chat, code
-          ? `Enter ${code.slice(0, 3)} ${code.slice(3)} in the livegeo app on your watch. It works once, for five minutes.`
-          : 'Pairing a watch needs the database this service is running without.');
+        // A code, and the map's name when it has an address to give: a watch
+        // asks for that first, since behind a quick tunnel the address changes
+        // and cannot be built into the app.
+        const got = circle?.pair ? await circle.pair(String(command.from.id)) : null;
+        const code = typeof got === 'string' ? got : got?.code;
+        const map = (got && typeof got === 'object' && got.map) || '';
+        const spaced = code ? `${code.slice(0, 3)} ${code.slice(3)}` : '';
+        await say(command.chat, !code
+          ? 'Pairing a watch needs the database this service is running without.'
+          : map
+            ? `On your watch, in the livegeo app:\nMap: ${map}\nCode: ${spaced}\n\n`
+              + 'The code works once, for five minutes. If the watch later says the map moved, send /pair again.'
+            : `Enter ${spaced} in the livegeo app on your watch. It works once, for five minutes.`);
         return;
       }
       if (command.name === '/circle') {

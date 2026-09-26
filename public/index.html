@@ -120,6 +120,8 @@
                         border:1px solid var(--hairline);border-radius:.35rem;background:var(--paper);color:var(--ink)}
   #circle .fine{color:var(--quiet);font-size:.78rem;margin-top:.5rem}
   #circle .code{font:600 1.6rem/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;margin:.4rem 0}
+  #circle .code.mapname{font-size:1.05rem;letter-spacing:.02em;overflow-wrap:anywhere}
+  #circle .codelabel{margin:.5rem 0 0;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;opacity:.7}
   /* The blur, the glide and the beam are in /lib/people-map.css, shared with
      the page a live link opens. */
   /* Where a path goes out of view, or comes back into it. */
@@ -1106,9 +1108,13 @@ window.startDashboard = function (L, PeopleMap, Cartography, game) {
       fetch('/api/devices/code', { method: 'POST' })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
+          // The map's name first, when there is one: the watch asks which map
+          // before the code, since its address is not built into the app.
           document.getElementById('codebox').innerHTML = d
-            ? '<div class="code">' + esc(d.code.slice(0, 3) + ' ' + d.code.slice(3)) + '</div>'
-              + '<p class="fine">Type this into the livegeo app on your watch. It works once, for five minutes. The watch will see what you see, and report where it is as you.</p>'
+            ? (d.map ? '<p class="codelabel">Map</p><div class="code mapname">' + esc(d.map) + '</div><p class="codelabel">Code</p>' : '')
+              + '<div class="code">' + esc(d.code.slice(0, 3) + ' ' + d.code.slice(3)) + '</div>'
+              + '<p class="fine">' + (d.map ? 'Enter the map, then the code, in the livegeo app on your watch.' : 'Type this into the livegeo app on your watch.')
+              + ' The code works once, for five minutes. The watch will see what you see, and report where it is as you.</p>'
             : '<p class="none">Pairing needs the database.</p>';
         });
       return;

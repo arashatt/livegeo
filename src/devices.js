@@ -21,6 +21,11 @@ export function newDeviceToken() {
   return randomBytes(32).toString('base64url');
 }
 
+// An app installation's own random id, as the watch sends it, or '' for
+// anything else. It proves nothing and grants nothing: it only says which
+// earlier entry a new pairing replaces.
+export const installId = (value) => (typeof value === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(value) ? value : '');
+
 // A fixed-window counter per key. Small on purpose: it guards one rare
 // operation, and a process restart clearing it costs nothing that matters.
 export function makeLimiter({ limit, windowMs, now = () => Date.now() }) {
@@ -118,17 +123,34 @@ export function makeDevices({ geo = null, log = console } = {}) {
       return byHash.size;
     },
 
-    async pair({ owner, name = '', platform = '' }) {
+    // `install` is the watch saying which installation of the app it is: the
+    // same one pairing again, because the map's address changed and it had
+    // to find it again, replaces the entry it had, so its old token stops
+    // working rather than lingering beside the new one. Only for the same
+    // owner, and the code already proved that.
+    async pair({ owner, name = '', platform = '', install = '' }) {
       const token = newDeviceToken();
       const hash = hashToken(token);
+      const who = String(owner);
+      const same = installId(install);
       const id = await geo.createDevice({
-        owner: String(owner),
+        owner: who,
         name: String(name).slice(0, 60),
         platform: String(platform).slice(0, 20),
         tokenHash: hash,
+        install: same,
       });
-      byHash.set(hash, { id, owner: String(owner), name, platform, token_hash: hash });
-      return { id, token };
+      byHash.set(hash, { id, owner: who, name, platform, install: same, token_hash: hash });
+      let replaced = 0;
+      if (same) {
+        for (const [h, d] of byHash) {
+          if (d.id === id || d.owner !== who || d.install !== same) continue;
+          await geo.deleteDevice(d.id);
+          byHash.delete(h);
+          replaced += 1;
+        }
+      }
+      return { id, token, replaced };
     },
 
     // Who a bearer token belongs to, or null.

@@ -1050,7 +1050,7 @@ kind of key signed each release.
 
 **Building it yourself** needs the Android SDK and JDK 17:
 `cd android && ./gradlew :app:assembleDebug`. The logic it shares with the
-Galaxy Watch lives in `watch/wearos/core`:
+Wear OS watch app lives in `watch/wearos/core`:
 - the API client, the outbox and the send cadence;
 - reading a sign-in link, asking an address whether it is a map, telling
   why the map did not load, and pairing with a session.
@@ -1068,11 +1068,28 @@ phone, no Telegram — and show the circle of whoever it belongs to. The apps
 are in `watch/`; this is the part of the service they talk to.
 
 **Pairing.** Send `/pair` to the bot, or press **Pair a watch** in the Circle
-panel, and type the six-digit code into the watch. It works once, for five
-minutes. The watch gets a long token and keeps it; only its SHA-256 is stored,
-so reading the database tells you which watches exist, not how to be one.
-Remove a watch from the Circle panel and its token stops working on its next
+panel. Either gives a six-digit code, which works once for five minutes, and
+the map's name.
+
+The map's name is there because the watch asks which map first. Behind a
+quick tunnel the address changes every time cloudflared restarts, so it
+cannot be built into the app. The name is the part that changes: the tunnel's
+words (`calm river 12 bird` for `https://calm-river-12-bird.trycloudflare.com`),
+or the host of an address that stays (`livegeo.me.workers.dev`).
+
+The watch gets a long token and keeps it. Only its SHA-256 is stored, so
+reading the database tells you which watches exist, not how to be one. Remove
+a watch from the Circle panel and its token stops working on its next
 request. `/stop` removes every watch along with everything else.
+
+**When the map moves**, the watch says so: its requests start failing the way
+a gone tunnel fails, a name that no longer resolves or Cloudflare's 530, while
+its own connection works. Send `/pair` again, tap *Your map moved*, and enter
+the new name and code. The watch sends a random id of its own installation
+when it pairs, so this pairing replaces its old entry, and the old token stops
+working rather than lingering beside the new one. Fixes taken in between wait
+in the watch's outbox and go to the new address. The old token never does:
+the watch trusts a new address only after a fresh code pairs with it.
 
 Six digits can be guessed, so guessing is what is limited: a few wrong codes
 per address, and if wrong codes arrive in a burst from everywhere, every live
@@ -1115,10 +1132,13 @@ A watch sees what its owner sees, private places included: somebody inside one
 is listed as *somewhere private*, with no distance, and their map shows the
 area, not a pin.
 
-### Galaxy Watch
+### Wear OS watches
 
 `watch/wearos` — Kotlin and Compose for Wear OS, standalone: it needs no phone.
-Galaxy Watch 4 and later; the older Tizen watches are out of scope.
+Wear OS 3 or later: Galaxy Watch 4 and later, Xiaomi Watch 2 and 2 Pro, Pixel
+Watch. The older Tizen Galaxy watches, and watches that are not Wear OS at
+all (Redmi Watch, Smart Band, Amazfit, Mibro), cannot run it: share from the
+phone app instead.
 
 It shares for an hour, four hours, or until you stop, from a foreground
 service with a Stop button in its notification, and shows your circle with how
@@ -1131,32 +1151,49 @@ beyond its own accuracy or has been quiet for five minutes, which keeps
 somebody standing still showing as live. Everything goes through an outbox on
 disk first, so a lift or a tunnel loses nothing.
 
-**Getting it onto a watch.** It is built by the *Watch apps* workflow, because
-building it needs the Android SDK. Set a repository variable
-`LIVEGEO_SERVER` to your deployment's public URL — one app per deployment,
-since typing a URL on a watch is not something to ask of anyone — and run the
-workflow. Download the `livegeo-wearos-debug` artifact, then with the watch's
-*Developer options → ADB debugging* and *Debug over Wi-Fi* on:
+**Getting it onto a watch.** Download `livegeo-watch-x.y.z.apk` from the
+repository's Releases page (*LiveGeo for Wear OS x.y.z*). A watch has no
+browser to install from, so it goes on from a computer with Android's
+platform tools:
+1. On the watch, open *Settings → System → About* and tap *Build number*
+   seven times.
+2. In *Developer options*, turn on *ADB debugging* and *Wireless debugging*,
+   then tap *Pair new device*.
+3. With the numbers the watch shows, run:
 
 ```sh
-adb connect <watch-ip>:<port>
-adb install app-debug.apk
+adb pair <ip>:<pairing port> <pairing code>
+adb connect <ip>:<port>
+adb install livegeo-watch-x.y.z.apk
 ```
 
-Open it, send `/pair` to the bot, type the code. A build made without
-`LIVEGEO_SERVER` says so on its pairing screen instead of letting pairing fail.
-The Play Store route needs a developer account and a stated reason for using
-location, which is yours to give.
+Then open LiveGeo on the watch and send `/pair` to the bot. Tap *Enter its
+name*, type the map's name the bot gave (keyboard or voice), then the code.
+The name is checked the way the phone app checks a link: the watch asks the
+address for `/healthz` before it keeps anything.
 
-The logic — client, outbox, sessions, cadence, tile maths — is plain Kotlin in
-`watch/wearos/core` with its own tests, which CI runs. One of them runs the
+The *Watch apps* workflow builds it. Every change to `watch/` runs the core's
+tests, builds a signed release APK, and starts it on a round Wear OS 3
+emulator. There it checks that the app asks which map first, that the
+watch's text input opens for the name, and that nothing crashes. A release is
+a manual run: *Actions → Watch apps → Run workflow*, with a version such as
+`0.1.0`. It is published as `watch-v0.1.0`, signed with the same key as the
+phone app (see *Signing* under The Android app).
+
+A deployment whose address stays can build it in instead. Set a repository
+variable `LIVEGEO_SERVER` to the map's public URL, and its watches start at
+the code.
+
+The logic — client, outbox, sessions, cadence, tile maths, finding the map from
+its name — is plain Kotlin in `watch/wearos/core` with its own tests, which CI
+runs. One of them runs the
 client against a real server:
 `LIVEGEO_TEST_SERVER=http://… LIVEGEO_TEST_CODE=123456 ./gradlew :core:test`.
 
 ### Apple Watch
 
 `watch/apple` — a standalone watchOS 10 app in SwiftUI: no iPhone app beside
-it. The same things as the Galaxy Watch: share for an hour, four hours or
+it. The same things as the Wear OS app: share for an hour, four hours or
 until you stop; your circle with distance and how long ago; tap someone for a
 map (MapKit). Sharing keeps going with your wrist lowered, for as long as the
 session you chose. The token is kept in the Keychain, since to the server it
@@ -1178,13 +1215,14 @@ TestFlight or the App Store needs the paid developer programme.
 
 The *Watch apps* workflow proves it builds on every change, on a Mac runner,
 unsigned. The logic is a Swift package in `watch/apple/Core` whose tests run
-there too, holding it to the same rules as the Galaxy Watch's Kotlin core —
+there too, holding it to the same rules as the Wear OS app's Kotlin core —
 and, with `LIVEGEO_TEST_SERVER` and `LIVEGEO_TEST_CODE` set, against a real
 server.
 
-**Neither watch app has been run on a real watch yet.** Both compile, and
-their logic is tested; how they behave on a wrist — battery, background
-delivery, the permission prompts — is the part only hardware can show.
+**Neither watch app has been run on a real watch yet.** Both compile and
+their logic is tested, and the Wear OS app starts on an emulator. How they
+behave on a wrist is the part only hardware can show: battery, background
+delivery, the permission prompts.
 
 ## Telling you when somebody arrives
 

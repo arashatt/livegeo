@@ -39,7 +39,7 @@ class HttpTransport(private val timeoutMs: Int = 20_000) : Transport {
 }
 
 /** What went wrong, in terms the screens can act on. */
-sealed class Failure(message: String) : Exception(message) {
+sealed class Failure(message: String, cause: Throwable? = null) : Exception(message, cause) {
     /** The token is no longer good: removed from the map, or /stop. Pair again. */
     class Unpaired : Failure("this watch is no longer paired")
     /** Wrong or expired pairing code. */
@@ -47,7 +47,7 @@ sealed class Failure(message: String) : Exception(message) {
     /** Too many wrong codes; wait, then ask for a new one. */
     class Limited(message: String) : Failure(message)
     /** No connection, or the server is unreachable. Worth retrying later. */
-    class Offline(cause: Throwable) : Failure(cause.message ?: "offline")
+    class Offline(cause: Throwable) : Failure(cause.message ?: "offline", cause)
     class Server(val status: Int, message: String) : Failure(message)
 }
 
@@ -79,8 +79,13 @@ class Api(
         }
     }
 
-    fun pair(code: String, name: String, platform: String): Result<Paired> = runCatching {
-        val r = call("POST", "/api/devices/pair", Wire.pairRequest(code, name, platform), auth = false)
+    /**
+     * Pairs with a code from /pair. [install] is this installation's own
+     * random id: the same one pairing again, after the map's address changed,
+     * replaces the entry it had instead of leaving its old token working.
+     */
+    fun pair(code: String, name: String, platform: String, install: String? = null): Result<Paired> = runCatching {
+        val r = call("POST", "/api/devices/pair", Wire.pairRequest(code, name, platform, install), auth = false)
         when (r.status) {
             200 -> Wire.paired(r.body).also { token = it.token }
             404 -> throw Failure.BadCode(Wire.error(r.body) ?: "that code is wrong or has expired")

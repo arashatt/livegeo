@@ -3,17 +3,38 @@ name: Watch apps
 # Built here because they cannot be built anywhere else this project runs:
 # the Android SDK and Xcode are not on the server, and not on the machine the
 # code was written on. These runners have both.
+#
+# A Wear OS release is a manual run: Actions → Watch apps → Run workflow, with a
+# version such as 0.1.0. That signs the watch APK with the same key as the
+# phone app (README, «The Android app») and publishes it on the Releases page
+# as watch-v<version>.
 on:
   push:
     paths: ['watch/**', '.github/workflows/watch.yml']
   pull_request:
     paths: ['watch/**', '.github/workflows/watch.yml']
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish the Wear OS app as a release with this version, e.g. 0.1.0. Empty builds without publishing.
+        required: false
+        default: ''
+      notes:
+        description: What changed since the last watch release, for the release notes (Markdown). Optional.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
 
 jobs:
   wearos:
-    name: Galaxy Watch (Wear OS)
+    name: Wear OS watch app
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.name }}
+      signing: ${{ steps.key.outputs.kind }}
     defaults:
       run:
         working-directory: watch/wearos
@@ -27,24 +48,192 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # The logic — client, outbox, sessions, cadence, tile maths — is plain
-      # Kotlin with its own tests; the app is the Android layer around it.
+      # The logic — client, outbox, sessions, cadence, tile maths, finding the
+      # map from its name — is plain Kotlin with its own tests; the app is the
+      # Android layer around it.
       - name: Test the core
         run: ./gradlew --no-daemon :core:test
 
+      - id: version
+        name: Version
+        env:
+          RELEASE: ${{ inputs.release }}
+          RUN: ${{ github.run_number }}
+        run: |
+          name="${RELEASE:-0.0.$RUN}"
+          name="${name#v}"
+          if ! printf '%s' "$name" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$name' is not a version like 1.0.0"
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      # As for the phone app (android.yml): Android installs an update only
+      # over an app signed with the same key, so the repository's key is what
+      # lets one release install over the last; without it, a key made for
+      # this run only.
+      - id: key
+        name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          store="$RUNNER_TEMP/livegeo.jks"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$store"
+            {
+              echo "LIVEGEO_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "LIVEGEO_KEY_ALIAS=${KEY_ALIAS:-livegeo}"
+              echo "LIVEGEO_KEY_PASSWORD=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+            } >> "$GITHUB_ENV"
+            echo "kind=repository" >> "$GITHUB_OUTPUT"
+            echo "Signing with the repository's key."
+          else
+            pass=$(openssl rand -hex 24)
+            echo "::add-mask::$pass"
+            keytool -genkeypair -noprompt -keystore "$store" -storetype PKCS12 \
+              -storepass "$pass" -keypass "$pass" -alias livegeo \
+              -keyalg RSA -keysize 3072 -validity 10000 -dname "CN=LiveGeo"
+            {
+              echo "LIVEGEO_KEYSTORE_PASSWORD=$pass"
+              echo "LIVEGEO_KEY_ALIAS=livegeo"
+              echo "LIVEGEO_KEY_PASSWORD=$pass"
+            } >> "$GITHUB_ENV"
+            echo "kind=temporary" >> "$GITHUB_OUTPUT"
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret, so this APK is signed with a key made for this run only. It installs, but the next one will not install over it. See README, The Android app."
+          fi
+          echo "LIVEGEO_KEYSTORE=$store" >> "$GITHUB_ENV"
+
       - name: Build the app
         env:
-          # Set this repository variable to your deployment's public URL, and
-          # the APK is built to talk to it. Unset, it builds against a
-          # placeholder and says so in the app.
+          # A map to build in, for a deployment whose address stays (README,
+          # «Wear OS watches»). Unset, the watch asks for the map's name when
+          # it pairs, which is what a quick tunnel needs.
           LIVEGEO_SERVER: ${{ vars.LIVEGEO_SERVER }}
-        run: ./gradlew --no-daemon :app:assembleDebug
+          LIVEGEO_VERSION_CODE: ${{ github.run_number }}
+          LIVEGEO_VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Name, check and fingerprint it
+        env:
+          VERSION: ${{ steps.version.outputs.name }}
+        run: |
+          set -o pipefail
+          ls -l app/build/outputs/apk/release/
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          case "$apk" in
+            *unsigned*) echo "::error::the release APK came out unsigned: $apk"; exit 1 ;;
+          esac
+          out="livegeo-watch-$VERSION.apk"
+          cp "$apk" "$out"
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)
+          "${tools}apksigner" verify --print-certs "$out"
+          "${tools}aapt2" dump badging "$out" | head -n 4
+          sha256sum "$out" | tee "$out.sha256"
+          ls -l "$out"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: livegeo-wearos-debug
-          path: watch/wearos/app/build/outputs/apk/debug/*.apk
+          name: livegeo-wearos
+          path: |
+            watch/wearos/livegeo-watch-*.apk
+            watch/wearos/livegeo-watch-*.apk.sha256
+            watch/wearos/ci/smoke.sh
           if-no-files-found: error
+
+  wearos-smoke:
+    name: Start it on a Wear OS emulator
+    needs: wearos
+    runs-on: ubuntu-latest
+    # A good run takes a few minutes, and ci/smoke.sh gives every step a limit
+    # of its own; this is for the emulator or the runner hanging.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: livegeo-wearos
+          path: app
+
+      - name: Hardware acceleration for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Wear OS 3, the oldest the app runs on, on a round watch.
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: android-wear
+          arch: x86
+          profile: wearos_large_round
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          working-directory: app
+          script: SHOTS="$PWD/shots" bash ci/smoke.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: livegeo-wearos-screens
+          path: app/shots/
+          if-no-files-found: ignore
+
+  wearos-release:
+    name: Publish the Wear OS release
+    needs: [wearos, wearos-smoke]
+    if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: livegeo-wearos
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.wearos.outputs.version }}
+          SIGNING: ${{ needs.wearos.outputs.signing }}
+          NEWS: ${{ inputs.notes }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          apk="livegeo-watch-$VERSION.apk"
+          test -f "$apk"
+          if [ "$SIGNING" = repository ]; then
+            updates="Signed with the project's key: it installs over an earlier release signed with the same key."
+          else
+            updates="Signed with a key made for this build only: if an earlier release is on the watch, remove it first (\`adb uninstall org.livegeo.watch\`). Once the project's signing key is in the repository's secrets, releases install over each other."
+          fi
+          news=
+          if [ -n "$NEWS" ]; then news=$(printf '**New in %s**\n\n%s\n\n' "$VERSION" "$NEWS"); fi
+          cat > notes.md <<NOTES
+          LiveGeo for Wear OS watches $VERSION: share where you are from the watch itself, with its own GPS and connection, and see your circle on your wrist. Wear OS 3 or later: Galaxy Watch 4 and later, Xiaomi Watch 2 and 2 Pro, Pixel Watch.
+
+          $news
+
+          **Install** from a computer with Android's platform tools. On the watch: *Settings → System → About* (or *About watch*), tap *Build number* seven times; then *Settings → Developer options*, turn on *ADB debugging* and *Wireless debugging*, and tap *Pair new device*. Then, with the numbers the watch shows:
+
+          \`\`\`sh
+          adb pair <ip>:<pairing port> <pairing code>
+          adb connect <ip>:<port>
+          adb install $apk
+          \`\`\`
+
+          **Pair:** in Telegram send \`/pair\` to your LiveGeo bot. Open LiveGeo on the watch, tap *Enter its name* and type the map's name the bot gave, then the six-digit code. When the map's address changes, the watch says *Your map moved*: send \`/pair\` again and do the same.
+
+          $updates
+
+          SHA-256: \`$(cut -d' ' -f1 "$apk.sha256")\`
+          NOTES
+          gh release create "watch-v$VERSION" "$apk" "$apk.sha256" \
+            --repo "$REPO" --target "$SHA" --latest=false \
+            --title "LiveGeo for Wear OS $VERSION" --notes-file notes.md
 
   watchos:
     name: Apple Watch (watchOS)

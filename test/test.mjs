@@ -22,7 +22,7 @@ import {
 import { makeLive } from '../src/live.js';
 import { makeSos, sosMessage } from '../src/sos.js';
 import { makeChecks, decide, checkAsk, checkTell } from '../src/checks.js';
-import { makeAddress } from '../src/address.js';
+import { makeAddress, mapName } from '../src/address.js';
 import { mint, readSession, checkWidget, makeLinks, makeViewers } from '../src/login.js';
 import { verdict, makeWatcher, announce } from '../src/fences.js';
 import { canSee, canActFor, makeCircles } from '../src/circles.js';
@@ -885,6 +885,44 @@ head('what /login says, and why');
   t('somebody not allowed is told so', to(4) === 'Your account is not on the list of who may see the map.');
 }
 
+head('what /pair says, and why');
+{
+  const said = [];
+  const who = (id, update) => ({ update_id: update, message: { message_id: update, date: 1, chat: { id }, from: { id, is_bot: false, first_name: 'X' }, text: '/pair' } });
+  let served = [[who(1, 300), who(2, 301), who(3, 302), who(4, 303)]];
+  const stub = async (url, init) => {
+    const method = String(url).split('/').pop();
+    const body = init?.body ? JSON.parse(init.body) : {};
+    if (method === 'getMe') return new Response(JSON.stringify({ ok: true, result: { id: 1, username: 'livegeobot' } }));
+    if (method === 'sendMessage') { said.push({ to: body.chat_id, text: body.text }); return new Response(JSON.stringify({ ok: true, result: {} })); }
+    if (method === 'getUpdates') return new Response(JSON.stringify({ ok: true, result: served.shift() || [] }));
+    return new Response(JSON.stringify({ ok: true, result: {} }));
+  };
+  const answers = {
+    1: { code: '482913', map: mapName('https://calm-river-12-bird.trycloudflare.com') },
+    2: { code: '105007', map: '' },
+    3: '777001',
+    4: null,
+  };
+  const bot = await connectBot({ botToken: 'T', chats: [] }, {
+    fetch: stub, poll: 0, log: { info() {}, error() {} }, onPosition() {},
+    circle: { seen: async () => {}, pair: async (id) => answers[id] },
+  });
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && said.length < 4) await new Promise((r) => setTimeout(r, 5));
+  await bot.stop();
+  const to = (id) => said.find((m) => m.to === id)?.text || '';
+  t('the watch is told the map first, as the words a quick tunnel changes, then the code',
+    /Map: calm river 12 bird\nCode: 482 913\n/.test(to(1)), to(1));
+  t('and what to do when the map moves', /send \/pair again/.test(to(1)), to(1));
+  t('with no address to give, just the code', /^Enter 105 007 in the livegeo app/.test(to(2)) && !/Map:/.test(to(2)), to(2));
+  t('a plain code still works', /^Enter 777 001/.test(to(3)), to(3));
+  t('no database, no pairing, and it says so', /needs the database/.test(to(4)), to(4));
+  t('a name for any other address is its host',
+    mapName('https://livegeo.me.workers.dev/') === 'livegeo.me.workers.dev' && mapName('https://map.example:8443/x') === 'map.example:8443'
+    && mapName('nonsense') === '', [mapName('https://livegeo.me.workers.dev/'), mapName('https://map.example:8443/x')]);
+}
+
 head('Telegram out of reach at start');
 {
   // Names not resolving, as in a container Docker has just restarted: fetch
@@ -1336,7 +1374,7 @@ head('the leak matrix: every route, as every kind of viewer');
     placeOf: async () => '',
     devices: [], nextDevice: 1,
     listDevices: async () => geo.devices,
-    createDevice: async ({ owner, name, platform, tokenHash }) => { const id = geo.nextDevice++; geo.devices.push({ id, owner, name, platform, token_hash: tokenHash }); return id; },
+    createDevice: async ({ owner, name, platform, tokenHash, install = '' }) => { const id = geo.nextDevice++; geo.devices.push({ id, owner, name, platform, install, token_hash: tokenHash }); return id; },
     deleteDevice: async (id) => { geo.devices = geo.devices.filter((d) => d.id !== id); return 1; },
     touchDevice: async () => {},
     listLiveLinks: async () => [],
@@ -1364,6 +1402,7 @@ head('the leak matrix: every route, as every kind of viewer');
     dashboardToken: 'tok', botToken, viewers: ['1'], port: 0, host: '127.0.0.1', shareTtl: 60,
   }, {
     geo, circles, devices, codes, links: makeLinks(), log: { info() {}, error() {} }, live: makeLive({ geo }),
+    address: { get: async () => 'https://calm-river-12-bird.trycloudflare.com', source: () => 'quick tunnel' },
     sos: { raise: async () => ({ link: { token: 'x', expiresAt: 0 }, told: 0, circle: 0, call: '' }), end: async () => false },
     checks: { enabled: true, get: () => null, start: async () => ({ check: { until: 0 }, circle: 0 }), stop: async () => false, forget() {} },
     onIngest: async (fixes, device) => { ingested.push(...fixes.map((f) => ({ ...f, device: device.id }))); },
@@ -1505,8 +1544,10 @@ head('the leak matrix: every route, as every kind of viewer');
     page.headers.get('set-cookie'));
 
   // --- a watch: paired by its owner, then its owner for reading only
-  const code = (await (await hit('grace', '/api/devices/code', 'POST')).json()).code;
+  const minted = await (await hit('grace', '/api/devices/code', 'POST')).json();
+  const code = minted.code;
   t('Grace gets a six-digit pairing code', /^\d{6}$/.test(code), code);
+  t('with the map’s name, which the watch asks for first', minted.map === 'calm river 12 bird', minted);
   t('the shared token cannot ask for one — it is nobody', (await hit('token', '/api/devices/code', 'POST')).status === 404);
   const pair = (body) => fetch(`${base}/api/devices/pair`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -1573,6 +1614,29 @@ head('the leak matrix: every route, as every kind of viewer');
   const removed = await hit('grace', `/api/devices/${paired.id}`, 'DELETE');
   t('Grace can remove her watch', removed.status === 200);
   t('and its token stops working at once', (await watch('/api/positions')).status === 401);
+
+  // --- the same watch pairing again, because the map's address changed and
+  // it had to find the map again: its old entry goes, and its old token with it
+  const pairAs = async (who, install) => {
+    const fresh = (await (await hit(who, '/api/devices/code', 'POST')).json()).code;
+    return (await pair({ code: fresh, name: 'a watch', platform: 'wearos', install })).json();
+  };
+  const bearer = async (token) => (await fetch(`${base}/api/positions`, { headers: { authorization: `Bearer ${token}` } })).status;
+  const first = await pairAs('grace', 'install-abc12345');
+  const second = await pairAs('grace', 'install-abc12345');
+  t('pairing again from the same install replaces its entry',
+    devices.list('3').length === 1 && devices.list('3')[0].id === second.id, devices.list('3'));
+  t('so its old token stops working, and the new one works', (await bearer(first.token)) === 401 && (await bearer(second.token)) === 200);
+  t('in the database too', !geo.devices.some((d) => d.id === first.id) && geo.devices.some((d) => d.id === second.id && d.install === 'install-abc12345'));
+  await pairAs('grace', 'install-xyz98765');
+  t('another watch of hers is another entry', devices.list('3').length === 2);
+  const junk = await pairAs('grace', '../../etc');
+  t('an install id that is not one is ignored, not matched',
+    devices.list('3').length === 3 && (await bearer(junk.token)) === 200 && geo.devices.find((d) => d.id === junk.id)?.install === '');
+  await pairAs('ada', 'install-xyz98765');
+  t('the same install id paired by somebody else replaces nothing of hers',
+    devices.list('3').length === 3 && devices.list('2').length === 1);
+  for (const d of devices.list()) await devices.remove(d.id);
 
   // --- the stream, which is where a leak would be quietest
   const open = async (who) => {
